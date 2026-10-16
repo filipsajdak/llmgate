@@ -26,11 +26,33 @@ add_library(llmgate_flags INTERFACE)
 target_compile_options(llmgate_flags INTERFACE
   -std=c++26 -freflection -fcontracts -Wall -Wextra -Werror)
 
-add_library(llmgate_core STATIC src/core/contract_violation.cpp)
-target_link_libraries(llmgate_core PUBLIC llmgate_flags)
+FetchContent_Declare(ut
+  GIT_REPOSITORY https://github.com/boost-ext/ut.git
+  GIT_TAG v2.3.1
+  GIT_SHALLOW ON
+  SYSTEM
+  EXCLUDE_FROM_ALL
+  PATCH_COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_LIST_DIR}/cmake/patch_ut.cmake)
+set(BOOST_UT_DISABLE_MODULE ON CACHE BOOL "" FORCE)
+set(BOOST_UT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(BOOST_UT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(ut)
+
+add_library(llmgate_core STATIC src/core/contract_violation.cpp src/core/kqueue_reactor.cpp)
+target_include_directories(llmgate_core PUBLIC src)
+target_link_libraries(llmgate_core PUBLIC llmgate_flags STDEXEC::stdexec)
 
 add_executable(s0_toolchain spike/s0_toolchain.cpp)
-target_link_libraries(s0_toolchain PRIVATE llmgate_core STDEXEC::stdexec)
+target_link_libraries(s0_toolchain PRIVATE llmgate_core)
 
 enable_testing()
 add_test(NAME s0_toolchain COMMAND s0_toolchain)
+
+function(llmgate_unit_test name)
+  add_executable(${name} tests/unit/${name}.cpp)
+  target_link_libraries(${name} PRIVATE llmgate_core Boost::ut)
+  add_test(NAME ${name} COMMAND ${name})
+  set_tests_properties(${name} PROPERTIES LABELS unit)
+endfunction()
+
+llmgate_unit_test(kqueue_reactor_test)
