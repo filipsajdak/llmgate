@@ -55,6 +55,11 @@ target_sources(llmgate_reflect PUBLIC FILE_SET CXX_MODULES BASE_DIRS src FILES s
 target_link_libraries(llmgate_reflect PUBLIC llmgate_flags)
 set_target_properties(llmgate_reflect PROPERTIES CXX_SCAN_FOR_MODULES ON)
 
+add_library(llmgate_tls)
+target_sources(llmgate_tls PUBLIC FILE_SET CXX_MODULES BASE_DIRS src FILES src/tls/tls.cppm)
+target_link_libraries(llmgate_tls PUBLIC llmgate_flags llmgate_reflect OpenSSL::SSL OpenSSL::Crypto)
+set_target_properties(llmgate_tls PROPERTIES CXX_SCAN_FOR_MODULES ON)
+
 function(llmgate_unit_test name)
   cmake_parse_arguments(ARG "MODULES" "" "LIBS" ${ARGN})
   add_executable(${name} tests/unit/${name}.cpp)
@@ -68,3 +73,4 @@ endfunction()
 
 llmgate_unit_test(kqueue_reactor_test LIBS llmgate_core)
 llmgate_unit_test(reflect_enum_test MODULES LIBS llmgate_reflect llmgate_core)
+llmgate_unit_test(tls_test MODULES LIBS llmgate_tls llmgate_core)

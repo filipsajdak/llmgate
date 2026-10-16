@@ -1,6 +1,5 @@
 #pragma once
 
-#include <exception>
 #include <expected>
 #include <system_error>
 #include <utility>
@@ -8,6 +7,12 @@
 #include <stdexec/execution.hpp>
 
 namespace llmgate::core {
+
+enum class interest { readable, writable };
+
+namespace detail {
+struct ready_sender;
+}
 
 struct pending_op {
     void (*complete)(pending_op*, std::error_code) noexcept;
@@ -20,12 +25,14 @@ public:
     kqueue_reactor(kqueue_reactor const&) = delete;
     kqueue_reactor& operator=(kqueue_reactor const&) = delete;
 
-    std::error_code arm_readable(int fd, pending_op* op) noexcept
+    std::error_code arm(int fd, interest what, pending_op* op) noexcept
         pre(fd >= 0)
         pre(op != nullptr);
     std::error_code poll_once() noexcept;
 
-    auto readable(int fd) noexcept;
+    detail::ready_sender ready(int fd, interest what) noexcept;
+    detail::ready_sender readable(int fd) noexcept;
+    detail::ready_sender writable(int fd) noexcept;
 
     template <stdexec::sender Sender>
     std::expected<void, std::error_code> run(Sender&& sender);
@@ -37,42 +44,39 @@ private:
 namespace detail {
 
 template <class Receiver>
-struct readable_op : pending_op {
-    readable_op(kqueue_reactor& reactor, int fd, Receiver receiver)
-        : pending_op{.complete = &finish}, reactor_{&reactor}, fd_{fd}, receiver_{std::move(receiver)} {}
+struct ready_op : pending_op {
+    ready_op(kqueue_reactor& reactor, int fd, interest what, Receiver receiver)
+        : pending_op{.complete = &finish}, reactor_{&reactor}, fd_{fd}, what_{what}, receiver_{std::move(receiver)} {}
 
     void start() noexcept {
-        if (auto const error = reactor_->arm_readable(fd_, this)) {
+        if (auto const error = reactor_->arm(fd_, what_, this)) {
             finish(this, error);
         }
     }
 
 private:
     static void finish(pending_op* self, std::error_code error) noexcept {
-        auto& op = *static_cast<readable_op*>(self);
-        if (error) {
-            stdexec::set_error(std::move(op.receiver_), error);
-        } else {
-            stdexec::set_value(std::move(op.receiver_));
-        }
+        auto& op = *static_cast<ready_op*>(self);
+        stdexec::set_value(std::move(op.receiver_), error);
     }
 
     kqueue_reactor* reactor_;
     int fd_;
+    interest what_;
     Receiver receiver_;
 };
 
-struct readable_sender {
+struct ready_sender {
     using sender_concept = stdexec::sender_t;
-    using completion_signatures =
-        stdexec::completion_signatures<stdexec::set_value_t(), stdexec::set_error_t(std::error_code)>;
+    using completion_signatures = stdexec::completion_signatures<stdexec::set_value_t(std::error_code)>;
 
     kqueue_reactor* reactor;
     int fd;
+    interest what;
 
     template <stdexec::receiver Receiver>
     auto connect(Receiver receiver) const {
-        return readable_op<Receiver>(*reactor, fd, std::move(receiver));
+        return ready_op<Receiver>(*reactor, fd, what, std::move(receiver));
     }
 };
 
@@ -86,11 +90,7 @@ struct run_receiver {
 
     run_state* state;
 
-    void set_value() noexcept { state->done = true; }
-    void set_error(std::error_code error) noexcept {
-        state->error = error;
-        state->done = true;
-    }
+    void set_value(auto&&...) noexcept { state->done = true; }
     void set_error(std::exception_ptr) noexcept {
         state->error = std::make_error_code(std::errc::state_not_recoverable);
         state->done = true;
@@ -104,8 +104,16 @@ struct run_receiver {
 
 }  // namespace detail
 
-inline auto kqueue_reactor::readable(int fd) noexcept {
-    return detail::readable_sender{.reactor = this, .fd = fd};
+inline detail::ready_sender kqueue_reactor::ready(int fd, interest what) noexcept {
+    return {.reactor = this, .fd = fd, .what = what};
+}
+
+inline detail::ready_sender kqueue_reactor::readable(int fd) noexcept {
+    return ready(fd, interest::readable);
+}
+
+inline detail::ready_sender kqueue_reactor::writable(int fd) noexcept {
+    return ready(fd, interest::writable);
 }
 
 template <stdexec::sender Sender>

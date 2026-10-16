@@ -27,9 +27,10 @@ kqueue_reactor::~kqueue_reactor() {
     ::close(kqueue_fd_);
 }
 
-std::error_code kqueue_reactor::arm_readable(int const fd, pending_op* const op) noexcept {
+std::error_code kqueue_reactor::arm(int const fd, interest const what, pending_op* const op) noexcept {
     struct kevent change;
-    EV_SET(&change, static_cast<uintptr_t>(fd), EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, op);
+    auto const filter = what == interest::readable ? EVFILT_READ : EVFILT_WRITE;
+    EV_SET(&change, static_cast<uintptr_t>(fd), filter, EV_ADD | EV_ONESHOT, 0, 0, op);
     if (::kevent(kqueue_fd_, &change, 1, nullptr, 0, nullptr) < 0) {
         return last_error();
     }
