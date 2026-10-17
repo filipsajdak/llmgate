@@ -82,7 +82,15 @@
       "configurePreset": "fuzz",
       "targets": [
         "fuzz_http_parser",
-        "fuzz_sse_parser"
+        "fuzz_sse_parser",
+        "fuzz_jsonscan",
+        "fuzz_guard",
+        "fuzz_json",
+        "fuzz_routing",
+        "fuzz_settings",
+        "fuzz_launcher",
+        "fuzz_usage",
+        "fuzz_schedule"
       ]
     },
     {
