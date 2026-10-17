@@ -130,6 +130,25 @@ constexpr bool contains_text(json::array const& items, std::string_view const te
     });
 }
 
+constexpr bool has_name(json::value const& entry, std::string_view const name) {
+    auto const* members = std::get_if<json::object>(&entry.data);
+    if (members == nullptr) {
+        return false;
+    }
+    auto const found = std::ranges::find(*members, std::string_view{"name"}, &json::object::value_type::first);
+    auto const* held = found == members->end() ? nullptr : std::get_if<std::string>(&found->second.data);
+    return held != nullptr && *held == name;
+}
+
+constexpr void upsert_variable(json::array& entries, std::string const& name, std::string const& value) {
+    auto const replacement = json::make_object({{"name", json::make_string(name)}, {"value", json::make_string(value)}});
+    if (auto const present = std::ranges::find_if(entries, [&name](json::value const& entry) { return has_name(entry, name); }); present != entries.end()) {
+        *present = replacement;
+    } else {
+        entries.push_back(replacement);
+    }
+}
+
 }  // namespace llmgate::claude::detail
 
 export namespace llmgate::claude {
@@ -162,21 +181,7 @@ constexpr json::value merge_vscode(json::value existing, environment_list const&
     auto& root = std::get<json::object>(existing.data);
     auto& entries = detail::array_member(root, "claudeCode.environmentVariables");
     for (auto const& [name, value] : list) {
-        auto const same_name = [&name](json::value const& entry) {
-            auto const* members = std::get_if<json::object>(&entry.data);
-            if (members == nullptr) {
-                return false;
-            }
-            auto const found = std::ranges::find(*members, std::string_view{"name"}, &json::object::value_type::first);
-            auto const* held = found == members->end() ? nullptr : std::get_if<std::string>(&found->second.data);
-            return held != nullptr && *held == name;
-        };
-        auto const replacement = json::make_object({{"name", json::make_string(name)}, {"value", json::make_string(value)}});
-        if (auto const present = std::ranges::find_if(entries, same_name); present != entries.end()) {
-            *present = replacement;
-        } else {
-            entries.push_back(replacement);
-        }
+        detail::upsert_variable(entries, name, value);
     }
     if (auto* flag = detail::find_member(root, "claudeCode.disableLoginPrompt")) {
         *flag = json::value{true};

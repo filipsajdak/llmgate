@@ -79,6 +79,25 @@ constexpr std::string usage_line(snapshot const& now) {
     return line;
 }
 
+constexpr std::string gateway_part(snapshot const& now) {
+    if (!now.gateway_up) {
+        return " | gateway DOWN";
+    }
+    std::string part = " | gateway ok | " + decimal(now.requests) + " req";
+    if (now.repairs > 0) {
+        part += " | " + decimal(now.repairs) + " repaired";
+    }
+    return part;
+}
+
+constexpr std::string context_line(snapshot const& now) {
+    std::string line = "ctx [" + bar(now.context_percent) + "] " + decimal(static_cast<std::uint64_t>(std::clamp(now.context_percent, 0, 999))) + "%";
+    if (now.context_percent >= warn_percent) {
+        line += std::string{" "} + std::string{level_of(now.context_percent)};
+    }
+    return line + gateway_part(now);
+}
+
 constexpr std::string render(snapshot const& now) {
     std::string first = "[llmgate] ";
     first += now.model.empty() ? "model?" : now.model;
@@ -86,18 +105,7 @@ constexpr std::string render(snapshot const& now) {
     if (!now.branch.empty()) {
         first += " | " + now.branch;
     }
-    std::string second = "ctx [" + bar(now.context_percent) + "] " + decimal(static_cast<std::uint64_t>(std::clamp(now.context_percent, 0, 999))) + "%";
-    if (now.context_percent >= warn_percent) {
-        second += std::string{" "} + std::string{level_of(now.context_percent)};
-    }
-    second += now.gateway_up ? " | gateway ok" : " | gateway DOWN";
-    if (now.gateway_up) {
-        second += " | " + decimal(now.requests) + " req";
-        if (now.repairs > 0) {
-            second += " | " + decimal(now.repairs) + " repaired";
-        }
-    }
-    auto text = first + "\n" + second + "\n";
+    auto text = first + "\n" + context_line(now) + "\n";
     if (now.usage_known) {
         text += usage_line(now) + "\n";
     }
