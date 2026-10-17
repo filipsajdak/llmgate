@@ -8,6 +8,8 @@ import llmgate.usage;
 import llmgate.claude;
 import llmgate.doctor;
 import llmgate.quota;
+import llmgate.reflect;
+import llmgate.role;
 import llmgate.json;
 import llmgate.jsonscan;
 import llmgate.routing;
@@ -395,7 +397,7 @@ constexpr bool selection_holds(std::string_view const text) {
     if (!selection::route_problem(routes, declared).empty()) {
         return true;
     }
-    return std::ranges::all_of(selection::known_roles, [&](std::string_view const role) { return order_is_sound(routes, declared, role); });
+    return std::ranges::all_of(reflect::enum_values<roles::role>, [&](roles::role const family) { return order_is_sound(routes, declared, roles::name_of(family)); });
 }
 
 constexpr bool printable(std::string_view const text) {
@@ -451,12 +453,12 @@ constexpr doctor::facts doctor_facts_from(std::string_view const text) {
     seen.port = bits(b, 3, 2) == 0 ? std::nullopt : std::optional{static_cast<doctor::port_state>(bits(b, 3, 2) - 1)};
     seen.identity = {.path = std::string{rest}, .exists = bit(b, 5), .mode = bit(b, 6) ? 0644U : 0600U};
     seen.profile_dir = std::string{rest};
-    seen.settings = static_cast<doctor::settings_state>(bits(c, 0, 3) % 5);
-    seen.ledger = static_cast<doctor::ledger_state>(bits(c, 3, 2) % 3);
+    seen.settings = static_cast<doctor::settings_state>(bits(c, 0, 3) % reflect::enum_count<doctor::settings_state>);
+    seen.ledger = static_cast<doctor::ledger_state>(bits(c, 3, 2) % reflect::enum_count<doctor::ledger_state>);
     seen.ledger_file = {.path = std::string{rest}, .exists = true, .mode = bit(c, 5) ? 0666U : 0600U};
     seen.ledger_configured = bit(c, 6);
-    seen.exchange = static_cast<doctor::exchange_state>(bits(d, 0, 3) % 5);
-    seen.quota = static_cast<doctor::quota_state>(bits(d, 3, 2) % 3);
+    seen.exchange = static_cast<doctor::exchange_state>(bits(d, 0, 3) % reflect::enum_count<doctor::exchange_state>);
+    seen.quota = static_cast<doctor::quota_state>(bits(d, 3, 2) % reflect::enum_count<doctor::quota_state>);
     if (bit(d, 6)) {
         seen.quota_summary = quota::summary{.plan = "p", .sku = "s", .reset_date = "2026-11-01",
                                             .allowances = {{.name = "chat", .has_quota = true, .entitlement = 10, .remaining = 1, .percent_remaining = bit(d, 5) ? 5 : 90}}};
@@ -520,27 +522,34 @@ enum class token : std::uint8_t {
     unknown,
 };
 
+constexpr auto token_texts = std::to_array<std::pair<token, std::string_view>>({
+    {token::start, "event: message_start\ndata: {\"type\":\"message_start\"}\n\n"},
+    {token::block_start_0, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0}\n\n"},
+    {token::block_start_1, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1}\n\n"},
+    {token::delta_0, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0}\n\n"},
+    {token::delta_1, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1}\n\n"},
+    {token::stop_0, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"},
+    {token::stop_1, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n"},
+    {token::message_delta, "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{}}\n\n"},
+    {token::message_delta_without_usage, "event: message_delta\ndata: {\"type\":\"message_delta\"}\n\n"},
+    {token::message_stop, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"},
+    {token::ping, "event: ping\ndata: {\"type\":\"ping\"}\n\n"},
+    {token::error, "event: error\ndata: {\"type\":\"error\"}\n\n"},
+    {token::junk, "event: message_delta\ndata: {not json\n\n"},
+    {token::unknown, "event: x_future\ndata: {\"type\":\"x_future\"}\n\n"},
+});
+
+constexpr bool token_texts_cover_every_enumerator() {
+    return token_texts.size() == reflect::enum_count<token> &&
+           std::ranges::equal(token_texts, reflect::enum_values<token>, std::ranges::equal_to{}, &std::pair<token, std::string_view>::first);
+}
+static_assert(token_texts_cover_every_enumerator());
+
 constexpr std::string_view text_of(token const kind) {
-    switch (kind) {
-        case token::start: return "event: message_start\ndata: {\"type\":\"message_start\"}\n\n";
-        case token::block_start_0: return "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0}\n\n";
-        case token::block_start_1: return "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1}\n\n";
-        case token::delta_0: return "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0}\n\n";
-        case token::delta_1: return "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1}\n\n";
-        case token::stop_0: return "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n";
-        case token::stop_1: return "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n";
-        case token::message_delta: return "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{}}\n\n";
-        case token::message_delta_without_usage: return "event: message_delta\ndata: {\"type\":\"message_delta\"}\n\n";
-        case token::message_stop: return "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
-        case token::ping: return "event: ping\ndata: {\"type\":\"ping\"}\n\n";
-        case token::error: return "event: error\ndata: {\"type\":\"error\"}\n\n";
-        case token::junk: return "event: message_delta\ndata: {not json\n\n";
-        case token::unknown: break;
-    }
-    return "event: x_future\ndata: {\"type\":\"x_future\"}\n\n";
+    return token_texts[std::to_underlying(kind)].second;
 }
 
-constexpr std::size_t token_count = static_cast<std::size_t>(token::unknown) + 1;
+constexpr std::size_t token_count = reflect::enum_count<token>;
 
 constexpr bool guard_holds_for_tokens(std::span<std::size_t const> const digits) {
     std::string wire;

@@ -80,7 +80,7 @@ One gateway can sit in front of several backends. Name each under `providers`, t
 | Key | Meaning |
 |---|---|
 | `providers.NAME` | `base_url` (required), `messages_path` (default `/v1/messages`), `headers`, a credential (`copilot` with its token file, or `static_token_env` naming an environment variable) and `models` (the name Claude Code sends -> the id this provider expects; unknown names pass through unchanged) |
-| `routes.ROLE` | the providers to try, in order, for `opus`, `sonnet`, `haiku` or `other`; the role is the family named in the requested model (`usage::role_of`). A role without a list uses the `other` list, and without that every provider in alphabetical order |
+| `routes.ROLE` | the providers to try, in order, for `opus`, `sonnet`, `haiku` or `other`; the role is the family named in the requested model (`usage::role_of`); the roles are the enumerators of `roles::role` in `src/reflect/role.cppm`, the only list of them. A role without a list uses the `other` list, and without that every provider in alphabetical order |
 | `fallback.failures` | consecutive failures that open a provider's circuit (default 3) |
 | `fallback.cooldown` | how long an open circuit is skipped (default `30s`) |
 | `upstream`, `models`, `copilot`, `static_token_env` | still valid on their own: they act as one provider named `default`, so an existing configuration needs no change |
