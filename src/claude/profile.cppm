@@ -5,6 +5,7 @@ module;
 export module llmgate.claude;
 
 import std;
+import llmgate.doc;
 import llmgate.json;
 import llmgate.reflect;
 import llmgate.role;
@@ -15,14 +16,14 @@ export namespace llmgate::claude {
 using text::decimal;
 
 struct launch_config {
-    std::string opus = "claude-opus-5-5";
-    std::string sonnet = "claude-sonnet-5-5";
-    std::string haiku = "claude-haiku-5-5";
-    std::string model = "opusplan";
-    std::int64_t context_tokens = 180000;
-    std::string profile_dir = "~/.claude-llmgate";
-    std::string effort = "medium";
-    bool telemetry = false;
+    [[= reflect::doc{"Model name Claude Code uses for the opus role."}]] std::string opus = "claude-opus-5-5";
+    [[= reflect::doc{"Model name Claude Code uses for the sonnet role."}]] std::string sonnet = "claude-sonnet-5-5";
+    [[= reflect::doc{"Model name Claude Code uses for the haiku role."}]] std::string haiku = "claude-haiku-5-5";
+    [[= reflect::doc{"Model Claude Code starts with: a model name or an alias such as opusplan."}]] std::string model = "opusplan";
+    [[= reflect::doc{"Context window Claude Code assumes, in tokens; it also sets the auto-compact window."}]] std::int64_t context_tokens = 180000;
+    [[= reflect::doc{"Directory of the separate Claude Code profile that llmgate claude uses."}]] std::string profile_dir = "~/.claude-llmgate";
+    [[= reflect::doc{"Effort level written to the profile when it has none."}]] std::string effort = "medium";
+    [[= reflect::doc{"Whether Claude Code keeps its telemetry on; off by default."}]] bool telemetry = false;
 };
 
 consteval bool one_model_slot_per_role() {
