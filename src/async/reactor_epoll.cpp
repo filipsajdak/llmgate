@@ -76,6 +76,11 @@ int wait_for_events(int const poller_fd, std::array<epoll_event, events_per_poll
     return count;
 }
 
+detail::pending_op* waiter_if(detail::waiter_table& waiters, int const fd, std::uint32_t const happened, std::uint32_t const wanted,
+                              interest const what) noexcept {
+    return (happened & wanted) != 0 ? waiters.find(fd, what) : nullptr;
+}
+
 std::array<firing, 2> firings_for(detail::waiter_table& waiters, epoll_event const& event) noexcept {
     auto const tag = event.data.u64;
     if ((tag & timer_tag) != 0) {
@@ -84,8 +89,8 @@ std::array<firing, 2> firings_for(detail::waiter_table& waiters, epoll_event con
     }
     auto const fd = static_cast<int>(tag >> 1);
     std::array<firing, 2> result{};
-    auto* const reader = (event.events & readiness_events) != 0 ? waiters.find(fd, interest::readable) : nullptr;
-    auto* const writer = (event.events & writability_events) != 0 ? waiters.find(fd, interest::writable) : nullptr;
+    auto* const reader = waiter_if(waiters, fd, event.events, readiness_events, interest::readable);
+    auto* const writer = waiter_if(waiters, fd, event.events, writability_events, interest::writable);
     auto slot = result.begin();
     for (auto* const waiter : {reader, writer}) {
         auto const second = waiter != nullptr && waiter->other_fd == fd && waiter->fd != fd;
