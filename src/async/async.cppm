@@ -130,7 +130,7 @@ task<void> drive(task<T> root, std::optional<stored<T>>& out, bool& finished) {
 
 struct pending_op;
 
-enum class source_kind { descriptor, timer, other_descriptor };
+enum class source_kind { descriptor, timer, other_descriptor, nothing };
 
 struct event_source {
     pending_op* owner;

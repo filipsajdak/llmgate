@@ -107,7 +107,7 @@ std::error_code reactor::arm(int const fd, interest const what, std::optional<du
         }
     }
     if (failure) {
-        disarm_others(poller_fd_, op, detail::source_kind::timer);
+        disarm_others(poller_fd_, op, detail::source_kind::nothing);
     }
     return failure;
 }

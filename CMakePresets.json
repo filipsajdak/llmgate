@@ -17,6 +17,15 @@
       "cacheVariables": {
         "CMAKE_CXX_COMPILER": "g++"
       }
+    },
+    {
+      "name": "fuzz",
+      "inherits": "linux",
+      "binaryDir": "${sourceDir}/build/fuzz",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "afl-g++-fast",
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
     }
   ],
   "buildPresets": [
@@ -27,6 +36,14 @@
     {
       "name": "linux",
       "configurePreset": "linux"
+    },
+    {
+      "name": "fuzz",
+      "configurePreset": "fuzz",
+      "targets": [
+        "fuzz_http_parser",
+        "fuzz_sse_parser"
+      ]
     }
   ],
   "testPresets": [

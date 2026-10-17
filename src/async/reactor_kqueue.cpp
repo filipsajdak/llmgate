@@ -79,7 +79,7 @@ std::error_code reactor::arm(int const fd, interest const what, std::optional<du
     }
     if (::kevent(poller_fd_, changes.data(), count, nullptr, 0, nullptr) < 0) {
         auto const error = last_error();
-        disarm_others(poller_fd_, op, detail::source_kind::descriptor);
+        disarm_others(poller_fd_, op, detail::source_kind::nothing);
         return error;
     }
     return {};

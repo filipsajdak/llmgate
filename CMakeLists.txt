@@ -81,3 +81,17 @@ llmgate_test(sse_test unit llmgate_sse)
 llmgate_test(net_test unit llmgate_net)
 llmgate_test(httpio_test unit llmgate_httpio)
 llmgate_test(tls_network_test network llmgate_net)
+
+add_library(llmgate_fuzz_driver)
+target_sources(llmgate_fuzz_driver PUBLIC FILE_SET CXX_MODULES BASE_DIRS tests/fuzz FILES tests/fuzz/driver.cppm)
+target_link_libraries(llmgate_fuzz_driver PUBLIC llmgate_flags)
+
+function(llmgate_fuzz name)
+  add_executable(fuzz_${name} tests/fuzz/${name}/harness.cpp)
+  target_link_libraries(fuzz_${name} PRIVATE llmgate_fuzz_driver llmgate_contracts ${ARGN})
+  add_test(NAME fuzz_${name} COMMAND fuzz_${name} ${CMAKE_CURRENT_SOURCE_DIR}/tests/fuzz/${name}/corpus)
+  set_tests_properties(fuzz_${name} PROPERTIES LABELS fuzz-regression TIMEOUT 60)
+endfunction()
+
+llmgate_fuzz(http_parser llmgate_http)
+llmgate_fuzz(sse_parser llmgate_sse)

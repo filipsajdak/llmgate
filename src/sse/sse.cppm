@@ -94,8 +94,14 @@ void write_event(std::string& out, std::string_view const name, std::string_view
     if (!name.empty()) {
         std::format_to(std::back_inserter(out), "event: {}\n", name);
     }
-    for (auto const line : data | std::views::split('\n')) {
-        std::format_to(std::back_inserter(out), "data: {}\n", std::string_view{line});
+    std::string_view rest = data;
+    for (;;) {
+        auto const newline = rest.find('\n');
+        std::format_to(std::back_inserter(out), "data: {}\n", rest.substr(0, newline));
+        if (newline == std::string_view::npos) {
+            break;
+        }
+        rest.remove_prefix(newline + 1);
     }
     out.push_back('\n');
 }

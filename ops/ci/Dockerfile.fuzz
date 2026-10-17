@@ -1,0 +1,7 @@
+FROM llmgate-build
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends make python3 \
+ && rm -rf /var/lib/apt/lists/* \
+ && git clone --depth 1 --branch v5.03c https://github.com/AFLplusplus/AFLplusplus /opt/aflpp \
+ && make -C /opt/aflpp -j"$(nproc)" source-only NO_NYX=1 NO_PYTHON=1 NO_SPLICING=1 CC=gcc CXX=g++ \
+ && make -C /opt/aflpp install PREFIX=/usr/local

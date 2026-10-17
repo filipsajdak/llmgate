@@ -193,6 +193,18 @@ const suite async_suite = [] {
         expect(!outcome.error);
     };
 
+    "limit_a_failed_arm_leaves_no_stale_registration_behind"_test = [] {
+        reactor loop;
+        socket_pair first;
+
+        auto const failed = loop.run(race_two(loop, first.fds[0], unopened_descriptor, long_wait));
+        ::write(first.fds[1], "x", 1);
+        auto const later = loop.run(wait_readable_for(loop, first.fds[0], long_wait));
+
+        expect(static_cast<bool>(failed.error));
+        expect(!later);
+    };
+
     "limit_readable_on_an_unopened_descriptor_reports_the_error_as_a_value"_test = [] {
         reactor loop;
 

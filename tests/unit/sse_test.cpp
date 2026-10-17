@@ -88,6 +88,27 @@ const suite sse_suite = [] {
         expect(events[0].data == "tail");
     };
 
+    "capability_an_event_with_empty_data_is_written_and_parsed_back"_test = [] {
+        std::string wire;
+        write_event(wire, "ping", "");
+
+        auto const events = parse_all(wire);
+
+        expect(events.size() == 1_u);
+        expect(events[0].name == "ping");
+        expect(events[0].data.empty());
+    };
+
+    "capability_trailing_newlines_in_data_survive_a_round_trip"_test = [] {
+        std::string wire;
+        write_event(wire, "", "tail\n");
+
+        auto const events = parse_all(wire);
+
+        expect(events.size() == 1_u);
+        expect(events[0].data == "tail\n");
+    };
+
     "capability_written_events_parse_back_to_the_same_fields"_test = [] {
         std::string wire;
         write_event(wire, "content_block_delta", "line1\nline2");
