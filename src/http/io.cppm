@@ -4,6 +4,7 @@ import std;
 import llmgate.async;
 import llmgate.http;
 import llmgate.net;
+import llmgate.shutdown;
 
 export namespace llmgate::httpio {
 
@@ -337,6 +338,56 @@ async::task<void> serve(net::listener& listening, Handler& handler, limits bound
         }
         listening.reactor().spawn(serve_connection(std::move(*accepted), handler, bounds));
     }
+}
+
+constexpr int status_unavailable = 503;
+
+template <class Handler>
+class counted_handler {
+public:
+    counted_handler(Handler& inner, std::shared_ptr<shutdown::drain_gate> gate) noexcept : inner_{&inner}, gate_{std::move(gate)} {}
+
+    template <class Writer>
+    async::task<result_void> operator()(request const& incoming, Writer& out) {
+        if (gate_->closed()) {
+            (void)co_await out.send(status_unavailable, {}, "");
+            co_return std::unexpected{std::make_error_code(std::errc::operation_canceled)};
+        }
+        shutdown::drain_gate::scope const counting{*gate_};
+        co_return co_await (*inner_)(incoming, out);
+    }
+
+private:
+    Handler* inner_;
+    std::shared_ptr<shutdown::drain_gate> gate_;
+};
+
+template <class Handler>
+async::task<void> serve_owned(net::tcp_stream stream, std::shared_ptr<counted_handler<Handler>> counted, limits bounds) {
+    co_await serve_connection(std::move(stream), *counted, bounds);
+}
+
+template <class Handler>
+async::task<std::size_t> serve_until(net::listener& listening, Handler& handler, limits bounds, int const stop_descriptor,
+                                     async::duration const drain) {
+    auto const gate = std::make_shared<shutdown::drain_gate>(listening.reactor());
+    auto const counted = std::make_shared<counted_handler<Handler>>(handler, gate);
+    for (;;) {
+        auto accepted = co_await listening.accept(stop_descriptor);
+        if (!accepted) {
+            break;
+        }
+        listening.reactor().spawn(serve_owned(std::move(*accepted), counted, bounds));
+    }
+    listening.stop_listening();
+    gate->close();
+    if (gate->active() != 0) {
+        listening.reactor().spawn(gate->expire_after(drain));
+        while (gate->active() != 0 && !gate->expired()) {
+            co_await gate->changed();
+        }
+    }
+    co_return gate->active();
 }
 
 }  // namespace llmgate::httpio

@@ -309,7 +309,7 @@ public:
         return listener{reactor, std::move(socket), ntohs(bound.sin_port)};
     }
 
-    async::task<std::expected<tcp_stream, std::error_code>> accept() {
+    async::task<std::expected<tcp_stream, std::error_code>> accept(int const stop_descriptor = -1) {
         for (;;) {
             auto client = adopt(::accept(raw(socket_), nullptr, nullptr));
             if (client) {
@@ -324,11 +324,17 @@ public:
             if (!detail::would_block(errno)) {
                 co_return std::unexpected{detail::last_error()};
             }
-            if (auto const error = co_await reactor_->readable(raw(socket_))) {
-                co_return std::unexpected{error};
+            auto const waited = co_await reactor_->readable_or_other(raw(socket_), stop_descriptor);
+            if (waited.error) {
+                co_return std::unexpected{waited.error};
+            }
+            if (waited.other_ready) {
+                co_return std::unexpected{std::make_error_code(std::errc::operation_canceled)};
             }
         }
     }
+
+    void stop_listening() noexcept { socket_.reset(); }
 
     std::uint16_t port() const noexcept { return port_; }
     async::reactor& reactor() const noexcept { return *reactor_; }
