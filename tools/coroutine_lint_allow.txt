@@ -19,8 +19,18 @@ tests/|*|*|test coroutines borrow fixtures from the scenario frame, which waits 
 src/gateway/gateway.cppm|operator ( )|incoming|awaited immediately by serve_connection, whose frame owns the request
 src/gateway/gateway.cppm|estimate_tokens|incoming|awaited in the same full expression by operator(), whose caller owns the request
 src/gateway/gateway.cppm|forward|incoming|awaited in the same full expression by operator(), whose caller owns the request
-src/gateway/gateway.cppm|relay|upstream|awaited immediately by forward, whose frame owns the upstream stream
-src/gateway/gateway.cppm|conclude|upstream|awaited immediately by relay, whose frame owns the stream reference
-src/gateway/gateway.cppm|conclude|state|awaited immediately by relay, whose frame owns the relay state
+src/gateway/gateway.cppm|run_providers|incoming|awaited in the same full expression by forward, whose caller owns the request
+src/gateway/gateway.cppm|attempt|incoming|awaited immediately by run_providers, whose frame holds the same reference
+src/gateway/gateway.cppm|build_spec|incoming|awaited immediately by attempt, whose frame holds the same reference
+src/gateway/gateway.cppm|send_request|upstream|awaited immediately by attempt, whose frame owns the upstream stream
+src/gateway/gateway.cppm|forward_to_client|state|awaited immediately by pump, whose caller owns the relay state
+src/gateway/gateway.cppm|pump|upstream|awaited immediately by read_reply, whose frame holds the upstream reference for the whole attempt
+src/gateway/gateway.cppm|pump|state|awaited immediately by read_reply, whose frame owns the relay state
+src/gateway/gateway.cppm|read_reply|upstream|awaited immediately by attempt, whose frame owns the upstream stream
+src/gateway/gateway.cppm|conclude|upstream|awaited immediately by read_reply, whose frame holds the stream reference
+src/gateway/gateway.cppm|conclude|state|awaited immediately by read_reply, whose frame owns the relay state
+src/gateway/gateway.cppm|close_stream|state|awaited immediately by conclude, whose caller owns the relay state
+src/gateway/gateway.cppm|relay_buffered|upstream|awaited immediately by conclude, whose caller holds the stream reference
+src/gateway/gateway.cppm|relay_buffered|state|awaited immediately by conclude, whose caller owns the relay state
 src/http/io.cppm|step|on_event|awaited immediately by the caller, which owns the stateful sink for the whole exchange
 src/http/io.cppm|advance|on_event|private helper awaited immediately by read and step, whose callers own the sink

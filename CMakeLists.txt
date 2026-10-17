@@ -78,7 +78,7 @@ llmgate_module(llmgate_httpio INTERFACE src/http/io.cppm LIBS llmgate_async llmg
 llmgate_module(llmgate_routing INTERFACE src/gateway/routing.cppm LIBS llmgate_http llmgate_jsonscan)
 llmgate_module(llmgate_selection INTERFACE src/gateway/selection.cppm)
 llmgate_module(llmgate_fetch INTERFACE src/gateway/fetch.cppm SOURCES src/gateway/fetch.cpp LIBS llmgate_async llmgate_http llmgate_httpio llmgate_net llmgate_routing llmgate_tls)
-llmgate_module(llmgate_gateway INTERFACE src/gateway/gateway.cppm LIBS llmgate_usage llmgate_proof llmgate_claude llmgate_routing llmgate_anthropic llmgate_httpio llmgate_json llmgate_jsonscan llmgate_net llmgate_reflect llmgate_sse llmgate_tls)
+llmgate_module(llmgate_gateway INTERFACE src/gateway/gateway.cppm LIBS llmgate_selection llmgate_usage llmgate_proof llmgate_claude llmgate_routing llmgate_anthropic llmgate_httpio llmgate_json llmgate_jsonscan llmgate_net llmgate_reflect llmgate_sse llmgate_tls)
 llmgate_module(llmgate_copilot INTERFACE src/gateway/copilot.cppm SOURCES src/gateway/copilot.cpp LIBS llmgate_process llmgate_gateway llmgate_fetch llmgate_json llmgate_jsonscan llmgate_reflect)
 
 enable_testing()
@@ -219,5 +219,7 @@ add_test(NAME llmgate_refuses_an_open_listen_address_without_a_client_key COMMAN
 set_tests_properties(llmgate_refuses_an_open_listen_address_without_a_client_key PROPERTIES LABELS unit PASS_REGULAR_EXPRESSION "not a loopback address")
 add_test(NAME llmgate_refuses_a_client_key_variable_that_is_not_set COMMAND llmgate --config ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/unset_key.jsonc)
 set_tests_properties(llmgate_refuses_a_client_key_variable_that_is_not_set PROPERTIES LABELS unit PASS_REGULAR_EXPRESSION "which is not set")
+add_test(NAME llmgate_check_config_names_a_route_to_an_unknown_provider COMMAND llmgate --check-config --config ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/unknown_route_provider.jsonc)
+set_tests_properties(llmgate_check_config_names_a_route_to_an_unknown_provider PROPERTIES LABELS unit PASS_REGULAR_EXPRESSION "unknown provider missing")
 add_test(NAME llmgate_setup_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/setup_flow.sh $<TARGET_FILE:llmgate>)
 set_tests_properties(llmgate_setup_flow PROPERTIES LABELS e2e TIMEOUT 120)

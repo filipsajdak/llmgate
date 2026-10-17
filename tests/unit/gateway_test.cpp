@@ -5,6 +5,7 @@ import llmgate.async;
 import llmgate.gateway;
 import llmgate.http;
 import llmgate.httpio;
+import llmgate.json;
 import llmgate.net;
 import llmgate.proof;
 import llmgate.routing;
@@ -38,6 +39,9 @@ enum class behaviour {
     sse_stalls,
     sse_endless,
     rate_limited,
+    server_error,
+    bad_request,
+    silent,
 };
 
 struct recorded {
@@ -53,6 +57,7 @@ std::string stream_body_event(std::string_view const type, std::string_view cons
 struct fake_upstream {
     behaviour mode = behaviour::json_ok;
     std::vector<recorded> seen;
+    std::string request_id = "req_1";
     int connections = 0;
     bool endless_writer_failed = false;
     async::reactor* loop = nullptr;
@@ -95,7 +100,7 @@ struct fake_upstream {
             case behaviour::json_ok: {
                 http::header_map fields;
                 fields.add("Content-Type", "application/json");
-                fields.add("Request-Id", "req_1");
+                fields.add("Request-Id", request_id);
                 co_return co_await out.send(200, fields, R"({"type":"message","content":[]})");
             }
             case behaviour::json_usage: {
@@ -112,6 +117,20 @@ struct fake_upstream {
                 http::header_map fields;
                 fields.add("Content-Type", "application/json");
                 co_return co_await out.send(429, fields, R"({"type":"error","error":{"type":"rate_limit_error"}})");
+            }
+            case behaviour::server_error: {
+                http::header_map fields;
+                fields.add("Content-Type", "application/json");
+                co_return co_await out.send(502, fields, R"({"type":"error","error":{"type":"api_error"}})");
+            }
+            case behaviour::bad_request: {
+                http::header_map fields;
+                fields.add("Content-Type", "application/json");
+                co_return co_await out.send(400, fields, R"({"type":"error","error":{"type":"invalid_request_error"}})");
+            }
+            case behaviour::silent: {
+                co_await loop->sleep(std::chrono::seconds{30});
+                co_return net::result_void{};
             }
             case behaviour::sse_clean: co_return co_await script(out, {start, block, text, end_block, delta, stop});
             case behaviour::sse_duplicate_start: co_return co_await script(out, {start, start, start, block, text, end_block, delta, stop});
@@ -257,6 +276,83 @@ struct world {
         spec.host = std::move(host);
         return loop.run(call(loop, port(), std::move(spec)));
     }
+};
+
+constexpr milliseconds duo_cooldown{1000};
+constexpr unsigned duo_failures = 2;
+constexpr milliseconds duo_response_head{150};
+
+void route(gateway::config& settings, std::string_view const role, std::initializer_list<std::string_view> const names) {
+    auto& list = settings.routes[std::string{role}];
+    for (auto const name : names) {
+        list.emplace_back(name);
+    }
+}
+
+struct duo {
+    async::reactor loop;
+    net::listener first_listener;
+    net::listener second_listener;
+    net::listener gateway_listener;
+    fake_upstream first;
+    fake_upstream second;
+    gateway::static_credential credential_a;
+    gateway::static_credential credential_b;
+    tls::client_context tls_context;
+    std::int64_t now_ms = 0;
+    gateway::proxy gateway;
+
+    static gateway::config settings(std::uint16_t const first_port, std::uint16_t const second_port, std::function<void(gateway::config&)> const& tune) {
+        gateway::config built{.listen = "127.0.0.1:0",
+                              .fallback = {.failures = duo_failures, .cooldown = duo_cooldown},
+                              .time = {.connect = std::chrono::seconds{2}, .response_head = duo_response_head, .stream_idle = short_idle}};
+        built.providers["a"] = {.base_url = std::format("http://127.0.0.1:{}", first_port), .headers = {{"Editor-Version", "a/1.0"}}, .models = {{"opus", "model-a"}}};
+        built.providers["b"] = {.base_url = std::format("http://127.0.0.1:{}", second_port), .headers = {{"Editor-Version", "b/1.0"}}, .models = {{"opus", "model-b"}, {"extra", "model-extra"}}};
+        tune(built);
+        return built;
+    }
+
+    static gateway::credential_map credentials(gateway::credential& one, gateway::credential& two) {
+        gateway::credential_map all;
+        all.emplace("a", &one);
+        all.emplace("b", &two);
+        return all;
+    }
+
+    explicit duo(std::function<void(gateway::config&)> const& tune = [](gateway::config&) {}, std::string token_a = "token-a", std::uint16_t const first_port = 0)
+        : first_listener{std::move(*net::listener::bind(loop, std::string{loopback}, 0))},
+          second_listener{std::move(*net::listener::bind(loop, std::string{loopback}, 0))},
+          gateway_listener{std::move(*net::listener::bind(loop, std::string{loopback}, 0))},
+          credential_a{std::move(token_a)},
+          credential_b{"token-b"},
+          tls_context{std::move(*tls::client_context::make(tls::group_policy::classical_only))},
+          gateway{loop, settings(first_port == 0 ? first_listener.port() : first_port, second_listener.port(), tune),
+                  {.allowed_hosts = routing::default_allowed_hosts(loopback, gateway_listener.port())}, credentials(credential_a, credential_b), tls_context} {
+        first.loop = &loop;
+        second.loop = &loop;
+        second.request_id = "from-b";
+        gateway.use_clock([] { return fixed_time; });
+        gateway.use_breaker_clock([this] { return now_ms; });
+        loop.spawn(accept_upstream(loop, first_listener, first));
+        loop.spawn(accept_upstream(loop, second_listener, second));
+        loop.spawn(httpio::serve(gateway_listener, gateway, httpio::limits{.max_body_bytes = 4096}));
+    }
+
+    reply ask(httpio::request_spec spec) {
+        spec.host = std::format("127.0.0.1:{}", gateway_listener.port());
+        return loop.run(call(loop, gateway_listener.port(), std::move(spec)));
+    }
+
+    reply chat_with(std::string_view const model, bool const stream = false) { return ask(messages_request(chat(model, stream), "/anthropic/v1/messages", "")); }
+
+    reply stats() {
+        auto request = messages_request("");
+        request.method = "GET";
+        request.target = "/llmgate/stats";
+        return ask(std::move(request));
+    }
+
+    gateway::provider_stats const& counts(std::string const& name) const { return gateway.counters().providers.at(name); }
 };
 
 std::vector<std::string> event_names(std::string_view const wire) {
@@ -708,6 +804,255 @@ const suite gateway_suite = [] {
 
         expect(w.ask(std::move(health)).body == R"({"status":"ok"})");
         expect(w.ask(std::move(statistics)).body.contains(R"("requests":2)"));
+    };
+
+    "capability_a_request_goes_to_the_first_provider_with_its_own_credential_headers_and_model_name"_test = [] {
+        duo d;
+        std::vector<std::string> lines;
+        d.gateway.persist_usage_with([&lines](std::string const& line) { lines.push_back(line); });
+
+        auto const answer = d.chat_with("opus");
+
+        expect(answer.status == 200 && answer.headers.at("Request-Id") == "req_1");
+        expect(d.first.seen.size() == 1_u && d.second.seen.empty());
+        expect(d.first.seen[0].headers.at("Authorization") == "Bearer token-a" && d.first.seen[0].headers.at("Editor-Version") == "a/1.0");
+        expect(d.first.seen[0].body.contains(R"("model":"model-a")"));
+        expect(lines.size() == 1_u && usage::from_line(lines.at(0))->provider == "a");
+    };
+
+    "capability_a_502_before_any_byte_falls_back_to_the_next_provider"_test = [] {
+        duo d;
+        std::vector<std::string> lines;
+        d.gateway.persist_usage_with([&lines](std::string const& line) { lines.push_back(line); });
+        d.first.mode = behaviour::server_error;
+
+        auto const answer = d.chat_with("opus");
+
+        expect(answer.status == 200 && answer.headers.at("Request-Id") == "from-b");
+        expect(d.second.seen.at(0).body.contains(R"("model":"model-b")"));
+        expect(d.second.seen.at(0).headers.at("Authorization") == "Bearer token-b");
+        expect(d.counts("a").failures == 1_u && d.counts("b").answered == 1_u && d.counts("a").answered == 0_u);
+        expect(lines.size() == 1_u);
+        auto const entry = usage::from_line(lines.at(0));
+        expect(entry->provider == "b" && entry->status == 200);
+    };
+
+    "capability_a_429_before_any_byte_falls_back_to_the_next_provider"_test = [] {
+        duo d;
+        d.first.mode = behaviour::rate_limited;
+
+        auto const answer = d.chat_with("opus");
+
+        expect(answer.status == 200 && d.second.seen.size() == 1_u);
+        expect(d.counts("a").failures == 1_u);
+    };
+
+    "capability_a_timeout_waiting_for_the_response_head_falls_back_to_the_next_provider"_test = [] {
+        duo d;
+        d.first.mode = behaviour::silent;
+
+        auto const answer = d.chat_with("opus");
+
+        expect(answer.status == 200 && answer.headers.at("Request-Id") == "from-b");
+        expect(d.first.seen.size() == 1_u);
+        expect(d.gateway.counters().upstream_timeouts == 1_u && d.counts("a").failures == 1_u);
+    };
+
+    "capability_a_refused_connection_falls_back_to_the_next_provider"_test = [] {
+        async::reactor scratch;
+        auto const gone = net::listener::bind(scratch, std::string{loopback}, 0)->port();
+        duo d{[](gateway::config&) {}, "token-a", gone};
+
+        auto const answer = d.chat_with("opus");
+
+        expect(answer.status == 200 && answer.headers.at("Request-Id") == "from-b");
+        expect(d.gateway.counters().upstream_failures == 1_u && d.counts("a").failures == 1_u);
+    };
+
+    "limit_a_stream_that_began_is_never_retried_on_another_provider"_test = [] {
+        duo d;
+        d.first.mode = behaviour::sse_truncated;
+
+        auto const answer = d.chat_with("opus", true);
+
+        expect(event_names(answer.body).back() == "error");
+        expect(d.second.seen.empty());
+        expect(d.counts("a").failures == 1_u && d.counts("b").attempts == 0_u);
+    };
+
+    "limit_a_client_error_other_than_429_is_delivered_and_not_retried"_test = [] {
+        duo d;
+        d.first.mode = behaviour::bad_request;
+
+        auto const answer = d.chat_with("opus");
+
+        expect(answer.status == 400 && d.second.seen.empty());
+        expect(d.counts("a").answered == 1_u && d.counts("a").failures == 0_u);
+    };
+
+    "limit_when_every_provider_fails_the_last_failure_reaches_the_client_and_one_line_is_written"_test = [] {
+        duo d;
+        std::vector<std::string> lines;
+        d.gateway.persist_usage_with([&lines](std::string const& line) { lines.push_back(line); });
+        d.first.mode = behaviour::server_error;
+        d.second.mode = behaviour::rate_limited;
+
+        auto const answer = d.chat_with("opus");
+
+        expect(answer.status == 429 && answer.body.contains("rate_limit_error"));
+        expect(d.first.seen.size() == 1_u && d.second.seen.size() == 1_u);
+        expect(lines.size() == 1_u);
+        auto const entry = usage::from_line(lines.at(0));
+        expect(entry->provider == "b" && entry->status == 429 && entry->used == usage::tokens{});
+    };
+
+    "capability_a_breaker_opens_after_the_threshold_is_skipped_and_closes_after_a_good_probe"_test = [] {
+        duo d;
+        d.first.mode = behaviour::server_error;
+
+        (void)d.chat_with("opus");
+        (void)d.chat_with("opus");
+        auto const skipped = d.chat_with("opus");
+
+        expect(skipped.status == 200 && d.first.seen.size() == 2_u && d.second.seen.size() == 3_u);
+        expect(d.counts("a").skipped == 1_u);
+        expect(d.stats().body.contains(R"("a":{"attempts":2,"answered":0,"failures":2,"skipped":1,"circuit":"open"})"));
+
+        d.now_ms += duo_cooldown.count();
+        d.first.mode = behaviour::json_ok;
+        auto const probe = d.chat_with("opus");
+        auto const after = d.chat_with("opus");
+
+        expect(probe.headers.at("Request-Id") == "req_1" && after.headers.at("Request-Id") == "req_1");
+        expect(d.first.seen.size() == 4_u);
+        expect(d.stats().body.contains(R"("circuit":"closed")"));
+    };
+
+    "limit_a_failed_probe_reopens_the_breaker_for_another_cooldown"_test = [] {
+        duo d;
+        d.first.mode = behaviour::server_error;
+        (void)d.chat_with("opus");
+        (void)d.chat_with("opus");
+
+        d.now_ms += duo_cooldown.count();
+        (void)d.chat_with("opus");
+        (void)d.chat_with("opus");
+
+        expect(d.first.seen.size() == 3_u);
+        expect(d.counts("a").skipped == 1_u);
+        d.now_ms += duo_cooldown.count();
+        (void)d.chat_with("opus");
+        expect(d.first.seen.size() == 4_u);
+    };
+
+    "limit_when_every_breaker_is_open_the_client_gets_503_and_no_upstream_is_called"_test = [] {
+        duo d;
+        d.first.mode = behaviour::server_error;
+        d.second.mode = behaviour::server_error;
+        (void)d.chat_with("opus");
+        (void)d.chat_with("opus");
+        auto const seen_before = d.first.seen.size() + d.second.seen.size();
+
+        auto const answer = d.chat_with("opus");
+
+        expect(answer.status == 503 && answer.body.contains("circuit open"));
+        expect(d.first.seen.size() + d.second.seen.size() == seen_before);
+        expect(d.gateway.counters().no_provider == 1_u);
+    };
+
+    "limit_missing_credentials_fall_through_without_opening_the_breaker"_test = [] {
+        duo d{[](gateway::config&) {}, ""};
+
+        for (int round = 0; round < 3; ++round) {
+            expect(d.chat_with("opus").status == 200);
+        }
+
+        expect(d.first.seen.empty() && d.second.seen.size() == 3_u);
+        expect(d.counts("a").failures == 0_u && d.counts("a").skipped == 0_u);
+    };
+
+    "capability_each_role_follows_its_own_route_and_other_covers_the_rest"_test = [] {
+        duo d{[](gateway::config& settings) {
+            route(settings, "opus", {"b", "a"});
+            route(settings, "other", {"a"});
+        }};
+
+        (void)d.chat_with("opus");
+        (void)d.chat_with("claude-sonnet-x");
+        d.second.mode = behaviour::server_error;
+        auto const fell_back = d.chat_with("opus");
+
+        expect(d.second.seen.size() == 2_u && d.first.seen.size() == 2_u);
+        expect(d.first.seen.at(0).body.contains("claude-sonnet-x"));
+        expect(fell_back.status == 200 && fell_back.headers.at("Request-Id") == "req_1");
+    };
+
+    "capability_the_models_list_is_the_union_of_every_providers_aliases"_test = [] {
+        duo d;
+        auto request = messages_request("");
+        request.method = "GET";
+        request.target = "/anthropic/v1/models";
+
+        auto const answer = d.ask(std::move(request));
+
+        expect(answer.body.contains(R"("id":"opus")") && answer.body.contains(R"("id":"extra")"));
+    };
+
+    "capability_a_single_upstream_config_is_served_as_the_provider_named_default"_test = [] {
+        world w;
+
+        (void)w.ask(messages_request(chat("opus", false)));
+        auto stats = messages_request("");
+        stats.method = "GET";
+        stats.target = "/llmgate/stats";
+        auto const body = w.ask(std::move(stats)).body;
+
+        expect(w.gateway.counters().providers.at("default").answered == 1_u);
+        expect(body.contains(R"("providers":{"default":{"attempts":1,"answered":1,"failures":0,"skipped":0,"circuit":"closed"}})"));
+    };
+
+    "capability_the_single_upstream_keys_become_an_implicit_default_provider"_test = [] {
+        gateway::config legacy{.upstream = {.base_url = "http://127.0.0.1:1", .messages_path = "/m"}, .models = {{"opus", "x"}}, .static_token_env = "T"};
+
+        auto const providers = gateway::effective_providers(legacy);
+
+        expect(providers.size() == 1_u);
+        expect(providers.at("default").base_url == "http://127.0.0.1:1" && providers.at("default").messages_path == "/m");
+        expect(providers.at("default").models.at("opus") == "x" && providers.at("default").static_token_env == "T");
+        expect(gateway::config_problem(legacy).empty());
+    };
+
+    "limit_a_configuration_is_refused_for_missing_providers_bad_urls_and_bad_routes"_test = [] {
+        gateway::config none{.listen = "127.0.0.1:0"};
+        gateway::config bad_url;
+        bad_url.providers["a"] = {.base_url = "ftp://x"};
+        gateway::config bad_route;
+        bad_route.providers["a"] = {.base_url = "http://127.0.0.1:1"};
+        route(bad_route, "opus", {"zzz"});
+
+        expect(gateway::config_problem(none).contains("providers"));
+        expect(gateway::config_problem(bad_url).contains("provider a") && gateway::config_problem(bad_url).contains("http"));
+        expect(gateway::config_problem(bad_route).contains("unknown provider zzz"));
+    };
+
+    "capability_the_configuration_reader_accepts_providers_routes_and_the_breaker_settings"_test = [] {
+        constexpr std::string_view text = R"({
+            "listen": "127.0.0.1:9480",
+            "providers": {
+                "copilot": { "base_url": "https://api.githubcopilot.com", "copilot": { "token_file": "t.json" }, "models": { "opus": "o" } },
+                "direct": { "base_url": "https://api.anthropic.com", "static_token_env": "KEY", "headers": { "X": "1" } }
+            },
+            "routes": { "opus": ["direct", "copilot"], "other": ["copilot"] },
+            "fallback": { "failures": 5, "cooldown": "45s" }
+        })";
+
+        auto const parsed = json::read_text<gateway::config>(text);
+
+        expect(parsed.has_value());
+        expect(parsed->providers.size() == 2_u && parsed->providers.at("copilot").copilot.has_value() && parsed->providers.at("direct").headers.at("X") == "1");
+        expect(parsed->routes.at("opus") == std::vector<std::string>{"direct", "copilot"});
+        expect(parsed->fallback.failures == 5_u && parsed->fallback.cooldown == std::chrono::seconds{45});
+        expect(gateway::config_problem(*parsed).empty());
     };
 };
 

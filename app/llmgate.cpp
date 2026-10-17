@@ -36,13 +36,30 @@ std::expected<gateway::config, std::string> load_config(std::string_view const p
     return std::move(*loaded);
 }
 
-std::unique_ptr<gateway::credential> make_credential(async::reactor& loop, tls::client_context const& tls_context,
-                                                     gateway::config const& settings) {
-    if (settings.copilot) {
-        return std::make_unique<copilot::copilot_credential>(loop, tls_context, *settings.copilot);
+using credential_store = std::map<std::string, std::unique_ptr<gateway::credential>>;
+
+std::unique_ptr<gateway::credential> make_credential(async::reactor& loop, tls::client_context const& tls_context, gateway::provider_config const& provider) {
+    if (provider.copilot) {
+        return std::make_unique<copilot::copilot_credential>(loop, tls_context, *provider.copilot);
     }
-    auto const* token = settings.static_token_env.empty() ? nullptr : std::getenv(settings.static_token_env.c_str());
+    auto const* token = provider.static_token_env.empty() ? nullptr : std::getenv(provider.static_token_env.c_str());
     return std::make_unique<gateway::static_credential>(token == nullptr ? std::string{} : std::string{token});
+}
+
+credential_store make_credentials(async::reactor& loop, tls::client_context const& tls_context, gateway::config const& settings) {
+    credential_store store;
+    for (auto const& [name, provider] : gateway::effective_providers(settings)) {
+        store.emplace(name, make_credential(loop, tls_context, provider));
+    }
+    return store;
+}
+
+gateway::credential_map borrowed(credential_store const& store) {
+    gateway::credential_map all;
+    for (auto const& [name, owned] : store) {
+        all.emplace(name, owned.get());
+    }
+    return all;
 }
 
 std::expected<gateway::access_policy, std::string> make_policy(gateway::config const& settings, std::string const& host,
@@ -82,12 +99,12 @@ int serve(gateway::config settings) {
         std::println(stderr, "llmgate: {}", policy.error());
         return exit_config;
     }
-    auto credential = make_credential(loop, *tls_context, settings);
-    gateway::proxy proxy{loop, settings, std::move(*policy), *credential, *tls_context};
-    if (!proxy.configured()) {
-        std::println(stderr, "llmgate: upstream.base_url is not a valid http or https URL");
+    if (auto const problem = gateway::config_problem(settings); !problem.empty()) {
+        std::println(stderr, "llmgate: {}", problem);
         return exit_config;
     }
+    auto credentials = make_credentials(loop, *tls_context, settings);
+    gateway::proxy proxy{loop, settings, std::move(*policy), borrowed(credentials), *tls_context};
     if (auto const sink = commands::ledger_sink(settings.usage.ledger_file)) {
         auto history = commands::read_ledger(settings.usage.ledger_file);
         if (history.skipped != 0) {
@@ -176,6 +193,10 @@ int main(int argc, char** argv) {
         return exit_config;
     }
     if (parsed->check_config) {
+        if (auto const problem = settings ? gateway::config_problem(*settings) : std::string{}; !problem.empty()) {
+            std::println(stderr, "llmgate: {}", problem);
+            return exit_config;
+        }
         std::println("configuration is valid");
         return 0;
     }
