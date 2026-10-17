@@ -258,7 +258,7 @@ constexpr finding budget_finding(facts const& seen) {
 
 constexpr std::string lowest_summary(quota::summary const& found) {
     std::string out;
-    for (auto const& item : found.allowances) {
+    for (auto const& item : found.quotas) {
         if (quota::is_low(item)) {
             out += (out.empty() ? "" : ", ") + item.name + " " + text::decimal(item.percent_remaining) + "% left";
         }

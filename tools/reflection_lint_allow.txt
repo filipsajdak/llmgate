@@ -1,6 +1,4 @@
 # path|rule|text fragment of the first matching line|reason. Debt entries start with 'pending:' and name the tier that removes them; anything else is a justified exception. A path ending in / covers the directory.
-src/gateway/quota.cppm|key-member-block|items.push_back(json::make_object({{"name", json::make_strin|pending: Tier 2 D1 replaces it with json::to_value on a wire aggregate
-src/gateway/quota.cppm|key-member-block|return json::make_object({{"plan", json::make_string(found.p|pending: Tier 2 D1 replaces it with json::to_value on a wire aggregate
 src/gateway/gateway.cppm|json-format-template|return std::format(R"({}:{{"attempts"|pending: Tier 2 D2 replaces provider_json with json::to_value
 src/gateway/gateway.cppm|json-format-template|R"({{"requests":{},"streamed":{}|pending: Tier 2 D2 replaces stats_json with json::to_value
 src/gateway/routing.cppm|route-table|{"POST", "/anthropic/v1/messages", route::messages},|pending: Tier 2 D2 annotates the route enumerators with the endpoint

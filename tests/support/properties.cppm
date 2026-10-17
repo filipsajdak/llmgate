@@ -412,7 +412,7 @@ constexpr bool quota_holds(std::string_view const text) {
     auto const within = [](quota::allowance const& item) {
         return item.percent_remaining >= 0 && item.percent_remaining <= quota::full_percent && item.name.size() <= usage::longest_label;
     };
-    if (found->allowances.size() > quota::most_allowances || !std::ranges::all_of(found->allowances, within) || !printable(quota::render(*found))) {
+    if (found->quotas.size() > quota::most_allowances || !std::ranges::all_of(found->quotas, within) || !printable(quota::render(*found))) {
         return false;
     }
     auto const again = json::parse(quota::to_json(*found), {.jsonc = false});
@@ -461,7 +461,7 @@ constexpr doctor::facts doctor_facts_from(std::string_view const text) {
     seen.quota = static_cast<doctor::quota_state>(bits(d, 3, 2) % reflect::enum_count<doctor::quota_state>);
     if (bit(d, 6)) {
         seen.quota_summary = quota::summary{.plan = "p", .sku = "s", .reset_date = "2026-11-01",
-                                            .allowances = {{.name = "chat", .has_quota = true, .entitlement = 10, .remaining = 1, .percent_remaining = bit(d, 5) ? 5 : 90}}};
+                                            .quotas = {{.name = "chat", .has_quota = true, .entitlement = 10, .remaining = 1, .percent_remaining = bit(d, 5) ? 5 : 90}}};
     }
     seen.daily_tokens = strictness % 2 == 0 ? 1000 : 50000;
     seen.monthly_tokens = strictness % 3 == 0 ? 0 : 20000;

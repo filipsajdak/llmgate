@@ -41,7 +41,7 @@ status state_of(facts const& seen, std::string_view const check) {
 
 quota::summary summary_with(int const percent) {
     return {.plan = "individual", .sku = "free", .reset_date = "2026-11-01",
-            .allowances = {{.name = "chat", .has_quota = true, .entitlement = 200, .remaining = 4, .percent_remaining = percent}}};
+            .quotas = {{.name = "chat", .has_quota = true, .entitlement = 200, .remaining = 4, .percent_remaining = percent}}};
 }
 
 const suite doctor_suite = [] {
