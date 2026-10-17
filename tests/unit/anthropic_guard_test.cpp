@@ -58,6 +58,30 @@ bool has(result const& seen, repair_kind const kind) {
 const std::vector<std::string> clean_names{"message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop"};
 
 const suite guard_suite = [] {
+    "capability_an_unnamed_event_is_forwarded_under_its_wire_name_and_an_unknown_type_stays_unnamed"_test = [] {
+        auto events = clean_stream();
+        events.pop_back();
+        events.insert(events.begin() + 1, input_event{"", R"({"type":"ping"})"});
+        events.emplace_back("", R"({"type":"something_new"})");
+        for (auto& item : events) {
+            item.name.clear();
+        }
+
+        auto const seen = run_guard(events, false);
+
+        expect(names(seen) == std::vector<std::string>{"message_start", "ping", "content_block_start", "content_block_delta",
+                                                       "content_block_stop", "message_delta", ""});
+    };
+
+    "capability_an_unnamed_error_event_is_forwarded_as_error"_test = [] {
+        std::vector<input_event> const events{{"", R"({"type":"error","error":{}})"}};
+
+        auto const seen = run_guard(events, false);
+
+        expect(names(seen) == std::vector<std::string>{"error"});
+        expect(seen.complete);
+    };
+
     "capability_a_well_formed_stream_passes_through_unchanged"_test = [] {
         auto const events = clean_stream();
 

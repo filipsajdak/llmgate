@@ -2,6 +2,7 @@ export module llmgate.anthropic;
 
 import std;
 import llmgate.jsonscan;
+import llmgate.reflect;
 import llmgate.sse;
 
 export namespace llmgate::anthropic {
@@ -126,19 +127,13 @@ constexpr std::optional<parsed> classify(std::string_view const data) {
     return result;
 }
 
+constexpr bool is_standalone(event_type const type) noexcept {
+    constexpr auto standalone = std::to_array({event_type::ping, event_type::other, event_type::error, event_type::message_start});
+    return std::ranges::contains(standalone, type);
+}
+
 constexpr std::string name_of(event_type const type) {
-    switch (type) {
-        case event_type::message_start: return "message_start";
-        case event_type::content_block_start: return "content_block_start";
-        case event_type::content_block_delta: return "content_block_delta";
-        case event_type::content_block_stop: return "content_block_stop";
-        case event_type::message_delta: return "message_delta";
-        case event_type::message_stop: return "message_stop";
-        case event_type::ping: return "ping";
-        case event_type::error: return "error";
-        case event_type::other: break;
-    }
-    return "";
+    return type == event_type::other ? std::string{} : std::string{reflect::enum_name(type)};
 }
 
 constexpr std::string with_usage(std::string_view const data) {
@@ -148,13 +143,101 @@ constexpr std::string with_usage(std::string_view const data) {
     return patched;
 }
 
+using verdict = std::optional<std::string_view>;
+
+struct grammar_state {
+    index_set open;
+    bool started = false;
+    bool delta = false;
+    bool stopped = false;
+
+    constexpr verdict on_error(parsed const&) {
+        stopped = true;
+        return std::nullopt;
+    }
+
+    constexpr verdict on_message_start(parsed const&) {
+        if (std::exchange(started, true)) {
+            return "second message_start";
+        }
+        return std::nullopt;
+    }
+
+    constexpr verdict on_block_start(parsed const& event) {
+        if (!started || !event.index || !open.insert(*event.index) || delta) {
+            return "bad content_block_start";
+        }
+        return std::nullopt;
+    }
+
+    constexpr verdict on_block_delta(parsed const& event) {
+        if (!event.index || !open.contains(*event.index)) {
+            return "delta outside an open block";
+        }
+        return std::nullopt;
+    }
+
+    constexpr verdict on_block_stop(parsed const& event) {
+        if (!event.index || open.erase(*event.index) == 0) {
+            return "stop for a block that is not open";
+        }
+        return std::nullopt;
+    }
+
+    constexpr verdict on_message_delta(parsed const& event) {
+        if (!started || !open.empty() || std::exchange(delta, true)) {
+            return "bad message_delta";
+        }
+        if (!event.has_usage) {
+            return "message_delta without usage";
+        }
+        return std::nullopt;
+    }
+
+    constexpr verdict on_message_stop(parsed const&) {
+        if (!delta) {
+            return "message_stop before message_delta";
+        }
+        stopped = true;
+        return std::nullopt;
+    }
+
+    constexpr verdict accept(parsed const& event);
+};
+
+using grammar_rule = verdict (grammar_state::*)(parsed const&);
+
+constexpr auto grammar_rules = std::to_array<std::pair<event_type, grammar_rule>>({
+    {event_type::error, &grammar_state::on_error},
+    {event_type::message_start, &grammar_state::on_message_start},
+    {event_type::content_block_start, &grammar_state::on_block_start},
+    {event_type::content_block_delta, &grammar_state::on_block_delta},
+    {event_type::content_block_stop, &grammar_state::on_block_stop},
+    {event_type::message_delta, &grammar_state::on_message_delta},
+    {event_type::message_stop, &grammar_state::on_message_stop},
+});
+
+constexpr verdict grammar_state::accept(parsed const& event) {
+    if (stopped) {
+        return "event after the stream ended";
+    }
+    auto const rule = std::ranges::find(grammar_rules, event.type, &std::pair<event_type, grammar_rule>::first);
+    return rule == grammar_rules.end() ? std::nullopt : (this->*rule->second)(event);
+}
+
 }  // namespace llmgate::anthropic::detail
 
 export namespace llmgate::anthropic {
 
+template <class Sink>
+concept output_sink = std::invocable<Sink&, output_event>;
+
+template <class Sink>
+concept repair_sink = std::invocable<Sink&, repair>;
+
 class stream_guard {
 public:
-    template <std::invocable<output_event const&> Out, std::invocable<repair const&> Report>
+    template <output_sink Out, repair_sink Report>
     constexpr void on_event(sse::event const& incoming, Out&& out, Report&& report) {
         auto const parsed = detail::classify(incoming.data);
         if (!parsed) {
@@ -168,7 +251,7 @@ public:
         handle(*parsed, incoming, out, report);
     }
 
-    template <std::invocable<output_event const&> Out, std::invocable<repair const&> Report>
+    template <output_sink Out, repair_sink Report>
     constexpr void on_end(Out&& out, Report&& report) {
         if (stopped_) {
             return;
@@ -181,23 +264,29 @@ public:
     constexpr bool complete() const noexcept { return stopped_; }
 
 private:
-    template <class Out, class Report>
+    template <output_sink Out, repair_sink Report>
     constexpr void handle(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
-        using enum event_type;
-        if (parsed.type == ping || parsed.type == other) {
-            forward(parsed, incoming, out);
-            return;
-        }
-        if (parsed.type == error) {
-            stopped_ = true;
-            forward(parsed, incoming, out);
-            return;
-        }
-        if (parsed.type == message_start) {
-            start_message(parsed, incoming, out, report);
+        if (detail::is_standalone(parsed.type)) {
+            handle_standalone(parsed, incoming, out, report);
             return;
         }
         ensure_started(out, report);
+        handle_in_message(parsed, incoming, out, report);
+    }
+
+    template <output_sink Out, repair_sink Report>
+    constexpr void handle_standalone(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
+        if (parsed.type == event_type::message_start) {
+            start_message(parsed, incoming, out, report);
+            return;
+        }
+        stopped_ = parsed.type == event_type::error;
+        forward(parsed, incoming, out);
+    }
+
+    template <output_sink Out, repair_sink Report>
+    constexpr void handle_in_message(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
+        using enum event_type;
         switch (parsed.type) {
             case content_block_start: open_block(parsed, incoming, out, report); break;
             case content_block_delta: continue_block(parsed, incoming, out, report); break;
@@ -207,13 +296,13 @@ private:
         }
     }
 
-    template <class Out>
+    template <output_sink Out>
     static constexpr void forward(detail::parsed const& parsed, sse::event const& incoming, Out& out) {
         auto const name = incoming.name.empty() ? detail::name_of(parsed.type) : std::string{incoming.name};
         out(output_event{.name = name, .data = std::string{incoming.data}});
     }
 
-    template <class Out, class Report>
+    template <output_sink Out, repair_sink Report>
     constexpr void start_message(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
         if (started_) {
             report(repair{.kind = repair_kind::duplicate_message_start, .detail = {}});
@@ -223,7 +312,7 @@ private:
         forward(parsed, incoming, out);
     }
 
-    template <class Out, class Report>
+    template <output_sink Out, repair_sink Report>
     constexpr void ensure_started(Out& out, Report& report) {
         if (!std::exchange(started_, true)) {
             report(repair{.kind = repair_kind::missing_message_start, .detail = {}});
@@ -231,7 +320,7 @@ private:
         }
     }
 
-    template <class Out, class Report>
+    template <output_sink Out, repair_sink Report>
     constexpr void open_block(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
         if (!parsed.index || delta_seen_) {
             report(repair{.kind = repair_kind::orphan_block_event, .detail = "content_block_start outside the content phase"});
@@ -244,7 +333,7 @@ private:
         forward(parsed, incoming, out);
     }
 
-    template <class Out, class Report>
+    template <output_sink Out, repair_sink Report>
     constexpr void continue_block(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
         if (!parsed.index || !open_.contains(*parsed.index)) {
             report(repair{.kind = repair_kind::orphan_block_event, .detail = "content_block_delta"});
@@ -253,7 +342,7 @@ private:
         forward(parsed, incoming, out);
     }
 
-    template <class Out, class Report>
+    template <output_sink Out, repair_sink Report>
     constexpr void close_block(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
         if (!parsed.index || open_.erase(*parsed.index) == 0) {
             report(repair{.kind = repair_kind::orphan_block_event, .detail = "content_block_stop"});
@@ -262,21 +351,21 @@ private:
         forward(parsed, incoming, out);
     }
 
-    template <class Out, class Report>
+    template <output_sink Out, repair_sink Report>
     constexpr void close_index(int const index, Out& out, Report& report) {
         open_.erase(index);
         report(repair{.kind = repair_kind::unclosed_block, .detail = detail::decimal(index)});
         out(output_event{.name = "content_block_stop", .data = R"({"type":"content_block_stop","index":)" + detail::decimal(index) + "}"});
     }
 
-    template <class Out, class Report>
+    template <output_sink Out, repair_sink Report>
     constexpr void close_all(Out& out, Report& report) {
         while (!open_.empty()) {
             close_index(open_.first(), out, report);
         }
     }
 
-    template <class Out, class Report>
+    template <output_sink Out, repair_sink Report>
     constexpr void finish_delta(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
         if (delta_seen_) {
             report(repair{.kind = repair_kind::duplicate_message_delta, .detail = {}});
@@ -292,7 +381,7 @@ private:
         out(output_event{.name = "message_delta", .data = detail::with_usage(incoming.data)});
     }
 
-    template <class Out, class Report>
+    template <output_sink Out, repair_sink Report>
     constexpr void finish_message(sse::event const& incoming, Out& out, Report& report) {
         close_all(out, report);
         if (!std::exchange(delta_seen_, true)) {
@@ -310,42 +399,14 @@ private:
 };
 
 constexpr std::expected<void, std::string> validate_grammar(std::span<output_event const> events) {
-    detail::index_set open;
-    bool started = false;
-    bool delta = false;
-    bool stopped = false;
+    detail::grammar_state state;
     for (auto const& item : events) {
         auto const parsed = detail::classify(item.data);
         if (!parsed) {
             return std::unexpected{"unparseable event data"};
         }
-        if (stopped) {
-            return std::unexpected{"event after the stream ended"};
-        }
-        using enum event_type;
-        switch (parsed->type) {
-            case ping: case other: break;
-            case error: stopped = true; break;
-            case message_start:
-                if (std::exchange(started, true)) return std::unexpected{"second message_start"};
-                break;
-            case content_block_start:
-                if (!started || !parsed->index || !open.insert(*parsed->index) || delta) return std::unexpected{"bad content_block_start"};
-                break;
-            case content_block_delta:
-                if (!parsed->index || !open.contains(*parsed->index)) return std::unexpected{"delta outside an open block"};
-                break;
-            case content_block_stop:
-                if (!parsed->index || open.erase(*parsed->index) == 0) return std::unexpected{"stop for a block that is not open"};
-                break;
-            case message_delta:
-                if (!started || !open.empty() || std::exchange(delta, true)) return std::unexpected{"bad message_delta"};
-                if (!parsed->has_usage) return std::unexpected{"message_delta without usage"};
-                break;
-            case message_stop:
-                if (!delta) return std::unexpected{"message_stop before message_delta"};
-                stopped = true;
-                break;
+        if (auto const problem = state.accept(*parsed)) {
+            return std::unexpected{std::string{*problem}};
         }
     }
     return {};
