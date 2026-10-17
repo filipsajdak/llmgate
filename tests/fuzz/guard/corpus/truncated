@@ -1,0 +1,9 @@
+event: message_start
+data: {"type":"message_start"}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1}
+
+event: message_delta
+data: {"type":"message_delta","delta":{}}
+
