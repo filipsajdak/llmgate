@@ -4,18 +4,23 @@ import std;
 import llmgate.arguments;
 import llmgate.json;
 import llmgate.quota;
+import llmgate.reflect;
 import llmgate.routing;
 import llmgate.text;
 
 export namespace llmgate::doctor {
 
 enum class status { pass, warn, fail };
+enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, credential, ledger, budget, quota };
+static_assert(reflect::unique_values<check>());
 
 enum class port_state { free, ours, foreign };
 enum class settings_state { no_profile, no_settings, outdated, current, invalid };
 enum class ledger_state { disabled, writable, not_writable };
 enum class exchange_state { skipped, accepted, login_required, unreachable, rejected };
 enum class quota_state { skipped, unavailable, read };
+static_assert(reflect::unique_values<status>() && reflect::unique_values<port_state>() && reflect::unique_values<settings_state>() &&
+              reflect::unique_values<ledger_state>() && reflect::unique_values<exchange_state>() && reflect::unique_values<quota_state>());
 
 constexpr std::size_t longest_text = 300;
 constexpr unsigned others_mask = 077;
@@ -73,8 +78,14 @@ constexpr std::string clean(std::string_view const raw) {
     return out;
 }
 
-constexpr finding make(std::string_view const check, status const state, std::string_view const detail, std::string_view const remedy = {}) {
-    return {.check = std::string{check}, .state = state, .detail = clean(detail), .remedy = clean(remedy)};
+constexpr std::string name_of(check const item) {
+    auto name = reflect::enum_string(item);
+    std::ranges::replace(name, '_', '-');
+    return name;
+}
+
+constexpr finding make(check const item, status const state, std::string_view const detail, std::string_view const remedy = {}) {
+    return {.check = name_of(item), .state = state, .detail = clean(detail), .remedy = clean(remedy)};
 }
 
 constexpr std::string octal(unsigned const mode) {
@@ -92,17 +103,17 @@ constexpr bool loopback_listen(arguments::gateway_address const& address) {
 
 constexpr finding config_finding(facts const& seen) {
     if (!seen.config_error.empty()) {
-        return make("config", status::fail, seen.config_error, "fix the file, then check it with llmgate --check-config");
+        return make(check::config, status::fail, seen.config_error, "fix the file, then check it with llmgate --check-config");
     }
-    return make("config", status::pass, "the configuration parses");
+    return make(check::config, status::pass, "the configuration parses");
 }
 
 constexpr std::optional<finding> key_problem(facts const& seen, arguments::gateway_address const& address) {
     if (!seen.client_key_variable.empty() && !seen.client_key_set) {
-        return make("listen", status::fail, "client_key_env names " + seen.client_key_variable + ", which is not set", "export " + seen.client_key_variable + " before starting the gateway");
+        return make(check::listen, status::fail, "client_key_env names " + seen.client_key_variable + ", which is not set", "export " + seen.client_key_variable + " before starting the gateway");
     }
     if (!loopback_listen(address) && seen.client_key_variable.empty()) {
-        return make("listen", status::fail, address.host + " is not a loopback address and no client key is configured", "listen on 127.0.0.1, or set client_key_env");
+        return make(check::listen, status::fail, address.host + " is not a loopback address and no client key is configured", "listen on 127.0.0.1, or set client_key_env");
     }
     return std::nullopt;
 }
@@ -110,15 +121,15 @@ constexpr std::optional<finding> key_problem(facts const& seen, arguments::gatew
 constexpr finding listen_finding(facts const& seen) {
     auto const address = arguments::split_listen(seen.listen);
     if (!address) {
-        return make("listen", status::fail, "listen must look like 127.0.0.1:9480", "set listen in the configuration");
+        return make(check::listen, status::fail, "listen must look like 127.0.0.1:9480", "set listen in the configuration");
     }
     if (auto const problem = key_problem(seen, *address)) {
         return *problem;
     }
     if (address->port == 0) {
-        return make("listen", status::warn, "port 0 picks a new port on every start", "set a fixed port so every launch shares one gateway");
+        return make(check::listen, status::warn, "port 0 picks a new port on every start", "set a fixed port so every launch shares one gateway");
     }
-    return make("listen", status::pass, seen.listen + (loopback_listen(*address) ? " (loopback)" : " (open, client key required)"));
+    return make(check::listen, status::pass, seen.listen + (loopback_listen(*address) ? " (loopback)" : " (open, client key required)"));
 }
 
 constexpr std::optional<finding> port_finding(facts const& seen) {
@@ -127,59 +138,59 @@ constexpr std::optional<finding> port_finding(facts const& seen) {
     }
     switch (*seen.port) {
         case port_state::free:
-            return make("port", status::pass, "nothing is listening on " + seen.listen + " yet");
+            return make(check::port, status::pass, "nothing is listening on " + seen.listen + " yet");
         case port_state::ours:
-            return make("port", status::pass, "this user's llmgate gateway answers on " + seen.listen);
+            return make(check::port, status::pass, "this user's llmgate gateway answers on " + seen.listen);
         case port_state::foreign:
             break;
     }
-    return make("port", status::fail, "something that is not this user's gateway answers on " + seen.listen, "stop it or change listen; nothing was sent to it");
+    return make(check::port, status::fail, "something that is not this user's gateway answers on " + seen.listen, "stop it or change listen; nothing was sent to it");
 }
 
 constexpr finding identity_finding(facts const& seen) {
     if (!seen.identity.exists) {
-        return make("identity", status::pass, "the identity key is created on the first start");
+        return make(check::identity, status::pass, "the identity key is created on the first start");
     }
     if (too_open(seen.identity)) {
-        return make("identity", status::fail, "the identity file has mode " + octal(seen.identity.mode) + ", other users can read it", "chmod 600 " + seen.identity.path);
+        return make(check::identity, status::fail, "the identity file has mode " + octal(seen.identity.mode) + ", other users can read it", "chmod 600 " + seen.identity.path);
     }
-    return make("identity", status::pass, "the identity file is private (0600)");
+    return make(check::identity, status::pass, "the identity file is private (0600)");
 }
 
 constexpr finding profile_finding(facts const& seen) {
     switch (seen.settings) {
         case settings_state::no_profile:
-            return make("profile", status::warn, "the profile directory " + seen.profile_dir + " does not exist", "run llmgate setup");
+            return make(check::profile, status::warn, "the profile directory " + seen.profile_dir + " does not exist", "run llmgate setup");
         case settings_state::no_settings:
-            return make("profile", status::warn, "settings.json is missing in " + seen.profile_dir, "run llmgate setup");
+            return make(check::profile, status::warn, "settings.json is missing in " + seen.profile_dir, "run llmgate setup");
         case settings_state::outdated:
-            return make("profile", status::warn, "settings.json differs from what setup would write", "run llmgate setup (your own settings are kept)");
+            return make(check::profile, status::warn, "settings.json differs from what setup would write", "run llmgate setup (your own settings are kept)");
         case settings_state::invalid:
-            return make("profile", status::fail, "settings.json in " + seen.profile_dir + " is not plain JSON", "fix or remove it; setup refuses to change it");
+            return make(check::profile, status::fail, "settings.json in " + seen.profile_dir + " is not plain JSON", "fix or remove it; setup refuses to change it");
         case settings_state::current:
             break;
     }
-    return make("profile", status::pass, "settings.json is merged in " + seen.profile_dir);
+    return make(check::profile, status::pass, "settings.json is merged in " + seen.profile_dir);
 }
 
 constexpr finding claude_finding(facts const& seen) {
     if (!seen.claude_found) {
-        return make("claude", status::warn, "the claude command is not on PATH", "install Claude Code or set LLMGATE_CLAUDE (VS Code users can ignore this)");
+        return make(check::claude, status::warn, "the claude command is not on PATH", "install Claude Code or set LLMGATE_CLAUDE (VS Code users can ignore this)");
     }
-    return make("claude", status::pass, "the claude command is on PATH");
+    return make(check::claude, status::pass, "the claude command is on PATH");
 }
 
 constexpr finding token_file_finding(facts const& seen) {
     if (!seen.token.exists) {
-        return make("copilot-login", status::fail, "no Copilot login at " + seen.token.path, "run llmgate login");
+        return make(check::copilot_login, status::fail, "no Copilot login at " + seen.token.path, "run llmgate login");
     }
     if (!seen.token_valid) {
-        return make("copilot-login", status::fail, "the token file holds no oauth_token", "run llmgate login");
+        return make(check::copilot_login, status::fail, "the token file holds no oauth_token", "run llmgate login");
     }
     if (too_open(seen.token)) {
-        return make("copilot-login", status::fail, "the token file has mode " + octal(seen.token.mode) + ", other users can read it", "chmod 600 " + seen.token.path);
+        return make(check::copilot_login, status::fail, "the token file has mode " + octal(seen.token.mode) + ", other users can read it", "chmod 600 " + seen.token.path);
     }
-    return make("copilot-login", status::pass, "the Copilot token file is present and private");
+    return make(check::copilot_login, status::pass, "the Copilot token file is present and private");
 }
 
 constexpr std::optional<finding> exchange_finding(facts const& seen) {
@@ -187,38 +198,38 @@ constexpr std::optional<finding> exchange_finding(facts const& seen) {
         case exchange_state::skipped:
             return std::nullopt;
         case exchange_state::accepted:
-            return make("copilot-exchange", status::pass, "GitHub accepted the stored login");
+            return make(check::copilot_exchange, status::pass, "GitHub accepted the stored login");
         case exchange_state::login_required:
-            return make("copilot-exchange", status::fail, "GitHub rejected the stored login", "run llmgate login");
+            return make(check::copilot_exchange, status::fail, "GitHub rejected the stored login", "run llmgate login");
         case exchange_state::unreachable:
-            return make("copilot-exchange", status::warn, "GitHub could not be reached", "check the network, or run doctor with --offline");
+            return make(check::copilot_exchange, status::warn, "GitHub could not be reached", "check the network, or run doctor with --offline");
         case exchange_state::rejected:
             break;
     }
-    return make("copilot-exchange", status::warn, "GitHub answered the token exchange with an error", "retry later; run llmgate login if it persists");
+    return make(check::copilot_exchange, status::warn, "GitHub answered the token exchange with an error", "retry later; run llmgate login if it persists");
 }
 
 constexpr finding static_credential_finding(facts const& seen) {
     if (seen.static_token_variable.empty()) {
-        return make("credential", status::warn, "no upstream credential is configured", "set copilot.token_file, or static_token_env for another upstream");
+        return make(check::credential, status::warn, "no upstream credential is configured", "set copilot.token_file, or static_token_env for another upstream");
     }
     if (!seen.static_token_set) {
-        return make("credential", status::fail, "static_token_env names " + seen.static_token_variable + ", which is not set", "export " + seen.static_token_variable);
+        return make(check::credential, status::fail, "static_token_env names " + seen.static_token_variable + ", which is not set", "export " + seen.static_token_variable);
     }
-    return make("credential", status::pass, "the upstream token variable " + seen.static_token_variable + " is set");
+    return make(check::credential, status::pass, "the upstream token variable " + seen.static_token_variable + " is set");
 }
 
 constexpr finding ledger_finding(facts const& seen) {
     if (!seen.ledger_configured) {
-        return make("ledger", status::pass, "the usage ledger is off");
+        return make(check::ledger, status::pass, "the usage ledger is off");
     }
     if (seen.ledger == ledger_state::not_writable) {
-        return make("ledger", status::fail, "the usage ledger " + seen.ledger_file.path + " cannot be written", "fix the permissions of its directory or change usage.ledger_file");
+        return make(check::ledger, status::fail, "the usage ledger " + seen.ledger_file.path + " cannot be written", "fix the permissions of its directory or change usage.ledger_file");
     }
     if (too_open(seen.ledger_file)) {
-        return make("ledger", status::warn, "the usage ledger has mode " + octal(seen.ledger_file.mode) + ", other users can read it", "chmod 600 " + seen.ledger_file.path);
+        return make(check::ledger, status::warn, "the usage ledger has mode " + octal(seen.ledger_file.mode) + ", other users can read it", "chmod 600 " + seen.ledger_file.path);
     }
-    return make("ledger", status::pass, "the usage ledger is writable");
+    return make(check::ledger, status::pass, "the usage ledger is writable");
 }
 
 constexpr bool daily_above_monthly(facts const& seen) {
@@ -237,12 +248,12 @@ constexpr std::string_view budget_problem(facts const& seen) {
 
 constexpr finding budget_finding(facts const& seen) {
     if (seen.daily_tokens == 0 && seen.monthly_tokens == 0) {
-        return make("budget", status::pass, "no token budget is set");
+        return make(check::budget, status::pass, "no token budget is set");
     }
     auto const shown = "daily " + text::compact(seen.daily_tokens) + ", monthly " + text::compact(seen.monthly_tokens) + " tokens, warning at " +
                        text::decimal(seen.warn_percent) + "%";
     auto const problem = budget_problem(seen);
-    return make("budget", problem.empty() ? status::pass : status::warn, shown, problem);
+    return make(check::budget, problem.empty() ? status::pass : status::warn, shown, problem);
 }
 
 constexpr std::string lowest_summary(quota::summary const& found) {
@@ -260,12 +271,12 @@ constexpr std::optional<finding> quota_finding(facts const& seen) {
         return std::nullopt;
     }
     if (seen.quota == quota_state::unavailable || !seen.quota_summary) {
-        return make("quota", status::warn, quota::unavailable_message, "retry later; requests are not affected");
+        return make(check::quota, status::warn, quota::unavailable_message, "retry later; requests are not affected");
     }
     if (quota::any_low(*seen.quota_summary)) {
-        return make("quota", status::warn, "Copilot quota is low: " + lowest_summary(*seen.quota_summary), "wait for the reset, route fewer requests to Copilot, or change plan");
+        return make(check::quota, status::warn, "Copilot quota is low: " + lowest_summary(*seen.quota_summary), "wait for the reset, route fewer requests to Copilot, or change plan");
     }
-    return make("quota", status::pass, "Copilot quota is healthy (" + seen.quota_summary->plan + ")");
+    return make(check::quota, status::pass, "Copilot quota is healthy (" + seen.quota_summary->plan + ")");
 }
 
 constexpr void add(std::vector<finding>& out, std::optional<finding> item) {
@@ -305,28 +316,10 @@ constexpr std::vector<finding> diagnose(facts const& seen) {
     return out;
 }
 
-constexpr std::string_view label_of(status const state) {
-    switch (state) {
-        case status::pass:
-            return "PASS";
-        case status::warn:
-            return "WARN";
-        case status::fail:
-            break;
-    }
-    return "FAIL";
-}
-
-constexpr std::string_view word_of(status const state) {
-    switch (state) {
-        case status::pass:
-            return "pass";
-        case status::warn:
-            return "warn";
-        case status::fail:
-            break;
-    }
-    return "fail";
+constexpr std::string label_of(status const state) {
+    auto label = reflect::enum_string(state);
+    std::ranges::transform(label, label.begin(), [](char const c) { return static_cast<char>(c - 'a' + 'A'); });
+    return label;
 }
 
 constexpr std::size_t count_of(std::span<finding const> const findings, status const state) {
@@ -340,7 +333,7 @@ constexpr int exit_code(std::span<finding const> const findings) {
 constexpr std::string render_text(std::span<finding const> const findings) {
     std::string out;
     for (auto const& item : findings) {
-        out += std::string{label_of(item.state)} + "  " + item.check + ": " + item.detail + "\n";
+        out += label_of(item.state) + "  " + item.check + ": " + item.detail + "\n";
         if (item.state != status::pass) {
             out += "      fix: " + item.remedy + "\n";
         }
@@ -354,7 +347,7 @@ constexpr std::string render_json(std::span<finding const> const findings) {
     json::array items;
     for (auto const& item : findings) {
         items.push_back(json::make_object({{"check", json::make_string(item.check)},
-                                           {"status", json::make_string(std::string{word_of(item.state)})},
+                                           {"status", json::make_string(reflect::enum_string(item.state))},
                                            {"detail", json::make_string(item.detail)},
                                            {"remedy", json::make_string(item.remedy)}}));
     }
@@ -417,6 +410,8 @@ static_assert(diagnose(healthy_facts()).size() == 8 && diagnose(facts{.config_er
 static_assert(count_of(diagnose([] { auto seen = healthy_facts(); seen.warn_percent = 100; return seen; }()), status::warn) == 1);
 static_assert(render_text(diagnose(healthy_facts())).ends_with("8 pass, 0 warn, 0 fail\n"));
 static_assert(render_text(diagnose(facts{.config_error = "a\x1b[31m"})).find('\x1b') == std::string::npos);
+static_assert(label_of(status::pass) == "PASS" && label_of(status::warn) == "WARN" && label_of(status::fail) == "FAIL");
+static_assert(detail::name_of(check::copilot_login) == "copilot-login" && detail::name_of(check::copilot_exchange) == "copilot-exchange" && detail::name_of(check::quota) == "quota");
 static_assert(detail::octal(0644) == "644" && detail::octal(0600) == "600");
 
 }  // namespace llmgate::doctor
