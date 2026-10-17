@@ -185,6 +185,12 @@ llmgate_constexpr_corpus(quota_corpus quota_holds quota)
 llmgate_constexpr_corpus(doctor_corpus doctor_holds doctor)
 llmgate_constexpr_corpus(json_writer_corpus writer_holds json_writer)
 
+add_executable(constexpr_examples tests/constexpr/examples.cpp)
+target_compile_options(constexpr_examples PRIVATE -fno-sanitize=all)
+target_link_libraries(constexpr_examples PRIVATE llmgate_usage llmgate_quota llmgate_contracts)
+add_test(NAME constexpr_examples COMMAND constexpr_examples)
+set_tests_properties(constexpr_examples PROPERTIES LABELS constexpr)
+
 set(LLMGATE_CONSTEXPR_DEPTH shallow CACHE STRING "Bounds of the compile-time exhaustive checks: shallow or deep")
 if(LLMGATE_CONSTEXPR_DEPTH STREQUAL deep)
   set(exhaustive_lengths LLMGATE_ROUTING_LENGTH=4 LLMGATE_CONFIG_LENGTH=4 LLMGATE_JSON_LENGTH=4 LLMGATE_SSE_LENGTH=5 LLMGATE_GUARD_FULL_LENGTH=3 LLMGATE_GUARD_CORE_LENGTH=5 LLMGATE_USAGE_LENGTH=3 LLMGATE_SELECTION_LENGTH=4 LLMGATE_QUOTA_LENGTH=4 LLMGATE_DOCTOR_LENGTH=3 LLMGATE_WRITER_LENGTH=3 LLMGATE_LENIENT_LENGTH=3)
