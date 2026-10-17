@@ -160,6 +160,11 @@ constexpr bool routing_holds(std::string_view const text) {
         return false;
     }
     (void)routing::is_loopback_host(text);
+    auto const challenge = routing::query_value(text, "challenge");
+    if (!challenge.empty() && (!text.contains(challenge) || challenge.contains('&'))) {
+        return false;
+    }
+    (void)routing::valid_challenge(text);
     auto const allowed = routing::default_allowed_hosts(text, 9480);
     if (routing::host_allowed(text, allowed) != std::ranges::contains(allowed, std::string{text}) &&
         !std::ranges::any_of(allowed, [&text](std::string const& candidate) { return candidate.size() == text.size(); })) {

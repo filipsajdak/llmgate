@@ -1,0 +1,55 @@
+module;
+
+#include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+#include <openssl/rand.h>
+#include <openssl/ssl.h>
+
+export module llmgate.proof;
+
+import std;
+
+export namespace llmgate::proof {
+
+constexpr std::size_t sha256_bytes = 32;
+constexpr std::string_view hex_digits = "0123456789abcdef";
+
+inline std::string to_hex(std::span<unsigned char const> const bytes) {
+    std::string out;
+    out.reserve(bytes.size() * 2);
+    for (auto const byte : bytes) {
+        out.push_back(hex_digits[byte >> 4]);
+        out.push_back(hex_digits[byte & 0xF]);
+    }
+    return out;
+}
+
+constexpr std::string_view identity_tag = "llmgate-identity-v1";
+
+constexpr std::string identity_message(std::string_view const scope, std::string_view const challenge) {
+    std::string message{identity_tag};
+    message += '|';
+    message += scope;
+    message += '|';
+    message += challenge;
+    return message;
+}
+
+inline std::string hmac_sha256_hex(std::string_view const key, std::string_view const message) {
+    std::array<unsigned char, sha256_bytes> digest{};
+    unsigned int length = 0;
+    HMAC(EVP_sha256(), key.data(), static_cast<int>(key.size()), reinterpret_cast<unsigned char const*>(message.data()), message.size(),
+         digest.data(), &length);
+    return to_hex(std::span{digest}.first(length));
+}
+
+inline std::expected<std::string, std::error_code> random_hex(std::size_t const bytes) {
+    std::vector<unsigned char> buffer(bytes);
+    if (RAND_bytes(buffer.data(), static_cast<int>(buffer.size())) != 1) {
+        return std::unexpected{std::make_error_code(std::errc::resource_unavailable_try_again)};
+    }
+    return to_hex(buffer);
+}
+
+}  // namespace llmgate::proof

@@ -14,6 +14,7 @@ import llmgate.claude;
 import llmgate.gateway;
 import llmgate.json;
 import llmgate.process;
+import llmgate.proof;
 import llmgate.routing;
 import llmgate.statusline;
 
@@ -82,8 +83,11 @@ std::string client_key(gateway::config const& settings) {
 }
 
 process::header_list key_headers(gateway::config const& settings) {
-    auto const key = client_key(settings);
-    return key.empty() ? process::header_list{} : process::header_list{{"x-api-key", key}};
+    process::header_list headers;
+    if (auto key = client_key(settings); !key.empty()) {
+        headers.emplace_back("x-api-key", std::move(key));
+    }
+    return headers;
 }
 
 std::expected<claude::environment_list, std::string> environment_for(gateway::config const& settings) {
@@ -150,6 +154,31 @@ std::optional<pid_t> recorded_pid() {
     return static_cast<pid_t>(pid);
 }
 
+std::filesystem::path identity_file() {
+    return state_directory() / "identity";
+}
+
+constexpr std::size_t identity_bytes = 32;
+constexpr std::size_t challenge_bytes = 16;
+constexpr std::string_view proof_marker = R"("proof":")";
+
+std::string proof_in(std::string_view const body) {
+    auto const at = body.find(proof_marker);
+    if (at == std::string_view::npos) {
+        return {};
+    }
+    auto const rest = body.substr(at + proof_marker.size());
+    return std::string{rest.substr(0, rest.find('"'))};
+}
+
+int run_words(std::filesystem::path const& program, std::initializer_list<std::string_view> const words) {
+    std::vector<std::string> arguments;
+    for (auto const word : words) {
+        arguments.emplace_back(word);
+    }
+    return process::run_and_wait(program, arguments);
+}
+
 outcome install_service(context const& where, bool const dry_run) {
     auto const config_path = process::expand_home(where.options.config_path);
     auto const log = (state_directory() / std::string{state_log_name}).string();
@@ -170,14 +199,14 @@ outcome install_service(context const& where, bool const dry_run) {
     }
 #if defined(__APPLE__)
     auto const domain = std::format("gui/{}", ::getuid());
-    (void)process::run_and_wait("/bin/launchctl", {"bootout", domain, unit.string()});
-    if (process::run_and_wait("/bin/launchctl", {"bootstrap", domain, unit.string()}) != 0) {
+    (void)run_words("/bin/launchctl", {"bootout", domain, unit.string()});
+    if (run_words("/bin/launchctl", {"bootstrap", domain, unit.string()}) != 0) {
         return std::unexpected{"launchctl could not load the service; load it with: launchctl bootstrap " + domain + " " + unit.string()};
     }
 #else
     auto const systemctl = process::find_in_path("systemctl");
-    if (!systemctl || process::run_and_wait(*systemctl, {"--user", "daemon-reload"}) != 0 ||
-        process::run_and_wait(*systemctl, {"--user", "enable", "--now", "llmgate.service"}) != 0) {
+    if (!systemctl || run_words(*systemctl, {"--user", "daemon-reload"}) != 0 ||
+        run_words(*systemctl, {"--user", "enable", "--now", "llmgate.service"}) != 0) {
         return std::unexpected{"systemctl could not start the service; start it with: systemctl --user enable --now llmgate.service"};
     }
 #endif
@@ -203,6 +232,33 @@ std::string branch_of(std::filesystem::path directory) {
 
 export namespace llmgate::commands {
 
+inline std::expected<std::string, std::string> identity_key() {
+    constexpr mode_t key_mode = 0600;
+    auto const path = detail::identity_file();
+    if (auto const held = detail::read_file(path); held && held->size() == detail::identity_bytes * 2) {
+        return *held;
+    }
+    auto fresh = proof::random_hex(detail::identity_bytes);
+    if (!fresh) {
+        return std::unexpected{"cannot generate the gateway identity: " + fresh.error().message()};
+    }
+    if (auto const written = process::write_file_atomic(path, *fresh, key_mode, true); !written) {
+        return std::unexpected{path.string() + ": " + written.error().message()};
+    }
+    auto const settled = detail::read_file(path);
+    return settled ? *settled : std::move(*fresh);
+}
+
+inline bool gateway_verified(arguments::gateway_address const& address) {
+    auto const key = identity_key();
+    auto const challenge = proof::random_hex(detail::challenge_bytes);
+    if (!key || !challenge) {
+        return false;
+    }
+    auto const answer = process::http_get(address.host, address.port, "/healthz?challenge=" + *challenge, {}, statusline_limit * 5);
+    return answer && answer->status == 200 && routing::secrets_equal(detail::proof_in(answer->body), proof::hmac_sha256_hex(*key, proof::identity_message(std::format("{}:{}", address.host, address.port), *challenge)));
+}
+
 inline outcome ensure_profile(context const& where, bool const dry_run) {
     auto const directory = std::filesystem::path{process::expand_home(where.settings.claude.profile_dir)};
     auto const settings_path = directory / "settings.json";
@@ -223,15 +279,24 @@ inline outcome ensure_gateway(context const& where) {
         return std::unexpected{std::string{"listen needs a fixed port to be shared between launches"}};
     }
     if (process::gateway_alive(address->host, address->port)) {
-        return {};
+        if (gateway_verified(*address)) {
+            return {};
+        }
+        return std::unexpected{std::format("something on {}:{} answers but is not this user's llmgate gateway (or is an older one); "
+                                           "nothing was sent to it. Stop it and retry",
+                                           address->host, address->port)};
     }
     auto const log = detail::state_directory() / std::string{state_log_name};
-    auto const started = process::start_detached(where.binary, {"--config", process::expand_home(where.options.config_path), "serve"}, log);
+    std::vector<std::string> serve_arguments;
+    serve_arguments.emplace_back("--config");
+    serve_arguments.push_back(process::expand_home(where.options.config_path));
+    serve_arguments.emplace_back("serve");
+    auto const started = process::start_detached(where.binary, serve_arguments, log);
     if (!started) {
         return std::unexpected{"cannot start the gateway: " + started.error().message()};
     }
     (void)process::write_file_atomic(detail::pid_file(), std::to_string(*started) + "\n", 0600, true);
-    auto const up = process::wait_until([&address] { return process::gateway_alive(address->host, address->port); }, startup_limit);
+    auto const up = process::wait_until([&address] { return gateway_verified(*address); }, startup_limit);
     if (!up) {
         return std::unexpected{"the gateway did not come up; see " + log.string()};
     }
@@ -308,7 +373,8 @@ inline int run_status(context const& where) {
         std::println(stderr, "llmgate: {}", address.error());
         return exit_failure;
     }
-    auto const stats = process::http_get(address->host, address->port, "/llmgate/stats", detail::key_headers(where.settings), statusline_limit);
+    auto const stats = gateway_verified(*address) ? process::http_get(address->host, address->port, "/llmgate/stats", detail::key_headers(where.settings), statusline_limit)
+                                                 : std::nullopt;
     if (!stats || stats->status != 200) {
         std::println("gateway: down ({}:{})", address->host, address->port);
         return exit_failure;
@@ -332,7 +398,8 @@ inline int run_stop(context const&) {
 inline int run_statusline(context const& where, std::string_view const input) {
     auto now = arguments::statusline_input(input);
     if (auto const address = detail::address_of(where.settings)) {
-        auto const stats = process::http_get(address->host, address->port, "/llmgate/stats", detail::key_headers(where.settings), statusline_limit);
+        auto const stats = gateway_verified(*address) ? process::http_get(address->host, address->port, "/llmgate/stats", detail::key_headers(where.settings), statusline_limit)
+                                                     : std::nullopt;
         now.gateway_up = stats && stats->status == 200;
         if (now.gateway_up) {
             std::tie(now.requests, now.repairs) = arguments::counters_from(stats->body);

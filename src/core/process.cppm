@@ -165,7 +165,7 @@ inline std::optional<http_result> http_get(std::string_view const host, std::uin
     }
     auto const split = answer.find("\r\n\r\n");
     int status = 0;
-    if (split == std::string::npos || !answer.starts_with("HTTP/1.1 ") ||
+    if (split == std::string::npos || !answer.starts_with("HTTP/1.") || answer.size() < 12 || answer[8] != ' ' ||
         std::from_chars(answer.data() + 9, answer.data() + std::min<std::size_t>(12, answer.size()), status).ec != std::errc{}) {
         return std::nullopt;
     }

@@ -6,6 +6,7 @@ import llmgate.gateway;
 import llmgate.http;
 import llmgate.httpio;
 import llmgate.net;
+import llmgate.proof;
 import llmgate.routing;
 import llmgate.sse;
 import llmgate.tls;
@@ -210,14 +211,15 @@ struct world {
                 .time = {.connect = std::chrono::seconds{2}, .response_head = std::chrono::seconds{2}, .stream_idle = short_idle}};
     }
 
-    explicit world(std::string token = "upstream-token", std::string client_key = "", std::optional<std::uint64_t> const seed = std::nullopt)
+    explicit world(std::string token = "upstream-token", std::string client_key = "", std::optional<std::uint64_t> const seed = std::nullopt,
+                   std::string identity = "")
         : loop{seed},
           upstream_listener{std::move(*net::listener::bind(loop, std::string{loopback}, 0))},
           gateway_listener{std::move(*net::listener::bind(loop, std::string{loopback}, 0))},
           credential{std::move(token)},
           tls_context{std::move(*tls::client_context::make(tls::group_policy::classical_only))},
           gateway{loop, settings(upstream_listener.port()),
-                  {.client_key = std::move(client_key), .allowed_hosts = routing::default_allowed_hosts(loopback, gateway_listener.port())},
+                  {.client_key = std::move(client_key), .allowed_hosts = routing::default_allowed_hosts(loopback, gateway_listener.port()), .identity_key = std::move(identity), .identity_scope = "scope-a"},
                   credential, tls_context} {
         upstream.loop = &loop;
         loop.spawn(accept_upstream(loop, upstream_listener, upstream));
@@ -486,6 +488,43 @@ const suite gateway_suite = [] {
         health.target = "/healthz";
 
         expect(w.ask(std::move(health)).status == 200);
+    };
+
+    "capability_the_health_check_proves_the_gateways_identity_for_a_challenge"_test = [] {
+        world w{"upstream-token", "", std::nullopt, "identity-secret"};
+        auto health = messages_request("");
+        health.method = "GET";
+        health.target = "/healthz?challenge=0123abcd";
+
+        auto const answer = w.ask(std::move(health));
+
+        expect(answer.status == 200);
+        expect(answer.body == std::format(R"({{"status":"ok","proof":"{}"}})", proof::hmac_sha256_hex("identity-secret", proof::identity_message("scope-a", "0123abcd"))));
+    };
+
+    "limit_a_proof_for_one_address_does_not_verify_for_another"_test = [] {
+        world w{"upstream-token", "", std::nullopt, "identity-secret"};
+        auto health = messages_request("");
+        health.method = "GET";
+        health.target = "/healthz?challenge=0123abcd";
+
+        auto const answer = w.ask(std::move(health));
+
+        expect(!answer.body.contains(proof::hmac_sha256_hex("identity-secret", proof::identity_message("scope-b", "0123abcd"))));
+        expect(!answer.body.contains(proof::hmac_sha256_hex("identity-secret", "0123abcd")));
+    };
+
+    "limit_a_bad_challenge_or_no_identity_gives_the_plain_health_answer"_test = [] {
+        world with_identity{"upstream-token", "", std::nullopt, "identity-secret"};
+        world without_identity;
+        auto bad = messages_request("");
+        bad.method = "GET";
+        bad.target = "/healthz?challenge=not-hex";
+        auto plain = bad;
+        plain.target = "/healthz?challenge=0123abcd";
+
+        expect(with_identity.ask(std::move(bad)).body == R"({"status":"ok"})");
+        expect(without_identity.ask(std::move(plain)).body == R"({"status":"ok"})");
     };
 
     "limit_unknown_paths_and_wrong_methods_are_refused"_test = [] {

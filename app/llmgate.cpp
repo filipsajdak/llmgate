@@ -54,9 +54,14 @@ std::expected<gateway::access_policy, std::string> make_policy(gateway::config c
     if (!routing::is_loopback_host(host) && key == nullptr) {
         return std::unexpected{std::format("{} is not a loopback address: set client_key_env to require a client key", host)};
     }
+    auto identity = commands::identity_key();
+    if (!identity) {
+        return std::unexpected{identity.error()};
+    }
     auto hosts = routing::default_allowed_hosts(host, port);
     hosts.insert(hosts.end(), settings.allowed_hosts.begin(), settings.allowed_hosts.end());
-    return gateway::access_policy{.client_key = key == nullptr ? std::string{} : std::string{key}, .allowed_hosts = std::move(hosts)};
+    return gateway::access_policy{.client_key = key == nullptr ? std::string{} : std::string{key}, .allowed_hosts = std::move(hosts), .identity_key = std::move(*identity),
+                                  .identity_scope = std::format("{}:{}", host, port)};
 }
 
 int serve(gateway::config settings) {

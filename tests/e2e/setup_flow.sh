@@ -99,6 +99,23 @@ check sh -c "echo '$line' | grep -q 'gateway DOWN'"
 label="stop reports nothing is recorded the second time"
 check sh -c "! '$binary' --config '$config' stop >/dev/null 2>&1"
 
+label="a squatter on the port is refused and receives nothing"
+python3 - "$port" "$work/squat.log" <<'PY' &
+import http.server, sys
+log = open(sys.argv[2], "w")
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        log.write(self.path + " " + str(dict(self.headers)) + "\n"); log.flush()
+        body = b'{"status":"ok"}'; self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+    def log_message(self, *a): pass
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PY
+squatter=$!
+sleep 1
+if "$binary" --config "$config" claude --never 2>"$work/err3.txt"; then rc=0; else rc=$?; fi
+kill $squatter 2>/dev/null || true
+check sh -c "[ $rc -ne 0 ] && grep -q 'not this user' '$work/err3.txt' && ! grep -q 'x-api-key\\|authorization' '$work/squat.log'"
+
 label="claude fails clearly when no claude command exists"
 if LLMGATE_CLAUDE=/nonexistent/claude "$binary" --config "$config" claude 2>"$work/err2.txt"; then rc=0; else rc=$?; fi
 check sh -c "[ $rc -ne 0 ] && grep -q 'not found' '$work/err2.txt'"

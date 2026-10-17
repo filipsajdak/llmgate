@@ -9,6 +9,7 @@ import llmgate.httpio;
 import llmgate.json;
 import llmgate.jsonscan;
 import llmgate.net;
+import llmgate.proof;
 import llmgate.reflect;
 import llmgate.routing;
 import llmgate.sse;
@@ -56,6 +57,8 @@ struct config {
 struct access_policy {
     std::string client_key{};
     std::vector<std::string> allowed_hosts{};
+    std::string identity_key{};
+    std::string identity_scope{};
 };
 
 class credential {
@@ -227,7 +230,7 @@ public:
             case routing::route::messages: co_return co_await forward(incoming, out, false);
             case routing::route::count_tokens: co_return co_await estimate_tokens(incoming, out);
             case routing::route::models: co_return co_await respond(out, 200, detail::models_json(settings_.models));
-            case routing::route::health: co_return co_await respond(out, 200, R"({"status":"ok"})");
+            case routing::route::health: co_return co_await respond(out, 200, health_body(incoming.head.target));
             case routing::route::statistics: co_return co_await respond(out, 200, detail::stats_json(counters_));
             case routing::route::wrong_method: co_return co_await reject(out, routing::error_reply(405, "invalid_request_error", "method not allowed"));
             case routing::route::unknown_path: break;
@@ -236,6 +239,14 @@ public:
     }
 
 private:
+    std::string health_body(std::string_view const target) const {
+        auto const challenge = routing::query_value(target, "challenge");
+        if (access_.identity_key.empty() || !routing::valid_challenge(challenge)) {
+            return R"({"status":"ok"})";
+        }
+        return std::format(R"({{"status":"ok","proof":"{}"}})", proof::hmac_sha256_hex(access_.identity_key, proof::identity_message(access_.identity_scope, challenge)));
+    }
+
     std::optional<routing::reply_body> check_access(httpio::request const& incoming, routing::route const which) const {
         auto const host = incoming.head.fields.find("host");
         if (!host || !routing::host_allowed(*host, access_.allowed_hosts)) {

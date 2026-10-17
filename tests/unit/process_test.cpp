@@ -46,8 +46,28 @@ struct canned_server {
         }};
     }
 
+    void wake_accept() const {
+        int const poke = ::socket(AF_INET, SOCK_STREAM, 0);
+        sockaddr_in local{};
+        local.sin_family = AF_INET;
+        local.sin_port = htons(port);
+        local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        ::connect(poke, reinterpret_cast<sockaddr*>(&local), sizeof local);
+        ::close(poke);
+    }
+
+    std::string request_seen() {
+        if (worker.joinable()) {
+            worker.join();
+        }
+        return seen_request;
+    }
+
     ~canned_server() {
-        ::shutdown(listener, SHUT_RDWR);
+        if (worker.joinable()) {
+            wake_accept();
+            worker.join();
+        }
         ::close(listener);
     }
 
@@ -55,6 +75,14 @@ struct canned_server {
 };
 
 const suite process_suite = [] {
+    "capability_an_http_1_0_answer_is_understood"_test = [] {
+        canned_server server{"HTTP/1.0 200 OK\r\n\r\nold"};
+
+        auto const answer = http_get("127.0.0.1", server.port, "/", {}, generous);
+
+        expect(answer.has_value() && answer->status == 200 && answer->body == "old");
+    };
+
     "capability_a_tilde_path_expands_to_the_home_directory"_test = [] {
         expect(expand_home("~/x/y") == std::string{std::getenv("HOME")} + "/x/y");
         expect(expand_home("/abs/path") == "/abs/path");
@@ -83,8 +111,9 @@ const suite process_suite = [] {
         expect(answer.has_value());
         expect(answer->status == 200);
         expect(answer->body == "ok");
-        expect(server.seen_request.starts_with("GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:"));
-        expect(server.seen_request.contains("x-api-key: k"));
+        auto const seen = server.request_seen();
+        expect(seen.starts_with("GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:"));
+        expect(seen.contains("x-api-key: k"));
     };
 
     "limit_a_server_that_never_answers_times_out_instead_of_hanging"_test = [] {

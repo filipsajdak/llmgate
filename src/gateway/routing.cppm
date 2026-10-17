@@ -166,6 +166,31 @@ constexpr bool host_allowed(std::string_view const header, std::span<std::string
     });
 }
 
+constexpr std::string_view query_value(std::string_view const target, std::string_view const name) noexcept {
+    auto const question = target.find('?');
+    if (question == std::string_view::npos) {
+        return {};
+    }
+    auto rest = target.substr(question + 1);
+    while (!rest.empty()) {
+        auto const end = rest.find('&');
+        auto const pair = rest.substr(0, end);
+        auto const equals = pair.find('=');
+        if (pair.substr(0, equals) == name && equals != std::string_view::npos) {
+            return pair.substr(equals + 1);
+        }
+        rest = end == std::string_view::npos ? std::string_view{} : rest.substr(end + 1);
+    }
+    return {};
+}
+
+constexpr std::size_t longest_challenge = 64;
+
+constexpr bool valid_challenge(std::string_view const text) noexcept {
+    return !text.empty() && text.size() <= longest_challenge &&
+           std::ranges::all_of(text, [](char const c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); });
+}
+
 constexpr std::string_view bearer_value(std::string_view const authorization) noexcept {
     constexpr std::string_view prefix = "Bearer ";
     return authorization.starts_with(prefix) ? authorization.substr(prefix.size()) : std::string_view{};
@@ -212,6 +237,9 @@ static_assert(secrets_equal("abc", "abc") && !secrets_equal("abc", "abd") && !se
 static_assert(is_loopback_host("127.0.0.1") && is_loopback_host("localhost") && !is_loopback_host("0.0.0.0") && !is_loopback_host("10.0.0.5"));
 static_assert(default_allowed_hosts("127.0.0.1", 9480).size() == 3 && default_allowed_hosts("10.0.0.5", 80).front() == "10.0.0.5:80");
 static_assert(host_allowed("LocalHost:9480", default_allowed_hosts("127.0.0.1", 9480)) && !host_allowed("evil.example:9480", default_allowed_hosts("127.0.0.1", 9480)));
+static_assert(query_value("/healthz?challenge=ab12&x=1", "challenge") == "ab12" && query_value("/h?x=1&challenge=cd", "challenge") == "cd");
+static_assert(query_value("/healthz", "challenge").empty() && query_value("/h?challenge", "challenge").empty() && query_value("/h?a=1", "challenge").empty());
+static_assert(valid_challenge("0aFf") && !valid_challenge("") && !valid_challenge("xyz") && !valid_challenge(std::string(65, 'a')));
 static_assert(bearer_value("Bearer k") == "k" && bearer_value("Basic k").empty());
 static_assert(hop_by_hop("Transfer-Encoding") && !hop_by_hop("Content-Type"));
 
