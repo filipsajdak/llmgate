@@ -34,6 +34,16 @@ int filter_of(interest const what) noexcept {
     return what == interest::readable ? EVFILT_READ : EVFILT_WRITE;
 }
 
+std::error_code outcome_of(struct kevent const& event, detail::source_kind const kind) noexcept {
+    if (kind == detail::source_kind::timer) {
+        return std::make_error_code(std::errc::timed_out);
+    }
+    if ((event.flags & EV_ERROR) != 0) {
+        return {static_cast<int>(event.data), std::system_category()};
+    }
+    return {};
+}
+
 void disarm_others(int const poller, detail::pending_op const* const op, detail::source_kind const fired) noexcept {
     if (fired != detail::source_kind::descriptor && op->fd >= 0) {
         remove_event(poller, static_cast<std::uintptr_t>(op->fd), filter_of(op->what));
@@ -104,12 +114,7 @@ void reactor::poll_or_terminate() noexcept {
         }
         op->fired = true;
         op->winner = source->kind;
-        auto const failed = (event.flags & EV_ERROR) != 0;
-        if (source->kind == detail::source_kind::timer) {
-            op->outcome = std::make_error_code(std::errc::timed_out);
-        } else {
-            op->outcome = failed ? std::error_code{static_cast<int>(event.data), std::system_category()} : std::error_code{};
-        }
+        op->outcome = outcome_of(event, source->kind);
         disarm_others(poller_fd_, op, source->kind);
         ready[ready_count++] = op;
     }

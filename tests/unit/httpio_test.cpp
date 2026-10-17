@@ -117,7 +117,51 @@ async::task<std::size_t> silent_client(async::reactor& loop, net::listener& serv
     co_return received.value_or(std::numeric_limits<std::size_t>::max());
 }
 
+async::task<void> send_then_close(net::listener& server, std::string wire) {
+    auto accepted = co_await server.accept();
+    if (accepted && !wire.empty()) {
+        (void)co_await accepted->write_all(std::as_bytes(std::span{wire}));
+    }
+}
+
+async::task<std::error_code> read_response_after(async::reactor& loop, net::listener& server, std::string wire) {
+    loop.spawn(send_then_close(server, std::move(wire)));
+    auto client = co_await net::tcp_stream::connect(loop, std::string{loopback}, server.port());
+    httpio::message_reader<net::tcp_stream> reader{*client, http::kind::response, httpio::limits{}};
+    auto const result = co_await reader.read([](http::event const&) {}, {});
+    co_return result ? std::error_code{} : result.error();
+}
+
+std::error_code response_read_outcome(std::string wire) {
+    async::reactor loop;
+    auto server = net::listener::bind(loop, std::string{loopback}, 0);
+    return loop.run(read_response_after(loop, *server, std::move(wire)));
+}
+
 const suite httpio_suite = [] {
+    "limit_a_peer_that_closes_before_sending_anything_is_a_closed_connection"_test = [] {
+        expect(response_read_outcome("") == http::errc::connection_closed);
+    };
+
+    "limit_a_peer_that_closes_mid_body_is_a_truncated_message"_test = [] {
+        expect(response_read_outcome("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc") == http::errc::truncated_message);
+    };
+
+    "capability_a_body_that_ends_at_connection_close_completes"_test = [] {
+        expect(!response_read_outcome("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nbody"));
+    };
+
+    "capability_unknown_statuses_get_a_generic_reason"_test = [] {
+        auto const head = httpio::format_response_head(299, {}, 0);
+
+        expect(head.has_value());
+        expect(head->starts_with("HTTP/1.1 299 Status\r\n"));
+    };
+
+    "capability_known_statuses_get_their_reason_phrase"_test = [] {
+        expect(httpio::format_response_head(504, {}, 0)->starts_with("HTTP/1.1 504 Gateway Timeout\r\n"));
+    };
+
     "capability_a_request_reaches_the_handler_and_its_reply_returns"_test = [] {
         echo_handler handler;
 

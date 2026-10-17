@@ -45,18 +45,20 @@ bool valid_field(http::header const& field) noexcept {
     return !field.name.empty() && std::ranges::all_of(field.name, is_token_char) && clean_value;
 }
 
+constexpr std::array<std::pair<int, std::string_view>, 8> reason_phrases{{
+    {200, "OK"},
+    {400, "Bad Request"},
+    {404, "Not Found"},
+    {413, "Payload Too Large"},
+    {431, "Request Header Fields Too Large"},
+    {500, "Internal Server Error"},
+    {502, "Bad Gateway"},
+    {504, "Gateway Timeout"},
+}};
+
 std::string_view reason_phrase(int const status) noexcept {
-    switch (status) {
-        case 200: return "OK";
-        case 400: return "Bad Request";
-        case 404: return "Not Found";
-        case 413: return "Payload Too Large";
-        case 431: return "Request Header Fields Too Large";
-        case 500: return "Internal Server Error";
-        case 502: return "Bad Gateway";
-        case 504: return "Gateway Timeout";
-        default: return "Status";
-    }
+    auto const match = std::ranges::find(reason_phrases, status, &std::pair<int, std::string_view>::first);
+    return match == reason_phrases.end() ? std::string_view{"Status"} : match->second;
 }
 
 std::expected<void, std::error_code> append_fields(std::string& out, http::header_map const& fields) {
@@ -227,6 +229,47 @@ private:
     bool started_ = false;
 };
 
+struct request_collector {
+    request* incoming;
+    bool* oversized;
+    std::size_t max_body_bytes;
+
+    void operator()(http::event const& item) const { std::visit(*this, item); }
+
+    void operator()(http::message_head const& head) const { incoming->head = head; }
+
+    void operator()(http::body_chunk const& chunk) const {
+        *oversized = *oversized || incoming->body.size() + chunk.bytes.size() > max_body_bytes;
+        if (!*oversized) {
+            incoming->body.append(reinterpret_cast<char const*>(chunk.bytes.data()), chunk.bytes.size());
+        }
+    }
+
+    void operator()(http::message_complete const&) const {}
+};
+
+std::optional<int> status_for_unreadable(std::error_code const error) noexcept {
+    if (error == http::errc::head_too_large) {
+        return 431;
+    }
+    if (error == http::errc::malformed_message) {
+        return 400;
+    }
+    return std::nullopt;
+}
+
+template <net::byte_stream Stream, class Handler>
+async::task<bool> dispatch(Handler& handler, request const& incoming, response_writer<Stream>& writer) {
+    auto const handled = co_await handler(incoming, writer);
+    if (handled) {
+        co_return true;
+    }
+    if (!writer.started()) {
+        (void)co_await writer.send(500, {}, "");
+    }
+    co_return false;
+}
+
 template <net::byte_stream Stream, class Handler>
 async::task<void> serve_connection(Stream stream, Handler& handler, limits bounds) {
     message_reader<Stream> reader{stream, http::kind::request, bounds};
@@ -234,22 +277,11 @@ async::task<void> serve_connection(Stream stream, Handler& handler, limits bound
     for (;;) {
         request incoming{};
         bool oversized = false;
-        auto collect = [&incoming, &oversized, &bounds](http::event const& item) {
-            if (auto const* head = std::get_if<http::message_head>(&item)) {
-                incoming.head = *head;
-            } else if (auto const* chunk = std::get_if<http::body_chunk>(&item)) {
-                oversized = oversized || incoming.body.size() + chunk->bytes.size() > bounds.max_body_bytes;
-                if (!oversized) {
-                    incoming.body.append(reinterpret_cast<char const*>(chunk->bytes.data()), chunk->bytes.size());
-                }
-            }
-        };
+        request_collector const collect{.incoming = &incoming, .oversized = &oversized, .max_body_bytes = bounds.max_body_bytes};
         auto const received = co_await reader.read(collect, {.idle = bounds.read_idle});
         if (!received) {
-            if (received.error() == http::errc::head_too_large) {
-                (void)co_await writer.send(431, {}, "");
-            } else if (received.error() == http::errc::malformed_message) {
-                (void)co_await writer.send(400, {}, "");
+            if (auto const status = status_for_unreadable(received.error())) {
+                (void)co_await writer.send(*status, {}, "");
             }
             co_return;
         }
@@ -257,14 +289,7 @@ async::task<void> serve_connection(Stream stream, Handler& handler, limits bound
             (void)co_await writer.send(413, {}, "");
             co_return;
         }
-        auto const handled = co_await handler(incoming, writer);
-        if (!handled) {
-            if (!writer.started()) {
-                (void)co_await writer.send(500, {}, "");
-            }
-            co_return;
-        }
-        if (!incoming.head.keep_alive) {
+        if (!co_await dispatch(handler, incoming, writer) || !incoming.head.keep_alive) {
             co_return;
         }
     }

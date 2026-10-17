@@ -59,6 +59,29 @@ int make_timer(duration const length) noexcept {
     return timer;
 }
 
+std::error_code arm_descriptors(int const poller, detail::pending_op* const op) noexcept {
+    if (op->fd >= 0) {
+        auto const events = op->what == interest::readable ? EPOLLIN : EPOLLOUT;
+        if (auto const error = watch(poller, op->fd, events, &op->fd_source)) {
+            return error;
+        }
+    }
+    if (op->other_fd >= 0) {
+        return watch(poller, op->other_fd, EPOLLIN, &op->other_source);
+    }
+    return {};
+}
+
+std::error_code arm_timer(int const poller, detail::pending_op* const op, duration const length) noexcept {
+    auto const timer = make_timer(length);
+    if (timer < 0) {
+        return last_error();
+    }
+    op->timer_fd = timer;
+    op->has_timer = true;
+    return watch(poller, timer, EPOLLIN, &op->timer_source);
+}
+
 void disarm_others(int const poller, detail::pending_op* const op, detail::source_kind const fired) noexcept {
     if (fired != detail::source_kind::descriptor && op->fd >= 0) {
         ::epoll_ctl(poller, EPOLL_CTL_DEL, op->fd, nullptr);
@@ -90,21 +113,9 @@ std::error_code reactor::arm(int const fd, interest const what, std::optional<du
     op->what = what;
     op->outcome = {};
     op->timer_fd = -1;
-    std::error_code failure;
-    if (fd >= 0) {
-        auto const events = what == interest::readable ? EPOLLIN : EPOLLOUT;
-        failure = watch(poller_fd_, fd, events, &op->fd_source);
-    }
-    if (!failure && op->other_fd >= 0) {
-        failure = watch(poller_fd_, op->other_fd, EPOLLIN, &op->other_source);
-    }
+    auto failure = arm_descriptors(poller_fd_, op);
     if (!failure && timeout) {
-        auto const timer = make_timer(*timeout);
-        failure = timer < 0 ? last_error() : watch(poller_fd_, timer, EPOLLIN, &op->timer_source);
-        if (timer >= 0) {
-            op->timer_fd = timer;
-            op->has_timer = true;
-        }
+        failure = arm_timer(poller_fd_, op, *timeout);
     }
     if (failure) {
         disarm_others(poller_fd_, op, detail::source_kind::nothing);

@@ -105,6 +105,47 @@ std::error_code make_nonblocking(int const fd) noexcept {
     return {};
 }
 
+enum class watched_peer { quiet, speaking, gone };
+
+watched_peer inspect(int const watch) noexcept {
+    char probe = 0;
+    auto const peeked = ::recv(watch, &probe, 1, MSG_PEEK);
+    if (peeked == 0 || (peeked < 0 && !would_block(errno) && errno != EINTR)) {
+        return watched_peer::gone;
+    }
+    return peeked > 0 ? watched_peer::speaking : watched_peer::quiet;
+}
+
+result_void as_result(std::error_code const error) noexcept {
+    if (error) {
+        return std::unexpected{error};
+    }
+    return {};
+}
+
+async::task<result_void> await_data(async::reactor& reactor, int const fd, idle_limit const idle, int& watch) {
+    if (watch < 0) {
+        co_return as_result(co_await reactor.readable(fd, idle));
+    }
+    auto const raced = co_await reactor.readable_or_other(fd, watch, idle);
+    if (raced.error) {
+        co_return std::unexpected{raced.error};
+    }
+    if (!raced.other_ready) {
+        co_return result_void{};
+    }
+    switch (inspect(watch)) {
+        case watched_peer::gone:
+            co_return std::unexpected{std::make_error_code(std::errc::connection_aborted)};
+        case watched_peer::speaking:
+            watch = -1;
+            break;
+        case watched_peer::quiet:
+            break;
+    }
+    co_return result_void{};
+}
+
 async::task<result_size> receive_some(async::reactor& reactor, int const fd, std::span<std::byte> into,
                                       read_options const options) {
     auto watch = options.watch;
@@ -119,23 +160,8 @@ async::task<result_size> receive_some(async::reactor& reactor, int const fd, std
         if (!would_block(errno)) {
             co_return std::unexpected{last_error()};
         }
-        if (watch < 0) {
-            if (auto const error = co_await reactor.readable(fd, options.idle)) {
-                co_return std::unexpected{error};
-            }
-            continue;
-        }
-        auto const raced = co_await reactor.readable_or_other(fd, watch, options.idle);
-        if (raced.error) {
-            co_return std::unexpected{raced.error};
-        }
-        if (raced.other_ready) {
-            char probe = 0;
-            auto const peeked = ::recv(watch, &probe, 1, MSG_PEEK);
-            if (peeked == 0 || (peeked < 0 && !would_block(errno) && errno != EINTR)) {
-                co_return std::unexpected{std::make_error_code(std::errc::connection_aborted)};
-            }
-            watch = peeked > 0 ? -1 : watch;
+        if (auto const waited = co_await await_data(reactor, fd, options.idle, watch); !waited) {
+            co_return std::unexpected{waited.error()};
         }
     }
 }
@@ -156,6 +182,33 @@ async::task<result_void> send_all(async::reactor& reactor, int const fd, std::sp
     co_return result_void{};
 }
 
+async::task<std::expected<unique_fd, std::error_code>> connect_candidate(async::reactor& reactor,
+                                                                         addrinfo const& candidate) {
+    unique_fd socket{::socket(candidate.ai_family, candidate.ai_socktype, candidate.ai_protocol)};
+    if (!socket) {
+        co_return std::unexpected{last_error()};
+    }
+    if (auto const error = make_nonblocking(socket.get())) {
+        co_return std::unexpected{error};
+    }
+    if (::connect(socket.get(), candidate.ai_addr, candidate.ai_addrlen) == 0) {
+        co_return socket;
+    }
+    if (errno != EINPROGRESS) {
+        co_return std::unexpected{last_error()};
+    }
+    if (auto const error = co_await reactor.writable(socket.get())) {
+        co_return std::unexpected{error};
+    }
+    int pending = 0;
+    socklen_t length = sizeof pending;
+    ::getsockopt(socket.get(), SOL_SOCKET, SO_ERROR, &pending, &length);
+    if (pending != 0) {
+        co_return std::unexpected{std::error_code{pending, std::system_category()}};
+    }
+    co_return socket;
+}
+
 async::task<std::expected<unique_fd, std::error_code>> tcp_connect(async::reactor& reactor, std::string const& host,
                                                                    std::uint16_t const port) {
     auto const hints = stream_hints();
@@ -167,34 +220,11 @@ async::task<std::expected<unique_fd, std::error_code>> tcp_connect(async::reacto
     std::unique_ptr<addrinfo, addrinfo_deleter> const candidates{found};
     std::error_code failure = std::make_error_code(std::errc::host_unreachable);
     for (auto const* candidate = candidates.get(); candidate != nullptr; candidate = candidate->ai_next) {
-        unique_fd socket{::socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol)};
-        if (!socket) {
-            failure = last_error();
-            continue;
-        }
-        if (auto const error = make_nonblocking(socket.get())) {
-            failure = error;
-            continue;
-        }
-        if (::connect(socket.get(), candidate->ai_addr, candidate->ai_addrlen) == 0) {
+        auto socket = co_await connect_candidate(reactor, *candidate);
+        if (socket) {
             co_return socket;
         }
-        if (errno != EINPROGRESS) {
-            failure = last_error();
-            continue;
-        }
-        if (auto const error = co_await reactor.writable(socket.get())) {
-            failure = error;
-            continue;
-        }
-        int pending = 0;
-        socklen_t length = sizeof pending;
-        ::getsockopt(socket.get(), SOL_SOCKET, SO_ERROR, &pending, &length);
-        if (pending != 0) {
-            failure = std::error_code{pending, std::system_category()};
-            continue;
-        }
-        co_return socket;
+        failure = socket.error();
     }
     co_return std::unexpected{failure};
 }

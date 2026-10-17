@@ -32,6 +32,14 @@ jobs:
       - run: cmake --build --preset ${{ matrix.preset }}
       - run: ctest --preset ${{ matrix.preset }}
 
+  crap:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install gcc ninja cmake openssl@3 gcovr
+      - run: pip3 install --break-system-packages lizard
+      - run: tools/coverage.sh
+
   fuzz:
     runs-on: ubuntu-24.04
     strategy:

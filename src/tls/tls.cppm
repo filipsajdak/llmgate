@@ -92,6 +92,30 @@ bool trust_pem(SSL_CTX* const context, std::string_view const pem) {
     return added > 0;
 }
 
+bool configure_protocol(SSL_CTX* const context, group_policy const policy) {
+    auto const groups = groups_for(policy);
+    return SSL_CTX_set_min_proto_version(context, TLS1_2_VERSION) == 1 &&
+           SSL_CTX_set1_groups_list(context, groups.c_str()) == 1;
+}
+
+bool load_identity(SSL_CTX* const context, std::string_view const certificate_pem, std::string_view const private_key_pem) {
+    auto const certificate_source = memory_bio(certificate_pem);
+    auto const key_source = memory_bio(private_key_pem);
+    x509_ptr const certificate{PEM_read_bio_X509(certificate_source.get(), nullptr, nullptr, nullptr)};
+    pkey_ptr const key{PEM_read_bio_PrivateKey(key_source.get(), nullptr, nullptr, nullptr)};
+    return certificate && key && SSL_CTX_use_certificate(context, certificate.get()) == 1 &&
+           SSL_CTX_use_PrivateKey(context, key.get()) == 1 && SSL_CTX_check_private_key(context) == 1;
+}
+
+bool configure_trust(SSL_CTX* const context, std::string_view const extra_trusted_pem) {
+    SSL_CTX_set_verify(context, SSL_VERIFY_PEER, nullptr);
+    SSL_CTX_set_default_verify_paths(context);
+    for (auto const* const bundle : ca_bundle_candidates) {
+        SSL_CTX_load_verify_file(context, bundle);
+    }
+    return extra_trusted_pem.empty() || trust_pem(context, extra_trusted_pem);
+}
+
 std::string drain_errors() {
     std::string text;
     while (auto const code = ERR_get_error()) {
@@ -121,28 +145,14 @@ public:
                                                                std::string_view const extra_trusted_pem = {}) {
         client_context context{SSL_CTX_new(TLS_client_method())};
         auto* const native = context.native_.get();
-        if (native == nullptr) {
-            return std::unexpected{make_error_code(errc::context_failed)};
-        }
-        auto const groups = detail::groups_for(policy);
-        auto const configured = SSL_CTX_set_min_proto_version(native, TLS1_2_VERSION) == 1 &&
-                                SSL_CTX_set1_groups_list(native, groups.c_str()) == 1 &&
-                                SSL_CTX_set_alpn_protos(native, detail::alpn_http11.data(), detail::alpn_http11.size()) == 0;
-        if (!configured) {
-            ERR_clear_error();
-            return std::unexpected{make_error_code(errc::context_failed)};
-        }
-        SSL_CTX_set_verify(native, SSL_VERIFY_PEER, nullptr);
-        SSL_CTX_set_mode(native, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
-        SSL_CTX_set_default_verify_paths(native);
-        for (auto const* const bundle : detail::ca_bundle_candidates) {
-            SSL_CTX_load_verify_file(native, bundle);
-        }
-        if (!extra_trusted_pem.empty() && !detail::trust_pem(native, extra_trusted_pem)) {
-            ERR_clear_error();
-            return std::unexpected{make_error_code(errc::context_failed)};
-        }
+        auto const configured = native != nullptr && detail::configure_protocol(native, policy) &&
+                                SSL_CTX_set_alpn_protos(native, detail::alpn_http11.data(), detail::alpn_http11.size()) == 0 &&
+                                detail::configure_trust(native, extra_trusted_pem);
         ERR_clear_error();
+        if (!configured) {
+            return std::unexpected{make_error_code(errc::context_failed)};
+        }
+        SSL_CTX_set_mode(native, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
         return context;
     }
 
@@ -161,20 +171,10 @@ public:
                                                                std::string_view const private_key_pem) {
         server_context context{SSL_CTX_new(TLS_server_method())};
         auto* const native = context.native_.get();
-        if (native == nullptr) {
-            return std::unexpected{make_error_code(errc::context_failed)};
-        }
-        auto const certificate_source = detail::memory_bio(certificate_pem);
-        auto const key_source = detail::memory_bio(private_key_pem);
-        detail::x509_ptr const certificate{PEM_read_bio_X509(certificate_source.get(), nullptr, nullptr, nullptr)};
-        detail::pkey_ptr const key{PEM_read_bio_PrivateKey(key_source.get(), nullptr, nullptr, nullptr)};
-        auto const groups = detail::groups_for(policy);
-        auto const configured = certificate && key && SSL_CTX_set_min_proto_version(native, TLS1_2_VERSION) == 1 &&
-                                SSL_CTX_set1_groups_list(native, groups.c_str()) == 1 &&
-                                SSL_CTX_use_certificate(native, certificate.get()) == 1 &&
-                                SSL_CTX_use_PrivateKey(native, key.get()) == 1 && SSL_CTX_check_private_key(native) == 1;
+        auto const configured = native != nullptr && detail::configure_protocol(native, policy) &&
+                                detail::load_identity(native, certificate_pem, private_key_pem);
+        ERR_clear_error();
         if (!configured) {
-            ERR_clear_error();
             return std::unexpected{make_error_code(errc::context_failed)};
         }
         return context;

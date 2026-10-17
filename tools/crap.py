@@ -18,7 +18,9 @@ def functions_of(path):
 def coverage_by_line(report):
     table = {}
     for entry in report["files"]:
-        table[entry["file"]] = {line["line_number"]: line["count"] > 0 for line in entry["lines"]}
+        hits = table.setdefault(entry["file"], {})
+        for line in entry["lines"]:
+            hits[line["line_number"]] = hits.get(line["line_number"], False) or line["count"] > 0
     return table
 
 

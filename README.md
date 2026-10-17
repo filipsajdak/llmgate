@@ -13,6 +13,10 @@ ctest --preset host            # unit tests
 ctest --preset host-network    # real TLS to api.anthropic.com and api.githubcopilot.com
 ```
 
+## CRAP gate
+
+`tools/coverage.sh` builds with coverage, runs the unit tests and fails when any function has CRAP above 8 (CRAP = CC^2 * (1 - coverage)^3 + CC, complexity from lizard, line coverage from gcovr, a line counts as covered when any template instantiation ran it). Last run: 215 functions, 0 above 8. The epoll backend is not instrumented by the macOS run, so it is held to complexity 8 alone.
+
 ## Sanitizers and checks
 
 | Preset | Where | Checks |

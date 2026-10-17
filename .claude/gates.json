@@ -14,7 +14,8 @@
         "cmake --build --preset host\\b",
         "ctest --preset host\\b",
         "ctest --preset asan\\b",
-        "ops/ci/linux\\.sh"
+        "ops/ci/linux\\.sh",
+        "tools/coverage\\.sh"
       ]
     }
   ]
