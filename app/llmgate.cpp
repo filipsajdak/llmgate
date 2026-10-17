@@ -163,6 +163,10 @@ int dispatch(commands::context const& where) {
             return commands::run_stop(where);
         case arguments::command::usage:
             return commands::run_usage(where);
+        case arguments::command::doctor:
+            return commands::run_doctor(where);
+        case arguments::command::quota:
+            return commands::run_quota(where);
         case arguments::command::statusline:
             break;
     }
@@ -174,7 +178,7 @@ int dispatch(commands::context const& where) {
 int main(int argc, char** argv) {
     auto const parsed = arguments::parse(std::vector<std::string>(argv + 1, argv + argc));
     if (!parsed) {
-        std::println(stderr, "llmgate: {}\nusage: llmgate [--config PATH] [serve | login | claude ARGS... | env [--json|--vscode] | setup [--service] [--dry-run] [--vscode FILE] | status | stop | usage [--days N] [--json] | statusline] | --check-config | --version", parsed.error());
+        std::println(stderr, "llmgate: {}\nusage: llmgate [--config PATH] [serve | login | claude ARGS... | env [--json|--vscode] | setup [--service] [--dry-run] [--vscode FILE] | status | stop | usage [--days N] [--json] | doctor [--offline] [--json] | quota [--json] | statusline] | --check-config | --version", parsed.error());
         return exit_usage;
     }
     if (parsed->show_version) {
@@ -182,7 +186,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     auto settings = load_config(parsed->config_path);
-    auto const tolerant = parsed->which == arguments::command::statusline || parsed->which == arguments::command::stop;
+    auto const tolerant = parsed->which == arguments::command::statusline || parsed->which == arguments::command::stop || parsed->which == arguments::command::doctor;
     if (!settings && !tolerant) {
         std::println(stderr, "llmgate: {}", settings.error());
         return exit_config;
@@ -193,6 +197,7 @@ int main(int argc, char** argv) {
     }
     commands::context where{.options = *parsed,
                             .settings = settings ? std::move(*settings) : gateway::config{},
-                            .binary = process::current_executable().value_or(std::filesystem::path{argv[0]})};
+                            .binary = process::current_executable().value_or(std::filesystem::path{argv[0]}),
+                            .config_error = settings ? std::string{} : settings.error()};
     return dispatch(where);
 }

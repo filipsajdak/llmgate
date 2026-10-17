@@ -13,6 +13,15 @@ std::vector<std::string> words(std::initializer_list<std::string_view> const lis
 }
 
 const suite arguments_suite = [] {
+    "capability_doctor_and_quota_are_commands_and_offline_is_a_flag"_test = [] {
+        auto const checked = parse(words({"doctor", "--offline", "--json"}));
+        auto const quota = parse(words({"quota", "--json"}));
+
+        expect(checked->which == command::doctor && checked->offline && checked->as_json);
+        expect(quota->which == command::quota && !quota->offline && quota->as_json);
+        expect(!parse(words({"quota"}))->offline);
+    };
+
     "capability_no_arguments_means_serve_with_the_default_config"_test = [] {
         auto const parsed = parse(words({}));
 

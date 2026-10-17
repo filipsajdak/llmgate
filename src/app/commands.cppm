@@ -4,19 +4,25 @@ module;
 #include <cstdio>
 #include <cstdlib>
 
+#include <sys/stat.h>
 #include <unistd.h>
 
 export module llmgate.commands;
 
 import std;
 import llmgate.arguments;
+import llmgate.async;
 import llmgate.claude;
+import llmgate.copilot;
+import llmgate.doctor;
 import llmgate.gateway;
 import llmgate.json;
 import llmgate.process;
 import llmgate.proof;
+import llmgate.quota;
 import llmgate.routing;
 import llmgate.statusline;
+import llmgate.tls;
 import llmgate.usage;
 
 export namespace llmgate::commands {
@@ -27,6 +33,7 @@ struct context {
     arguments::options options;
     gateway::config settings;
     std::filesystem::path binary;
+    std::string config_error{};
 };
 
 constexpr std::string_view state_log_name = "gateway.log";
@@ -368,6 +375,190 @@ inline int run_claude(context const& where) {
         return exit_missing;
     }
     process::exec_program(*program, where.options.passthrough, *list);
+}
+
+}  // namespace llmgate::commands
+
+namespace llmgate::commands::detail {
+doctor::file_fact file_fact_of(std::filesystem::path const& path) {
+    struct stat info{};
+    if (::stat(path.c_str(), &info) != 0) {
+        return {.path = path.string()};
+    }
+    return {.path = path.string(), .exists = true, .mode = static_cast<unsigned>(info.st_mode & 0777)};
+}
+
+bool can_write(std::filesystem::path path) {
+    std::error_code ignored;
+    while (!path.empty() && !std::filesystem::exists(path, ignored)) {
+        path = path.parent_path();
+    }
+    return !path.empty() && ::access(path.c_str(), W_OK) == 0;
+}
+
+doctor::settings_state profile_state(context const& where) {
+    std::error_code ignored;
+    auto const directory = std::filesystem::path{process::expand_home(where.settings.claude.profile_dir)};
+    auto const settings_path = directory / "settings.json";
+    if (!std::filesystem::exists(directory, ignored)) {
+        return doctor::settings_state::no_profile;
+    }
+    if (!std::filesystem::exists(settings_path, ignored)) {
+        return doctor::settings_state::no_settings;
+    }
+    auto existing = existing_json(settings_path);
+    if (!existing) {
+        return doctor::settings_state::invalid;
+    }
+    auto const current = json::write(*existing, 2);
+    auto merged = claude::merge_settings(std::move(*existing), where.settings.claude.effort, status_line_command(where));
+    return json::write(merged, 2) == current ? doctor::settings_state::current : doctor::settings_state::outdated;
+}
+
+doctor::exchange_state exchange_of(std::error_code const error) {
+    if (!error) {
+        return doctor::exchange_state::accepted;
+    }
+    if (error == copilot::errc::login_required) {
+        return doctor::exchange_state::login_required;
+    }
+    return error == copilot::errc::github_unreachable ? doctor::exchange_state::unreachable : doctor::exchange_state::rejected;
+}
+
+std::string failure_text(std::error_code const error) {
+    if (error == copilot::errc::login_required) {
+        return "there is no valid Copilot login; run llmgate login";
+    }
+    return error.message();
+}
+
+std::expected<quota::summary, std::string> fetch_quota(async::reactor& loop, tls::client_context const& tls_context, gateway::copilot_config const& copilot_settings) {
+    auto const body = loop.run(copilot::fetch_user(loop, tls_context, copilot_settings));
+    if (!body) {
+        return std::unexpected{failure_text(body.error())};
+    }
+    auto parsed = quota::parse(*body);
+    if (!parsed) {
+        return std::unexpected{std::string{quota::unavailable_message}};
+    }
+    return std::move(*parsed);
+}
+
+void probe_network(gateway::config const& settings, doctor::facts& seen) {
+    async::reactor loop;
+    auto tls_context = tls::client_context::make(settings.tls_groups);
+    if (!tls_context) {
+        seen.exchange = doctor::exchange_state::unreachable;
+        return;
+    }
+    seen.exchange = exchange_of(loop.run(copilot::check_login(loop, *tls_context, *settings.copilot)));
+    if (seen.exchange != doctor::exchange_state::accepted) {
+        return;
+    }
+    auto found = fetch_quota(loop, *tls_context, *settings.copilot);
+    seen.quota = found ? doctor::quota_state::read : doctor::quota_state::unavailable;
+    seen.quota_summary = found ? std::optional{std::move(*found)} : std::nullopt;
+}
+
+std::optional<doctor::port_state> port_state_of(context const& where, bool const identity_exists) {
+    auto const address = address_of(where.settings);
+    if (!address || address->port == 0) {
+        return std::nullopt;
+    }
+    if (process::gateway_alive(address->host, address->port)) {
+        return identity_exists && gateway_verified(*address) ? doctor::port_state::ours : doctor::port_state::foreign;
+    }
+    return process::tcp_connectable(address->host, address->port, statusline_limit) ? doctor::port_state::foreign : doctor::port_state::free;
+}
+
+bool claude_on_path() {
+    auto const named = variable("LLMGATE_CLAUDE").transform([](std::string const& name) { return process::find_in_path(name); }).value_or(process::find_in_path("claude"));
+    return named.has_value();
+}
+
+void describe_credential(context const& where, doctor::facts& seen) {
+    auto const& copilot_settings = where.settings.copilot;
+    seen.copilot_configured = copilot_settings && !copilot_settings->token_file.empty();
+    if (seen.copilot_configured) {
+        auto const path = process::expand_home(copilot_settings->token_file);
+        seen.token = file_fact_of(path);
+        seen.token_valid = seen.token.exists && copilot::load_oauth_token(path).has_value();
+    }
+    seen.static_token_variable = where.settings.static_token_env;
+    seen.static_token_set = !where.settings.static_token_env.empty() && variable(where.settings.static_token_env).has_value();
+}
+
+void describe_ledger(gateway::config const& settings, doctor::facts& seen) {
+    seen.ledger_configured = !settings.usage.ledger_file.empty();
+    if (!seen.ledger_configured) {
+        return;
+    }
+    auto const path = std::filesystem::path{process::expand_home(settings.usage.ledger_file)};
+    seen.ledger_file = file_fact_of(path);
+    seen.ledger = can_write(path) ? doctor::ledger_state::writable : doctor::ledger_state::not_writable;
+}
+
+doctor::facts gather_facts(context const& where) {
+    doctor::facts seen;
+    seen.config_error = where.config_error;
+    seen.identity = file_fact_of(identity_file());
+    seen.claude_found = claude_on_path();
+    if (!seen.config_error.empty()) {
+        return seen;
+    }
+    seen.listen = where.settings.listen;
+    seen.client_key_variable = where.settings.client_key_env;
+    seen.client_key_set = !where.settings.client_key_env.empty() && !client_key(where.settings).empty();
+    seen.port = port_state_of(where, seen.identity.exists);
+    seen.profile_dir = process::expand_home(where.settings.claude.profile_dir);
+    seen.settings = profile_state(where);
+    describe_credential(where, seen);
+    describe_ledger(where.settings, seen);
+    seen.daily_tokens = where.settings.usage.budget.daily_tokens;
+    seen.monthly_tokens = where.settings.usage.budget.monthly_tokens;
+    seen.warn_percent = where.settings.usage.budget.warn_percent;
+    if (!where.options.offline && seen.copilot_configured && seen.token_valid) {
+        probe_network(where.settings, seen);
+    }
+    return seen;
+}
+
+}  // namespace llmgate::commands::detail
+
+export namespace llmgate::commands {
+
+inline int run_doctor(context const& where) {
+    auto const found = doctor::diagnose(detail::gather_facts(where));
+    if (where.options.as_json) {
+        std::print("{}", doctor::render_json(found));
+    } else {
+        std::print("{}", doctor::render_text(found));
+        if (where.options.offline) {
+            std::println("network checks were skipped (--offline)");
+        }
+    }
+    return doctor::exit_code(found) == 0 ? 0 : exit_failure;
+}
+
+inline int run_quota(context const& where) {
+    auto const& copilot_settings = where.settings.copilot;
+    if (!copilot_settings || copilot_settings->token_file.empty()) {
+        std::println(stderr, "llmgate: quota needs the copilot block with token_file in the configuration");
+        return exit_failure;
+    }
+    async::reactor loop;
+    auto tls_context = tls::client_context::make(where.settings.tls_groups);
+    if (!tls_context) {
+        std::println(stderr, "llmgate: cannot start TLS: {}", tls_context.error().message());
+        return exit_failure;
+    }
+    auto const found = detail::fetch_quota(loop, *tls_context, *copilot_settings);
+    if (!found) {
+        std::println(stderr, "llmgate: Copilot quota is unavailable: {}", found.error());
+        return exit_failure;
+    }
+    std::print("{}", where.options.as_json ? quota::to_json(*found) : quota::render(*found));
+    return 0;
 }
 
 inline int run_status(context const& where) {
