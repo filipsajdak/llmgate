@@ -6,6 +6,7 @@ export module llmgate.json;
 
 import std;
 import llmgate.jsonscan;
+import llmgate.members;
 import llmgate.reflect;
 
 export namespace llmgate::json {
@@ -360,14 +361,8 @@ constexpr result<std::chrono::milliseconds> read_duration(std::string_view const
     return unit->second * amount;
 }
 
-template <class T>
 consteval bool member_is_required(std::meta::info const member) {
-    for (auto const annotation : std::meta::annotations_of(member)) {
-        if (std::meta::remove_cvref(std::meta::type_of(annotation)) == ^^required_t) {
-            return true;
-        }
-    }
-    return false;
+    return reflect::has_annotation<required_t>(member);
 }
 
 constexpr std::string element_path(std::string const& path, std::size_t const index) {
@@ -564,7 +559,7 @@ constexpr std::optional<read_error> read_field(T& target, object const& members,
     auto const found = std::ranges::find_if(members, [](auto const& entry) { return entry.first == key; });
     auto const child_path = member_path(path, key);
     if (found == members.end()) {
-        if constexpr (member_is_required<T>(field)) {
+        if constexpr (member_is_required(field)) {
             return read_error{child_path, "required"};
         }
         return std::nullopt;
