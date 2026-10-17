@@ -95,6 +95,7 @@ function(llmgate_test name label)
 endfunction()
 
 llmgate_test(reflect_enum_test unit llmgate_reflect)
+llmgate_test(enum_round_trip_test unit llmgate_reflect llmgate_role llmgate_arguments llmgate_anthropic llmgate_usage llmgate_selection llmgate_doctor llmgate_http llmgate_tls llmgate_jsonscan llmgate_copilot)
 llmgate_test(async_test unit llmgate_async)
 llmgate_test(tls_test unit llmgate_tls)
 llmgate_test(http_test unit llmgate_http)
