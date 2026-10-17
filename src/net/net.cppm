@@ -399,4 +399,71 @@ private:
 static_assert(byte_stream<tcp_stream>);
 static_assert(byte_stream<tls_stream>);
 
+struct endpoint {
+    std::string host;
+    std::uint16_t port;
+    auto operator<=>(endpoint const&) const = default;
+};
+
+struct pool_limits {
+    std::size_t max_idle_per_endpoint = 8;
+    async::duration max_idle_age{90000};
+};
+
+template <class Stream>
+concept pooled_stream = byte_stream<Stream> && requires(Stream const& stream) {
+    { stream.descriptor() } -> std::same_as<int>;
+};
+
+template <pooled_stream Stream>
+class connection_pool {
+public:
+    using clock = std::chrono::steady_clock;
+
+    explicit connection_pool(pool_limits const limits = {}) noexcept : limits_{limits} {}
+
+    std::optional<Stream> take(endpoint const& where, clock::time_point const now = clock::now()) {
+        auto const found = idle_.find(where);
+        if (found == idle_.end()) {
+            return std::nullopt;
+        }
+        auto& candidates = found->second;
+        while (!candidates.empty()) {
+            auto candidate = std::move(candidates.back());
+            candidates.pop_back();
+            if (now - candidate.since <= limits_.max_idle_age && peer_is_quiet(candidate.stream.descriptor())) {
+                return std::move(candidate.stream);
+            }
+        }
+        return std::nullopt;
+    }
+
+    void give_back(endpoint where, Stream stream, clock::time_point const now = clock::now()) {
+        auto& candidates = idle_[std::move(where)];
+        if (candidates.size() >= limits_.max_idle_per_endpoint) {
+            candidates.erase(candidates.begin());
+        }
+        candidates.push_back({.stream = std::move(stream), .since = now});
+    }
+
+    std::size_t idle_count(endpoint const& where) const {
+        auto const found = idle_.find(where);
+        return found == idle_.end() ? 0 : found->second.size();
+    }
+
+private:
+    struct idle {
+        Stream stream;
+        clock::time_point since;
+    };
+
+    static bool peer_is_quiet(int const fd) noexcept {
+        char probe = 0;
+        return ::recv(fd, &probe, 1, MSG_PEEK | MSG_DONTWAIT) < 0 && detail::would_block(errno);
+    }
+
+    pool_limits limits_;
+    std::map<endpoint, std::vector<idle>> idle_;
+};
+
 }  // namespace llmgate::net

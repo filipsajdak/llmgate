@@ -116,7 +116,95 @@ async::task<watched_read> read_while_watching_client(async::reactor& loop, net::
                            .waited = std::chrono::steady_clock::now() - started};
 }
 
+struct connected_pair {
+    net::tcp_stream client;
+    net::tcp_stream accepted;
+};
+
+async::task<connected_pair> connect_pair(async::reactor& loop, net::listener& server) {
+    async::task<std::expected<net::tcp_stream, std::error_code>> accepting = server.accept();
+    auto client = co_await net::tcp_stream::connect(loop, std::string{loopback}, server.port());
+    auto accepted = co_await std::move(accepting);
+    co_return connected_pair{.client = std::move(*client), .accepted = std::move(*accepted)};
+}
+
+constexpr net::endpoint upstream{.host = "api.example", .port = 443};
+
+async::task<void> until_readable(async::reactor& loop, int const fd) {
+    (void)co_await loop.readable(fd);
+}
+
 const suite net_suite = [] {
+    "capability_a_returned_connection_is_taken_again"_test = [] {
+        async::reactor loop;
+        auto server = net::listener::bind(loop, std::string{loopback}, 0);
+        auto pair = loop.run(connect_pair(loop, *server));
+        net::connection_pool<net::tcp_stream> pool;
+
+        pool.give_back(upstream, std::move(pair.client));
+        auto const taken = pool.take(upstream);
+
+        expect(taken.has_value());
+        expect(pool.idle_count(upstream) == 0_u);
+    };
+
+    "limit_a_connection_older_than_the_idle_age_is_dropped"_test = [] {
+        async::reactor loop;
+        auto server = net::listener::bind(loop, std::string{loopback}, 0);
+        auto pair = loop.run(connect_pair(loop, *server));
+        net::connection_pool<net::tcp_stream> pool{{.max_idle_per_endpoint = 8, .max_idle_age = async::duration{100}}};
+        auto const start = std::chrono::steady_clock::now();
+
+        pool.give_back(upstream, std::move(pair.client), start);
+
+        expect(!pool.take(upstream, start + std::chrono::milliseconds{101}).has_value());
+    };
+
+    "limit_a_connection_the_peer_closed_is_dropped"_test = [] {
+        async::reactor loop;
+        auto server = net::listener::bind(loop, std::string{loopback}, 0);
+        auto pair = loop.run(connect_pair(loop, *server));
+        net::connection_pool<net::tcp_stream> pool;
+        auto const watched = pair.client.descriptor();
+        pool.give_back(upstream, std::move(pair.client));
+
+        { auto closing = std::move(pair.accepted); }
+        loop.run(until_readable(loop, watched));
+
+        expect(!pool.take(upstream).has_value());
+    };
+
+    "limit_a_connection_with_unread_bytes_is_dropped"_test = [] {
+        async::reactor loop;
+        auto server = net::listener::bind(loop, std::string{loopback}, 0);
+        auto pair = loop.run(connect_pair(loop, *server));
+        net::connection_pool<net::tcp_stream> pool;
+        std::string const stray = "late";
+        loop.run([](net::tcp_stream& peer, std::string const& text) -> async::task<void> {
+            (void)co_await peer.write_all(std::as_bytes(std::span{text}));
+        }(pair.accepted, stray));
+        auto const watched = pair.client.descriptor();
+        pool.give_back(upstream, std::move(pair.client));
+        loop.run(until_readable(loop, watched));
+
+        expect(!pool.take(upstream).has_value());
+    };
+
+    "limit_idle_connections_per_endpoint_are_bounded_oldest_first"_test = [] {
+        async::reactor loop;
+        auto server = net::listener::bind(loop, std::string{loopback}, 0);
+        net::connection_pool<net::tcp_stream> pool{{.max_idle_per_endpoint = 2, .max_idle_age = async::duration{90000}}};
+        std::vector<net::tcp_stream> keep_open;
+
+        for (int index = 0; index < 3; ++index) {
+            auto pair = loop.run(connect_pair(loop, *server));
+            pool.give_back(upstream, std::move(pair.client));
+            keep_open.push_back(std::move(pair.accepted));
+        }
+
+        expect(pool.idle_count(upstream) == 2_u);
+    };
+
     "capability_a_client_disconnect_cancels_a_pending_upstream_read"_test = [] {
         async::reactor loop;
         auto server = net::listener::bind(loop, std::string{loopback}, 0);
