@@ -35,7 +35,7 @@ struct github_error {
     }
 };
 
-enum class errc {
+enum class [[=reflect::error_enum]] errc {
     login_required = 1,
     login_denied [[= github_error{"access_denied"}]],
     login_expired [[= github_error{"expired_token"}]],
@@ -45,18 +45,7 @@ enum class errc {
 };
 static_assert(reflect::unique_values<errc>() && reflect::starts_at_one<errc>());
 
-}  // namespace llmgate::copilot
-
-export namespace std {
-template <>
-struct is_error_code_enum<llmgate::copilot::errc> : true_type {};
-}  // namespace std
-
-export namespace llmgate::copilot {
-
-std::error_code make_error_code(errc const value) noexcept {
-    return reflect::make_code(value);
-}
+using reflect::make_error_code;
 
 struct device_code {
     [[= json::required]] std::string device_code{};

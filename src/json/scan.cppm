@@ -6,21 +6,10 @@ import llmgate.require;
 
 export namespace llmgate::jsonscan {
 
-enum class errc { not_an_object = 1, malformed, too_deep, trailing_bytes, member_missing, member_not_a_string };
+enum class [[=reflect::error_enum]] errc { not_an_object = 1, malformed, too_deep, trailing_bytes, member_missing, member_not_a_string };
 static_assert(reflect::unique_values<errc>() && reflect::starts_at_one<errc>());
 
-}  // namespace llmgate::jsonscan
-
-export namespace std {
-template <>
-struct is_error_code_enum<llmgate::jsonscan::errc> : true_type {};
-}  // namespace std
-
-export namespace llmgate::jsonscan {
-
-std::error_code make_error_code(errc const value) noexcept {
-    return reflect::make_code(value);
-}
+using reflect::make_error_code;
 
 enum class value_kind { string, number, literal, object, array };
 
