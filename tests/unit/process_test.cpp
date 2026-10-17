@@ -75,6 +75,33 @@ struct canned_server {
 };
 
 const suite process_suite = [] {
+    "capability_appending_adds_lines_creates_the_file_private_and_keeps_earlier_content"_test = [] {
+        auto const directory = std::filesystem::temp_directory_path() / std::format("llmgate-append-{}", ::getpid());
+        auto const target = directory / "nested" / "usage.jsonl";
+        std::filesystem::remove_all(directory);
+
+        expect(append_file(target, "one\n", 0600, true).has_value());
+        expect(append_file(target, "two\n", 0600, true).has_value());
+
+        std::ifstream in{target};
+        std::string text{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+        expect(text == "one\ntwo\n");
+        expect((std::filesystem::status(target).permissions() & (std::filesystem::perms::group_all | std::filesystem::perms::others_all)) == std::filesystem::perms::none);
+        expect((std::filesystem::status(target.parent_path()).permissions() & (std::filesystem::perms::group_all | std::filesystem::perms::others_all)) == std::filesystem::perms::none);
+        std::filesystem::remove_all(directory);
+    };
+
+    "limit_appending_refuses_to_follow_a_symlink"_test = [] {
+        auto const directory = std::filesystem::temp_directory_path() / std::format("llmgate-link-{}", ::getpid());
+        std::filesystem::remove_all(directory);
+        std::filesystem::create_directories(directory);
+        std::filesystem::create_symlink(directory / "elsewhere", directory / "usage.jsonl");
+
+        expect(!append_file(directory / "usage.jsonl", "x\n", 0600, false).has_value());
+        expect(!std::filesystem::exists(directory / "elsewhere"));
+        std::filesystem::remove_all(directory);
+    };
+
     "capability_an_http_1_0_answer_is_understood"_test = [] {
         canned_server server{"HTTP/1.0 200 OK\r\n\r\nold"};
 

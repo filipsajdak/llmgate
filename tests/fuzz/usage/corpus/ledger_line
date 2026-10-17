@@ -1,0 +1,1 @@
+{"time":1760702400,"requested":"sonnet","model":"claude-sonnet-5-5","role":"sonnet","session":"s1","input":10,"output":20,"cache_read":300,"cache_creation":4,"duration_ms":350,"status":200,"repairs":1}

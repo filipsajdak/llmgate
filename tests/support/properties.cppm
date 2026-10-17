@@ -4,6 +4,7 @@ import std;
 import llmgate.anthropic;
 import llmgate.arguments;
 import llmgate.statusline;
+import llmgate.usage;
 import llmgate.claude;
 import llmgate.json;
 import llmgate.jsonscan;
@@ -220,6 +221,56 @@ constexpr bool settings_holds(std::string_view const text) {
     auto const env = claude::environment({}, "u", "k", "/p");
     auto const vscode_once = claude::merge_vscode(*parsed, env);
     return json::write(vscode_once) == json::write(claude::merge_vscode(vscode_once, env));
+}
+
+constexpr std::int64_t seconds_from(std::string_view const text) {
+    std::uint64_t bits = 0;
+    for (std::size_t index = 0; index < text.size() && index < 8; ++index) {
+        bits = (bits << 8) | static_cast<unsigned char>(text[index]);
+    }
+    if (!text.empty()) {
+        bits <<= (8 - std::min<std::size_t>(text.size(), 8)) * 8;
+    }
+    return static_cast<std::int64_t>(bits);
+}
+
+constexpr bool calendar_holds(std::int64_t const seconds) {
+    auto const day = usage::day_of(seconds);
+    auto const into_day = seconds - day * usage::seconds_per_day;
+    auto const date = usage::civil_from_day(day);
+    auto const month_slot = ((usage::month_of(day) % 12) + 12) % 12;
+    return into_day >= 0 && into_day < usage::seconds_per_day && date.month >= 1 && date.month <= 12 && date.day >= 1 && date.day <= 31 &&
+           month_slot == static_cast<std::int64_t>(date.month) - 1 && usage::civil_from_day(day + 1).day != date.day;
+}
+
+constexpr bool usage_holds(std::string_view const text) {
+    usage::observer seen;
+    seen.on_body(text);
+    seen.on_event("message_start", text);
+    seen.on_event("message_delta", text);
+    (void)seen.used().counted();
+    (void)usage::session_of(text);
+    (void)usage::role_of(text);
+    (void)usage::headline_from(text);
+    if (auto const entry = usage::from_line(text)) {
+        if (usage::from_line(usage::to_line(*entry)) != entry) {
+            return false;
+        }
+        usage::ledger book;
+        book.add(*entry);
+        if (book.on_day(usage::day_of(entry->time)).requests != 1) {
+            return false;
+        }
+    }
+    auto const loaded = usage::load(text);
+    auto const limit = static_cast<std::uint64_t>(text.size());
+    auto const verdict = usage::evaluate({.daily_tokens = limit, .monthly_tokens = limit * 3, .warn_percent = 80}, limit / 2, limit * 5);
+    if (verdict.percent > usage::percent_cap || (verdict.state == usage::level::exhausted) != (verdict.limit != 0 && verdict.percent >= 100)) {
+        return false;
+    }
+    (void)usage::summary_json(loaded.loaded, {.daily_tokens = limit}, seconds_from(text));
+    (void)usage::report(loaded.loaded, 0, 1);
+    return calendar_holds(seconds_from(text)) && usage::compact(limit * limit).size() <= 24;
 }
 
 constexpr bool launcher_holds(std::string_view const text) {

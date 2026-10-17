@@ -242,6 +242,32 @@ inline std::expected<void, std::error_code> write_file_atomic(std::filesystem::p
     return {};
 }
 
+inline std::expected<void, std::error_code> append_file(std::filesystem::path const& target, std::string_view const text, mode_t const mode,
+                                                        bool const private_parent) {
+    std::error_code failure;
+    if (std::filesystem::create_directories(target.parent_path(), failure) && private_parent) {
+        std::filesystem::permissions(target.parent_path(), std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, failure);
+    }
+    auto const descriptor = ::open(target.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC, mode);
+    if (descriptor < 0) {
+        return std::unexpected{std::error_code{errno, std::system_category()}};
+    }
+    std::error_code error;
+    for (auto pending = text; !pending.empty() && !error;) {
+        auto const written = ::write(descriptor, pending.data(), pending.size());
+        if (written > 0) {
+            pending.remove_prefix(static_cast<std::size_t>(written));
+        } else if (written < 0 && errno != EINTR) {
+            error = {errno, std::system_category()};
+        }
+    }
+    ::close(descriptor);
+    if (error) {
+        return std::unexpected{error};
+    }
+    return {};
+}
+
 inline int run_and_wait(std::filesystem::path const& program, std::vector<std::string> const& arguments) {
     std::vector<std::string> storage{program.string()};
     storage.insert(storage.end(), arguments.begin(), arguments.end());

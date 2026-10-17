@@ -17,6 +17,7 @@ import llmgate.process;
 import llmgate.proof;
 import llmgate.routing;
 import llmgate.statusline;
+import llmgate.usage;
 
 export namespace llmgate::commands {
 
@@ -395,6 +396,53 @@ inline int run_stop(context const&) {
     return killed ? 0 : exit_failure;
 }
 
+inline usage::load_result read_ledger(std::string const& configured_path) {
+    if (configured_path.empty()) {
+        return {};
+    }
+    auto const text = detail::read_file(process::expand_home(configured_path));
+    return text ? usage::load(*text) : usage::load_result{};
+}
+
+inline std::function<void(std::string const&)> ledger_sink(std::string const& configured_path) {
+    if (configured_path.empty()) {
+        return {};
+    }
+    return [path = std::filesystem::path{process::expand_home(configured_path)}, warned = false](std::string const& line) mutable {
+        constexpr mode_t ledger_mode = 0600;
+        if (auto const written = process::append_file(path, line, ledger_mode, true); !written && !std::exchange(warned, true)) {
+            std::println(stderr, "llmgate: cannot append to the usage ledger {}: {}", path.string(), written.error().message());
+        }
+    };
+}
+
+inline int run_usage(context const& where) {
+    auto const& configured = where.settings.usage.ledger_file;
+    if (configured.empty()) {
+        std::println("the usage ledger is disabled (usage.ledger_file is empty)");
+        return 0;
+    }
+    auto const loaded = read_ledger(configured);
+    auto const now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    auto const last = usage::day_of(now);
+    auto const first = last - static_cast<std::int64_t>(where.options.days) + 1;
+    if (where.options.as_json) {
+        std::println("{}", usage::report_json(loaded.loaded, first, last));
+        return 0;
+    }
+    std::print("{}", usage::report(loaded.loaded, first, last));
+    auto const today = loaded.loaded.on_day(last).used.counted();
+    auto const month = loaded.loaded.in_month(usage::month_of(last)).used.counted();
+    if (auto const now_verdict = usage::evaluate(where.settings.usage.budget, today, month); now_verdict.limit != 0) {
+        std::println("budget {}: {} of {} tokens ({}%) - {}", now_verdict.window, usage::compact(now_verdict.used), usage::compact(now_verdict.limit),
+                     now_verdict.percent, usage::level_name(now_verdict.state));
+    }
+    if (loaded.skipped != 0) {
+        std::println("{} unreadable ledger lines were skipped", loaded.skipped);
+    }
+    return 0;
+}
+
 inline int run_statusline(context const& where, std::string_view const input) {
     auto now = arguments::statusline_input(input);
     if (auto const address = detail::address_of(where.settings)) {
@@ -403,6 +451,13 @@ inline int run_statusline(context const& where, std::string_view const input) {
         now.gateway_up = stats && stats->status == 200;
         if (now.gateway_up) {
             std::tie(now.requests, now.repairs) = arguments::counters_from(stats->body);
+            auto const head = usage::headline_from(stats->body);
+            now.usage_known = true;
+            now.today_tokens = head.today;
+            now.budget_limit = head.limit;
+            now.budget_percent = static_cast<int>(head.percent);
+            now.budget_window = head.window;
+            now.budget_state = head.state;
         }
     }
     if (!now.directory.empty()) {

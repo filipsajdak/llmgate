@@ -2,8 +2,11 @@ export module llmgate.claude;
 
 import std;
 import llmgate.json;
+import llmgate.text;
 
 export namespace llmgate::claude {
+
+using text::decimal;
 
 struct launch_config {
     std::string opus = "claude-opus-5-5";
@@ -19,11 +22,6 @@ struct launch_config {
 using environment_list = std::vector<std::pair<std::string, std::string>>;
 
 constexpr std::string_view dummy_api_key = "none";
-
-constexpr std::string decimal(std::int64_t const value) {
-    std::array<char, 24> digits{};
-    return std::string{digits.data(), std::to_chars(digits.data(), digits.data() + digits.size(), value).ptr};
-}
 
 constexpr environment_list environment(launch_config const& settings, std::string_view const gateway_url, std::string_view const client_key,
                                        std::string_view const expanded_profile_dir) {

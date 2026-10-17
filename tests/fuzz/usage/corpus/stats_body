@@ -1,0 +1,1 @@
+{"usage":{"today":{"input":5,"output":2,"cache_creation":1},"budget":{"state":"warning","window":"daily","used":8,"limit":10,"percent":80}}}

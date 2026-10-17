@@ -6,7 +6,10 @@ import llmgate.statusline;
 
 export namespace llmgate::arguments {
 
-enum class command { serve, login, claude, env, setup, statusline, status, stop };
+enum class command { serve, login, claude, env, setup, statusline, status, stop, usage };
+
+constexpr unsigned default_days = 7;
+constexpr unsigned longest_report_days = 3660;
 
 struct options {
     command which = command::serve;
@@ -18,6 +21,7 @@ struct options {
     bool service = false;
     bool dry_run = false;
     std::string vscode_file{};
+    unsigned days = default_days;
     std::vector<std::string> passthrough{};
 };
 
@@ -35,6 +39,7 @@ constexpr auto command_names = std::to_array<std::pair<std::string_view, command
     {"statusline", command::statusline},
     {"status", command::status},
     {"stop", command::stop},
+    {"usage", command::usage},
 });
 
 constexpr std::optional<command> command_named(std::string_view const word) {
@@ -55,6 +60,15 @@ constexpr std::expected<options, std::string> parse(std::span<std::string const>
             parsed.check_config = true;
         } else if (word == "--config" && index + 1 < args.size()) {
             parsed.config_path = args[++index];
+        } else if (word == "--days") {
+            unsigned days = 0;
+            auto const given = index + 1 < args.size() ? std::string_view{args[index + 1]} : std::string_view{};
+            auto const read = std::from_chars(given.data(), given.data() + given.size(), days);
+            if (given.empty() || read.ec != std::errc{} || read.ptr != given.data() + given.size() || days == 0 || days > longest_report_days) {
+                return std::unexpected{std::string{"--days needs a number from 1 to 3660"}};
+            }
+            parsed.days = days;
+            ++index;
         } else if (word == "--json") {
             parsed.as_json = true;
         } else if (word == "--service") {
@@ -96,30 +110,8 @@ constexpr std::string base_url(gateway_address const& address) {
     return "http://" + address.host + ":" + std::string{digits.data(), end} + "/anthropic";
 }
 
-constexpr json::value const* path_value(json::value const& root, std::initializer_list<std::string_view> const path) {
-    json::value const* current = &root;
-    for (auto const key : path) {
-        auto const* members = std::get_if<json::object>(&current->data);
-        if (members == nullptr) {
-            return nullptr;
-        }
-        auto const found = std::ranges::find(*members, key, &json::object::value_type::first);
-        if (found == members->end()) {
-            return nullptr;
-        }
-        current = &found->second;
-    }
-    return current;
-}
-
-constexpr std::string text_at(json::value const& root, std::initializer_list<std::string_view> const path) {
-    auto const* found = path_value(root, path);
-    auto const* text = found == nullptr ? nullptr : std::get_if<std::string>(&found->data);
-    return text == nullptr ? std::string{} : *text;
-}
-
 constexpr int percent_at(json::value const& root, std::initializer_list<std::string_view> const path) {
-    auto const* found = path_value(root, path);
+    auto const* found = json::at(root, path);
     if (found == nullptr) {
         return 0;
     }
@@ -138,13 +130,13 @@ constexpr statusline::snapshot statusline_input(std::string_view const text) {
         return {};
     }
     statusline::snapshot now;
-    now.model = text_at(*parsed, {"model", "display_name"});
+    now.model = json::text_at(*parsed, {"model", "display_name"});
     if (now.model.empty()) {
-        now.model = text_at(*parsed, {"model", "id"});
+        now.model = json::text_at(*parsed, {"model", "id"});
     }
-    now.directory = text_at(*parsed, {"workspace", "current_dir"});
+    now.directory = json::text_at(*parsed, {"workspace", "current_dir"});
     if (now.directory.empty()) {
-        now.directory = text_at(*parsed, {"cwd"});
+        now.directory = json::text_at(*parsed, {"cwd"});
     }
     now.context_percent = percent_at(*parsed, {"context_window", "used_percentage"});
     return now;
@@ -155,13 +147,8 @@ constexpr std::pair<std::uint64_t, std::uint64_t> counters_from(std::string_view
     if (!parsed) {
         return {0, 0};
     }
-    auto const count = [&](std::initializer_list<std::string_view> const path) {
-        auto const* found = path_value(*parsed, path);
-        auto const* whole = found == nullptr ? nullptr : std::get_if<std::int64_t>(&found->data);
-        return whole == nullptr || *whole < 0 ? std::uint64_t{0} : static_cast<std::uint64_t>(*whole);
-    };
     std::uint64_t repairs = 0;
-    if (auto const* group = path_value(*parsed, {"repairs"})) {
+    if (auto const* group = json::at(*parsed, {"repairs"})) {
         if (auto const* members = std::get_if<json::object>(&group->data)) {
             for (auto const& [name, value] : *members) {
                 if (auto const* whole = std::get_if<std::int64_t>(&value.data); whole != nullptr && *whole > 0) {
@@ -170,7 +157,7 @@ constexpr std::pair<std::uint64_t, std::uint64_t> counters_from(std::string_view
             }
         }
     }
-    return {count({"requests"}), repairs};
+    return {json::count_at(*parsed, {"requests"}).value_or(0), repairs};
 }
 
 constexpr std::vector<std::string> as_strings(std::initializer_list<std::string_view> const words) {
@@ -184,6 +171,9 @@ static_assert(!parse(as_strings({"bogus"})).has_value() && !parse(as_strings({"s
 static_assert(parse(as_strings({"setup", "--vscode", "/s.json"})).value().vscode_file == "/s.json");
 static_assert(parse(as_strings({"env", "--vscode"})).value().vscode_file.empty());
 static_assert(split_listen("127.0.0.1:9480")->port == 9480 && !split_listen("nocolon") && !split_listen(":80") && !split_listen("h:99999x"));
+static_assert(parse(as_strings({"usage", "--days", "30", "--json"})).value().days == 30 && parse(as_strings({"usage"})).value().days == default_days);
+static_assert(!parse(as_strings({"usage", "--days"})).has_value() && !parse(as_strings({"usage", "--days", "0"})).has_value() &&
+              !parse(as_strings({"usage", "--days", "9x"})).has_value() && !parse(as_strings({"usage", "--days", "99999"})).has_value());
 static_assert(base_url({.host = "127.0.0.1", .port = 9480}) == "http://127.0.0.1:9480/anthropic");
 static_assert(statusline_input(R"({"model":{"display_name":"Opus"},"workspace":{"current_dir":"/w/p"},"context_window":{"used_percentage":41}})").context_percent == 41);
 static_assert(counters_from(R"({"requests":7,"repairs":{"a":2,"b":1}})") == std::pair<std::uint64_t, std::uint64_t>{7, 3});

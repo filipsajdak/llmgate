@@ -23,7 +23,8 @@ llmgate claude         # starts the gateway if it is down, then runs Claude Code
 | `llmgate setup --vscode FILE` | Merges `claudeCode.environmentVariables` and `claudeCode.disableLoginPrompt` into a VS Code settings file (plain JSON only) |
 | `llmgate env [--json\|--vscode]` | Prints the environment as shell exports, JSON or a VS Code settings snippet |
 | `llmgate status` / `llmgate stop` | Shows whether the gateway is up and its counters; stops a gateway that `llmgate claude` started |
-| `llmgate statusline` | The status line command: model, folder, git branch, a context bar, gateway health, request and repair counts |
+| `llmgate usage [--days N] [--json]` | Per-day, per-model token report from the usage ledger, with the budget standing; works without the gateway running |
+| `llmgate statusline` | The status line command: model, folder, git branch, a context bar, gateway health, request and repair counts, and today's tokens against the budget |
 | `llmgate login` | GitHub Copilot device login |
 | `llmgate --check-config` | Validates the configuration; unknown keys and wrong types are reported with their path |
 
@@ -39,10 +40,25 @@ The first time Claude Code sees the dummy `ANTHROPIC_API_KEY` it asks once wheth
 | a login helper, log scraping for the device code | `llmgate login` |
 | plan-mode hooks, write-size rules, attribution-header and stream-cut workarounds | the gateway keeps system reminders, repairs streams and sets the environment itself |
 | VS Code settings script | `llmgate setup --vscode FILE`, `llmgate env --vscode` |
-| status line script | `llmgate statusline` (cost and budget lines arrive with the usage slice) |
-| usage ledger, budgets, quota, doctor, fallback and role routing | not built yet; see the planned slices below |
+| status line script, cost hook | `llmgate statusline` (third line: today's tokens and budget) |
+| usage ledger, budgets | `usage` in the configuration, `llmgate usage` |
+| quota, doctor, fallback and role routing | not built yet; see the planned slices below |
 
 `llmgate --version` prints the version.
+
+## Usage ledger and budgets
+
+Every request that reaches the point of calling the upstream is written as one JSON line to `usage.ledger_file` (default `~/.local/state/llmgate/usage.jsonl`, created `0600` in a `0700` directory; an empty value turns the ledger off). A line holds the time, the model Claude Code asked for and the one the upstream answered with, the role (`opus`, `sonnet`, `haiku` or `other`), the session id Claude Code sends in the request metadata, the four token counts (`input`, `output`, `cache_read`, `cache_creation`), the duration, the HTTP status and how many stream repairs were needed. It never holds prompt or response text.
+
+The counts are the upstream's own: the usage in the reply, or in `message_start` and the final `message_delta` of a stream, so they are authoritative rather than estimated. A request that fails still gets a line, with its status and zero tokens. At startup the gateway reads the file back; lines it cannot read are skipped and counted.
+
+```jsonc
+"usage": { "budget": { "daily_tokens": 1000000, "monthly_tokens": 20000000, "warn_percent": 80 } }
+```
+
+A budget counts `input + output + cache_creation` tokens. Cache reads are shown in the report but not counted, because Claude Code re-reads its whole context from the cache on every turn and counting that would use a budget up in a few prompts. Days and months are UTC, so the daily budget resets at 00:00 UTC (01:00 or 02:00 in Poland). Past `warn_percent` the status line turns to `high`; at 100 % the gateway answers new requests with `429 rate_limit_error` ("llmgate budget used up: daily 1.2M of 1.0M tokens; resets at 00:00 UTC"), which Claude Code shows as the error. It is a soft limit: requests already running finish, so a few concurrent requests can overshoot it.
+
+`/llmgate/stats` carries today's and the month's totals and the budget standing, `llmgate usage` prints the report, and the status line reads the same numbers. Appending a line is one small blocking `write` per request on the gateway's thread.
 
 ## Who may use the gateway
 
@@ -142,6 +158,7 @@ Requires GCC 16.2 (`/opt/homebrew/bin/g++-16`), CMake 4.4+, Ninja. Clang cannot 
 | An exported non-template free function that is a coroutine and has its body in a module interface makes importers fail with `failed to read compiled module cluster N: Bad file data` | Declare it in the interface and define it in an implementation unit (`fetch.cpp`, `copilot.cpp`); coroutine class members and templates are fine |
 | GCC 16.2 at `-O2` reports `-Wfree-nonheap-object` for the destructor of a `vector<pair<string,string>>` built from a braced list in the same function (valid code) | Build such lists with `emplace_back` in tests; the library functions are not affected |
 | A constexpr function in one module that is called at run time from another translation unit can leave members of standard-library specialisations it instantiates undefined at link time (`expected<json::value,...>::operator*`, `string operator+`) | The json module explicitly instantiates `expected<value, parse_error>` and builds paths with `append`; if a new link error names a std symbol from a module function, add an explicit instantiation or avoid that operator |
+| `std::add_sat` (saturating arithmetic) is not exported by `import std` in GCC 16.2 | `usage::add_sat` is a three-line local version; replace it when `import std` provides it |
 | `import std` through CMake needs the `CxxImportStd` experimental gate | Set before `project()` in `CMakeLists.txt` |
 | `SSL_get0_group_name` before the handshake finishes dereferences a null session | Guarded in `tls::connection::negotiated_group`, covered by a named test |
 | LeakSanitizer found spawned server loops still suspended when a reactor was destroyed | `reactor::spawn` registers each task and the reactor destroys unfinished ones |

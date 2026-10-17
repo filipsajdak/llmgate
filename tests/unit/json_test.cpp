@@ -40,6 +40,20 @@ constexpr std::string_view full_config = R"(
 )";
 
 const suite json_suite = [] {
+    "capability_path_helpers_read_nested_text_and_counts_and_ignore_the_wrong_type"_test = [] {
+        auto const parsed = parse(R"({"a":{"b":"text","n":5,"f":2.5,"neg":-1,"s":"x"},"list":[1]})");
+
+        expect(text_at(*parsed, {"a", "b"}) == "text");
+        expect(text_at(*parsed, {"a", "n"}).empty());
+        expect(count_at(*parsed, {"a", "n"}) == std::optional<std::uint64_t>{5});
+        expect(count_at(*parsed, {"a", "f"}) == std::optional<std::uint64_t>{2});
+        expect(!count_at(*parsed, {"a", "neg"}).has_value());
+        expect(!count_at(*parsed, {"a", "s"}).has_value());
+        expect(at(*parsed, {"a", "missing"}) == nullptr);
+        expect(at(*parsed, {"list", "x"}) == nullptr);
+        expect(at(*parsed, {}) == &*parsed);
+    };
+
     "capability_a_config_is_read_into_the_struct_by_member_name"_test = [] {
         auto const loaded = read_text<settings>(full_config);
 

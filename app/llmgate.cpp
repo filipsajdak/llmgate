@@ -88,6 +88,14 @@ int serve(gateway::config settings) {
         std::println(stderr, "llmgate: upstream.base_url is not a valid http or https URL");
         return exit_config;
     }
+    if (auto const sink = commands::ledger_sink(settings.usage.ledger_file)) {
+        auto history = commands::read_ledger(settings.usage.ledger_file);
+        if (history.skipped != 0) {
+            std::println(stderr, "llmgate: {} unreadable usage ledger lines were skipped", history.skipped);
+        }
+        proxy.use_ledger(std::move(history.loaded));
+        proxy.persist_usage_with(sink);
+    }
     std::println("llmgate listening on {}:{}", address->host, listening->port());
     std::fflush(stdout);
     loop.run(httpio::serve(*listening, proxy, httpio::limits{}));
@@ -141,6 +149,8 @@ int dispatch(commands::context const& where) {
             return commands::run_status(where);
         case arguments::command::stop:
             return commands::run_stop(where);
+        case arguments::command::usage:
+            return commands::run_usage(where);
         case arguments::command::statusline:
             break;
     }
@@ -152,7 +162,7 @@ int dispatch(commands::context const& where) {
 int main(int argc, char** argv) {
     auto const parsed = arguments::parse(std::vector<std::string>(argv + 1, argv + argc));
     if (!parsed) {
-        std::println(stderr, "llmgate: {}\nusage: llmgate [--config PATH] [serve | login | claude ARGS... | env [--json|--vscode] | setup [--service] [--dry-run] [--vscode FILE] | status | stop | statusline] | --check-config | --version", parsed.error());
+        std::println(stderr, "llmgate: {}\nusage: llmgate [--config PATH] [serve | login | claude ARGS... | env [--json|--vscode] | setup [--service] [--dry-run] [--vscode FILE] | status | stop | usage [--days N] [--json] | statusline] | --check-config | --version", parsed.error());
         return exit_usage;
     }
     if (parsed->show_version) {

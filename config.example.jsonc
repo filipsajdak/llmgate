@@ -36,6 +36,12 @@
     "effort": "medium"
   },
 
+  // usage ledger and budgets (0 or absent = no limit; counted tokens are input + output + cache writes)
+  "usage": {
+    "ledger_file": "~/.local/state/llmgate/usage.jsonl",
+    "budget": { "daily_tokens": 0, "monthly_tokens": 0, "warn_percent": 80 }
+  },
+
   // GitHub Copilot device login: run `llmgate login` once
   "copilot": { "token_file": "~/.config/llmgate/copilot-token.json" }
 }

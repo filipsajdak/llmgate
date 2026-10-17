@@ -13,7 +13,9 @@ cat > "$work/llmgate.jsonc" <<JSON
 {
   "listen": "127.0.0.1:$port",
   "upstream": { "base_url": "http://127.0.0.1:1" },
-  "claude": { "profile_dir": "$work/profile", "context_tokens": 150000, "sonnet": "claude-sonnet-5-5" }
+  "static_token_env": "E2E_UPSTREAM_TOKEN",
+  "claude": { "profile_dir": "$work/profile", "context_tokens": 150000, "sonnet": "claude-sonnet-5-5" },
+  "usage": { "ledger_file": "$work/usage.jsonl", "budget": { "daily_tokens": 1000 } }
 }
 JSON
 cat > "$work/claude" <<'STUB'
@@ -21,6 +23,7 @@ cat > "$work/claude" <<'STUB'
 { echo "ARGS: $*"; env | grep -E '^(ANTHROPIC_|CLAUDE_|DISABLE_)' | sort; } > "$STUB_OUTPUT"
 STUB
 chmod +x "$work/claude"
+export E2E_UPSTREAM_TOKEN=test-token
 export STUB_OUTPUT="$work/claude.out" LLMGATE_CLAUDE="$work/claude"
 config="$work/llmgate.jsonc"
 
@@ -68,6 +71,16 @@ echo '{"editor.fontSize": 14}' > "$work/vscode.json"
 "$binary" --config "$config" setup --vscode "$work/vscode.json" >/dev/null
 check sh -c "grep -q 'editor.fontSize' '$work/vscode.json' && grep -q 'ANTHROPIC_BASE_URL' '$work/vscode.json'"
 
+now=$(date +%s)
+printf '{"time":%s,"requested":"sonnet","model":"claude-sonnet-5-5","role":"sonnet","session":"s1","input":400,"output":500,"cache_read":9000,"cache_creation":0,"duration_ms":10,"status":200,"repairs":0}\nnot json\n' "$now" > "$work/usage.jsonl"
+
+label="usage prints the day, the model, the total and the budget standing"
+"$binary" --config "$config" usage --days 2 > "$work/usage.out"
+check sh -c "grep -q claude-sonnet-5-5 '$work/usage.out' && grep -q '^total' '$work/usage.out' && grep -q 'budget daily: 900 of 1k tokens (90%) - warning' '$work/usage.out' && grep -q '1 unreadable' '$work/usage.out'"
+
+label="usage --json lists the rows"
+check sh -c "'$binary' --config '$config' usage --json | grep -q '\"requests\": 1'"
+
 label="status says the gateway is down before anything started it"
 check sh -c "! '$binary' --config '$config' status >/dev/null 2>&1"
 
@@ -86,6 +99,14 @@ first_pid=$(cat "$work/state/llmgate/gateway.pid")
 "$binary" --config "$config" claude --again
 check sh -c "[ \"$first_pid\" = \"\$(cat '$work/state/llmgate/gateway.pid')\" ] && grep -q 'ARGS: --again' '$work/claude.out'"
 
+label="the status line adds a usage line with the budget bar"
+line=$(printf '{"model":{"display_name":"Opus"}}' | "$binary" --config "$config" statusline)
+check sh -c "echo '$line' | grep -q 'usage today 900/1k daily \\[#########-\\] 90% high'"
+
+label="a request that cannot reach the upstream is still recorded with its status"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$port/anthropic/v1/messages" -H 'content-type: application/json' -d '{"model":"claude-sonnet-5-5","max_tokens":1,"messages":[]}')
+check sh -c "[ '$code' = 502 ] && tail -n 1 '$work/usage.jsonl' | grep -q '\"status\":502'"
+
 label="the status line draws two lines with the model, the context bar and the gateway"
 line=$(printf '{"model":{"display_name":"Opus"},"workspace":{"current_dir":"%s"},"context_window":{"used_percentage":55}}' "$work" | "$binary" --config "$config" statusline)
 check sh -c "echo '$line' | grep -q 'llmgate\] Opus' && echo '$line' | grep -q 'ctx \[#####-----\] 55%' && echo '$line' | grep -q 'gateway ok'"
@@ -96,7 +117,18 @@ sleep 0.5
 line=$(printf '{"model":{"display_name":"Opus"}}' | "$binary" --config "$config" statusline)
 check sh -c "echo '$line' | grep -q 'gateway DOWN'"
 
-label="stop reports nothing is recorded the second time"
+label="an exhausted budget refuses new requests with a rate limit error"
+printf '{"time":%s,"requested":"opus","model":"claude-opus-5-5","role":"opus","session":"s2","input":900,"output":900,"cache_read":0,"cache_creation":0,"duration_ms":10,"status":200,"repairs":0}\n' "$now" >> "$work/usage.jsonl"
+"$binary" --config "$config" claude --restarted
+body=$(curl -s -w ' %{http_code}' -X POST "http://127.0.0.1:$port/anthropic/v1/messages" -H 'content-type: application/json' -d '{"model":"claude-sonnet-5-5","max_tokens":1,"messages":[]}')
+check sh -c "echo '$body' | grep -q 'rate_limit_error' && echo '$body' | grep -q 'budget used up: daily' && echo '$body' | grep -q ' 429\$'"
+
+label="the status line says EXHAUSTED"
+line=$(printf '{"model":{"display_name":"Opus"}}' | "$binary" --config "$config" statusline)
+check sh -c "echo '$line' | grep -q 'EXHAUSTED'"
+
+label="stop ends the gateway that claude started, and a second stop says none is recorded"
+"$binary" --config "$config" stop >/dev/null
 check sh -c "! '$binary' --config '$config' stop >/dev/null 2>&1"
 
 label="a squatter on the port is refused and receives nothing"

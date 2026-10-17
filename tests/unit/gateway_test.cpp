@@ -10,6 +10,7 @@ import llmgate.proof;
 import llmgate.routing;
 import llmgate.sse;
 import llmgate.tls;
+import llmgate.usage;
 import std;
 
 namespace {
@@ -27,6 +28,8 @@ constexpr milliseconds tick{1};
 
 enum class behaviour {
     json_ok,
+    json_usage,
+    sse_usage,
     sse_clean,
     sse_duplicate_start,
     sse_missing_start,
@@ -94,6 +97,16 @@ struct fake_upstream {
                 fields.add("Content-Type", "application/json");
                 fields.add("Request-Id", "req_1");
                 co_return co_await out.send(200, fields, R"({"type":"message","content":[]})");
+            }
+            case behaviour::json_usage: {
+                http::header_map fields;
+                fields.add("Content-Type", "application/json");
+                co_return co_await out.send(200, fields, R"({"type":"message","model":"claude-opus-upstream","usage":{"input_tokens":11,"output_tokens":5,"cache_read_input_tokens":3}})");
+            }
+            case behaviour::sse_usage: {
+                auto const counted_start = std::pair{"message_start", stream_body_event("message_start", R"(,"message":{"id":"m","model":"claude-opus-upstream","usage":{"input_tokens":20,"output_tokens":1,"cache_creation_input_tokens":4}})")};
+                auto const counted_delta = std::pair{"message_delta", stream_body_event("message_delta", R"(,"delta":{},"usage":{"output_tokens":9})")};
+                co_return co_await script(out, {counted_start, block, text, end_block, counted_delta, stop});
             }
             case behaviour::rate_limited: {
                 http::header_map fields;
@@ -189,6 +202,12 @@ httpio::request_spec messages_request(std::string body, std::string target = "/a
     return {.method = "POST", .target = std::move(target), .host = "localhost", .fields = std::move(fields), .body = std::move(body)};
 }
 
+constexpr std::int64_t fixed_time = 1760659200;
+
+std::string chat_with_session(std::string_view const model, bool const stream) {
+    return std::format(R"({{"model":"{}","max_tokens":8,"stream":{},"metadata":{{"user_id":"user_ab_account_cd_session_5f3a-90"}},"messages":[{{"role":"user","content":"hi"}}]}})", model, stream);
+}
+
 std::string chat(std::string_view const model, bool const stream) {
     return std::format(R"({{"model":"{}","max_tokens":8,"stream":{},"messages":[{{"role":"user","content":"hi"}}]}})", model, stream);
 }
@@ -202,23 +221,24 @@ struct world {
     tls::client_context tls_context;
     gateway::proxy gateway;
 
-    static gateway::config settings(std::uint16_t const upstream_port) {
+    static gateway::config settings(std::uint16_t const upstream_port, gateway::usage_config usage_settings) {
         return {.listen = "127.0.0.1:0",
                 .upstream = {.base_url = std::format("http://127.0.0.1:{}", upstream_port),
                              .messages_path = "/v1/messages",
                              .headers = {{"Editor-Version", "test/1.0"}}},
                 .models = {{"opus", "claude-opus-upstream"}},
-                .time = {.connect = std::chrono::seconds{2}, .response_head = std::chrono::seconds{2}, .stream_idle = short_idle}};
+                .time = {.connect = std::chrono::seconds{2}, .response_head = std::chrono::seconds{2}, .stream_idle = short_idle},
+                .usage = std::move(usage_settings)};
     }
 
     explicit world(std::string token = "upstream-token", std::string client_key = "", std::optional<std::uint64_t> const seed = std::nullopt,
-                   std::string identity = "")
+                   std::string identity = "", gateway::usage_config usage_settings = {})
         : loop{seed},
           upstream_listener{std::move(*net::listener::bind(loop, std::string{loopback}, 0))},
           gateway_listener{std::move(*net::listener::bind(loop, std::string{loopback}, 0))},
           credential{std::move(token)},
           tls_context{std::move(*tls::client_context::make(tls::group_policy::classical_only))},
-          gateway{loop, settings(upstream_listener.port()),
+          gateway{loop, settings(upstream_listener.port(), std::move(usage_settings)),
                   {.client_key = std::move(client_key), .allowed_hosts = routing::default_allowed_hosts(loopback, gateway_listener.port()), .identity_key = std::move(identity), .identity_scope = "scope-a"},
                   credential, tls_context} {
         upstream.loop = &loop;
@@ -261,6 +281,125 @@ async::task<bool> eventually(async::reactor& loop, std::function<bool()> conditi
 }
 
 const suite gateway_suite = [] {
+    "capability_a_plain_reply_is_counted_in_the_ledger_and_written_as_a_line"_test = [] {
+        world w;
+        w.gateway.use_clock([] { return fixed_time; });
+        std::vector<std::string> lines;
+        w.gateway.persist_usage_with([&lines](std::string const& line) { lines.push_back(line); });
+        w.upstream.mode = behaviour::json_usage;
+
+        auto const answer = w.ask(messages_request(chat_with_session("opus", false)));
+
+        expect(answer.status == 200);
+        auto const today = w.gateway.ledger().on_day(usage::day_of(fixed_time));
+        expect(today.used == usage::tokens{.input = 11, .output = 5, .cache_read = 3});
+        expect(today.requests == 1_u);
+        expect(lines.size() == 1_u);
+        auto const entry = usage::from_line(lines.at(0));
+        expect(entry.has_value());
+        expect(entry->requested == "opus" && entry->model == "claude-opus-upstream" && entry->role == "opus");
+        expect(entry->session == "5f3a-90" && entry->status == 200 && entry->time == fixed_time);
+    };
+
+    "defect_a_hostile_model_name_is_neutralised_before_it_is_recorded"_test = [] {
+        world w;
+        w.gateway.use_clock([] { return fixed_time; });
+        std::vector<std::string> lines;
+        w.gateway.persist_usage_with([&lines](std::string const& line) { lines.push_back(line); });
+
+        (void)w.ask(messages_request(chat("evil\\u001b[2Jname", false)));
+
+        auto const entry = usage::from_line(lines.at(0));
+        expect(entry->requested == "evil?[2Jname");
+        expect(!lines.at(0).contains("\\u001b"));
+    };
+
+    "capability_a_stream_is_counted_from_its_start_and_final_delta"_test = [] {
+        world w;
+        w.gateway.use_clock([] { return fixed_time; });
+        w.upstream.mode = behaviour::sse_usage;
+
+        auto const answer = w.ask(messages_request(chat("opus", true)));
+
+        expect(answer.status == 200);
+        expect(w.gateway.ledger().on_day(usage::day_of(fixed_time)).used == usage::tokens{.input = 20, .output = 9, .cache_creation = 4});
+    };
+
+    "capability_a_repaired_stream_records_how_many_repairs_it_needed"_test = [] {
+        world w;
+        w.gateway.use_clock([] { return fixed_time; });
+        std::vector<std::string> lines;
+        w.gateway.persist_usage_with([&lines](std::string const& line) { lines.push_back(line); });
+        w.upstream.mode = behaviour::sse_duplicate_start;
+
+        (void)w.ask(messages_request(chat("opus", true)));
+
+        expect(lines.size() == 1_u);
+        expect(usage::from_line(lines.at(0))->repairs == 2_u);
+    };
+
+    "limit_an_upstream_error_is_recorded_with_its_status_and_no_tokens"_test = [] {
+        world w;
+        w.gateway.use_clock([] { return fixed_time; });
+        std::vector<std::string> lines;
+        w.gateway.persist_usage_with([&lines](std::string const& line) { lines.push_back(line); });
+        w.upstream.mode = behaviour::rate_limited;
+
+        (void)w.ask(messages_request(chat("opus", false)));
+
+        auto const entry = usage::from_line(lines.at(0));
+        expect(entry->status == 429 && entry->used == usage::tokens{});
+        expect(w.gateway.ledger().on_day(usage::day_of(fixed_time)).requests == 1_u);
+    };
+
+    "limit_an_exhausted_daily_budget_refuses_with_a_rate_limit_error_until_the_next_day"_test = [] {
+        world w{"upstream-token", "", std::nullopt, "", {.budget = {.daily_tokens = 10}}};
+        std::int64_t now = fixed_time;
+        w.gateway.use_clock([&now] { return now; });
+        w.upstream.mode = behaviour::json_usage;
+
+        auto const first = w.ask(messages_request(chat("opus", false)));
+        auto const second = w.ask(messages_request(chat("opus", false)));
+        now += usage::seconds_per_day;
+        auto const next_day = w.ask(messages_request(chat("opus", false)));
+
+        expect(first.status == 200);
+        expect(second.status == 429);
+        expect(second.body.contains(R"("type":"rate_limit_error")"));
+        expect(second.body.contains("llmgate budget used up: daily 16 of 10 tokens"));
+        expect(next_day.status == 200);
+        expect(w.upstream.seen.size() == 2_u);
+        expect(w.gateway.counters().budget_refused == 1_u);
+    };
+
+    "limit_a_warning_level_budget_still_serves"_test = [] {
+        world w{"upstream-token", "", std::nullopt, "", {.budget = {.daily_tokens = 20}}};
+        w.gateway.use_clock([] { return fixed_time; });
+        w.upstream.mode = behaviour::json_usage;
+
+        (void)w.ask(messages_request(chat("opus", false)));
+        auto const second = w.ask(messages_request(chat("opus", false)));
+
+        expect(second.status == 200);
+        expect(w.gateway.counters().budget_refused == 0_u);
+    };
+
+    "capability_the_statistics_endpoint_reports_todays_usage_and_the_budget"_test = [] {
+        world w{"upstream-token", "", std::nullopt, "", {.budget = {.daily_tokens = 100}}};
+        w.gateway.use_clock([] { return fixed_time; });
+        w.upstream.mode = behaviour::json_usage;
+        (void)w.ask(messages_request(chat("opus", false)));
+        auto stats = messages_request("");
+        stats.method = "GET";
+        stats.target = "/llmgate/stats";
+
+        auto const answer = w.ask(std::move(stats));
+
+        auto const headline = usage::headline_from(answer.body);
+        expect(headline.today == 16_u);
+        expect(headline.state == "ok" && headline.window == "daily" && headline.limit == 100_u && headline.percent == 16_u);
+    };
+
     "capability_a_known_alias_is_swapped_and_the_upstream_reply_returns_unchanged"_test = [] {
         world w;
 
@@ -407,7 +546,7 @@ const suite gateway_suite = [] {
         auto const gone = net::listener::bind(w.loop, std::string{loopback}, 0)->port();
         gateway::static_credential credential{"t"};
         auto server = net::listener::bind(w.loop, std::string{loopback}, 0);
-        gateway::proxy broken{w.loop, world::settings(gone), {.allowed_hosts = routing::default_allowed_hosts(loopback, server->port())},
+        gateway::proxy broken{w.loop, world::settings(gone, {}), {.allowed_hosts = routing::default_allowed_hosts(loopback, server->port())},
                               credential, w.tls_context};
         w.loop.spawn(httpio::serve(*server, broken, httpio::limits{}));
         auto request = messages_request(chat("opus", false));

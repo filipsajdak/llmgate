@@ -14,6 +14,7 @@ import llmgate.reflect;
 import llmgate.routing;
 import llmgate.sse;
 import llmgate.tls;
+import llmgate.usage;
 
 export namespace llmgate::gateway {
 
@@ -41,6 +42,11 @@ struct copilot_config {
     std::optional<milliseconds> poll_interval{};
 };
 
+struct usage_config {
+    std::string ledger_file = "~/.local/state/llmgate/usage.jsonl";
+    usage::budget budget{};
+};
+
 struct config {
     [[= json::required]] std::string listen{};
     [[= json::required]] upstream_config upstream{};
@@ -52,6 +58,7 @@ struct config {
     std::string client_key_env{};
     std::vector<std::string> allowed_hosts{};
     claude::launch_config claude{};
+    usage_config usage{};
 };
 
 struct access_policy {
@@ -91,6 +98,7 @@ struct stats {
     std::uint64_t upstream_timeouts = 0;
     std::uint64_t client_disconnects = 0;
     std::uint64_t refused = 0;
+    std::uint64_t budget_refused = 0;
     std::uint64_t connections_opened = 0;
     std::uint64_t connections_reused = 0;
     std::map<anthropic::repair_kind, std::uint64_t> repairs;
@@ -130,16 +138,22 @@ std::string models_json(std::map<std::string, std::string> const& models) {
     return std::format(R"({{"data":[{}],"has_more":false}})", items);
 }
 
-std::string stats_json(stats const& counters) {
+std::string stats_json(stats const& counters, std::string_view const usage_json) {
     std::string repairs;
     for (auto const& [kind, count] : counters.repairs) {
         std::format_to(std::back_inserter(repairs), "{}\"{}\":{}", repairs.empty() ? "" : ",", reflect::enum_name(kind), count);
     }
     return std::format(
-        R"({{"requests":{},"streamed":{},"upstream_failures":{},"upstream_timeouts":{},"client_disconnects":{},"refused":{},"connections_opened":{},"connections_reused":{},"repairs":{{{}}}}})",
+        R"({{"requests":{},"streamed":{},"upstream_failures":{},"upstream_timeouts":{},"client_disconnects":{},"refused":{},"connections_opened":{},"connections_reused":{},"budget_refused":{},"repairs":{{{}}},"usage":{}}})",
         counters.requests, counters.streamed, counters.upstream_failures, counters.upstream_timeouts, counters.client_disconnects, counters.refused,
-        counters.connections_opened, counters.connections_reused, repairs);
+        counters.connections_opened, counters.connections_reused, counters.budget_refused, repairs, usage_json);
 }
+
+struct request_note {
+    std::string requested{};
+    std::string session{};
+    std::chrono::steady_clock::time_point began{};
+};
 
 struct relay_state {
     stats* counters;
@@ -153,14 +167,20 @@ struct relay_state {
     sse::parser parser{};
     anthropic::stream_guard guard{};
     std::deque<std::string> pending{};
+    usage::observer observed{};
+    std::uint64_t repairs_seen = 0;
 
     void emit(anthropic::output_event const& item) {
+        observed.on_event(item.name, item.data);
         std::string frame;
         sse::write_event(frame, item.name, item.data);
         pending.push_back(std::move(frame));
     }
 
-    void note(anthropic::repair const& item) { ++counters->repairs[item.kind]; }
+    void note(anthropic::repair const& item) {
+        ++counters->repairs[item.kind];
+        ++repairs_seen;
+    }
 
     void on_chunk(std::span<std::byte const> bytes) {
         if (streaming) {
@@ -216,6 +236,10 @@ public:
     bool uses_credential_endpoint() const { return credentials_->endpoint().has_value(); }
 
     stats const& counters() const noexcept { return counters_; }
+    usage::ledger const& ledger() const noexcept { return ledger_; }
+    void use_ledger(usage::ledger book) { ledger_ = std::move(book); }
+    void persist_usage_with(std::function<void(std::string const&)> sink) { persist_ = std::move(sink); }
+    void use_clock(std::function<std::int64_t()> clock) { clock_ = std::move(clock); }
     bool configured() const noexcept { return upstream_.has_value(); }
 
     template <net::byte_stream Client>
@@ -231,7 +255,7 @@ public:
             case routing::route::count_tokens: co_return co_await estimate_tokens(incoming, out);
             case routing::route::models: co_return co_await respond(out, 200, detail::models_json(settings_.models));
             case routing::route::health: co_return co_await respond(out, 200, health_body(incoming.head.target));
-            case routing::route::statistics: co_return co_await respond(out, 200, detail::stats_json(counters_));
+            case routing::route::statistics: co_return co_await respond(out, 200, detail::stats_json(counters_, usage::summary_json(ledger_, settings_.usage.budget, clock_())));
             case routing::route::wrong_method: co_return co_await reject(out, routing::error_reply(405, "invalid_request_error", "method not allowed"));
             case routing::route::unknown_path: break;
         }
@@ -318,6 +342,10 @@ private:
         if (!prepared) {
             co_return co_await reject(out, std::move(prepared.error()));
         }
+        if (auto const now = verdict(); now.state == usage::level::exhausted) {
+            ++counters_.budget_refused;
+            co_return co_await reject(out, routing::error_reply(429, "rate_limit_error", usage::refusal_message(now)));
+        }
         auto token = co_await credentials_->bearer();
         if (!token) {
             co_return co_await reject(out, routing::error_reply(401, "authentication_error", "no upstream credential: run llmgate login (" + token.error().message() + ")"));
@@ -327,9 +355,14 @@ private:
                 upstream_ = std::move(*parsed);
             }
         }
+        detail::request_note note{.requested = std::move(prepared->requested),
+                                  .session = usage::session_of(incoming.body),
+                                  .began = std::chrono::steady_clock::now()};
         auto upstream = co_await connect_upstream();
         if (!upstream) {
             ++counters_.upstream_failures;
+            detail::relay_state unreached{.counters = &counters_, .buffer_limit = 0};
+            record_usage(note, unreached, upstream.error());
             co_return co_await reject(out, routing::error_reply(502, "api_error", "cannot reach the upstream: " + upstream.error().message()));
         }
         httpio::request_spec spec{.method = "POST",
@@ -337,14 +370,49 @@ private:
                                   .host = upstream_->host,
                                   .fields = detail::upstream_headers(incoming, settings_.upstream, *token),
                                   .body = std::move(prepared->body)};
-        co_return co_await relay(*upstream, std::move(spec), out, upstream_key());
+        co_return co_await relay(*upstream, std::move(spec), out, upstream_key(), std::move(note));
+    }
+
+    usage::verdict verdict() const {
+        auto const day = usage::day_of(clock_());
+        return usage::evaluate(settings_.usage.budget, ledger_.on_day(day).used.counted(), ledger_.in_month(usage::month_of(day)).used.counted());
+    }
+
+    static int final_status(detail::relay_state const& state, std::error_code const failure) {
+        if (failure == std::errc::connection_aborted) {
+            return client_closed_status;
+        }
+        if (state.head && !failure) {
+            return state.head->status;
+        }
+        return failure == std::errc::timed_out ? gateway_timeout_status : bad_gateway_status;
+    }
+
+    void record_usage(detail::request_note const& note, detail::relay_state& state, std::error_code const failure) {
+        if (!state.streaming && state.head && !failure && state.head->status >= 200 && state.head->status < 300) {
+            state.observed.on_body(state.buffered);
+        }
+        auto const elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - note.began);
+        usage::record entry{.time = clock_(),
+                            .requested = usage::label(note.requested),
+                            .model = usage::label(state.observed.model().empty() ? note.requested : state.observed.model()),
+                            .role = std::string{usage::role_of(note.requested)},
+                            .session = note.session,
+                            .used = state.observed.used(),
+                            .duration_ms = elapsed.count(),
+                            .status = final_status(state, failure),
+                            .repairs = state.repairs_seen};
+        ledger_.add(entry);
+        if (persist_) {
+            persist_(usage::to_line(entry));
+        }
     }
 
     net::endpoint upstream_key() const { return net::endpoint{.host = upstream_->host, .port = upstream_->port}; }
 
     template <net::byte_stream Client>
     async::task<net::result_void> relay(net::any_stream& upstream, httpio::request_spec spec, httpio::response_writer<Client>& out,
-                                        net::endpoint key) {
+                                        net::endpoint key, detail::request_note note) {
         auto const wire = httpio::format_request(spec);
         if (!wire) {
             co_return co_await reject(out, routing::error_reply(502, "api_error", "cannot format the upstream request"));
@@ -364,11 +432,13 @@ private:
                 state.head_sent = true;
                 ++counters_.streamed;
                 if (auto const begun = co_await out.begin_stream(state.head->status, stream_headers(*state.head)); !begun) {
+                    record_usage(note, state, std::make_error_code(std::errc::connection_aborted));
                     co_return begun;
                 }
             }
             for (auto const& frame : std::exchange(state.pending, {})) {
                 if (auto const written = co_await out.write_chunk(std::as_bytes(std::span{frame})); !written) {
+                    record_usage(note, state, std::make_error_code(std::errc::connection_aborted));
                     co_return written;
                 }
             }
@@ -377,7 +447,9 @@ private:
                 break;
             }
         }
-        co_return co_await conclude(upstream, state, failure, out, std::move(key));
+        auto const concluded = co_await conclude(upstream, state, failure, out, std::move(key));
+        record_usage(note, state, failure);
+        co_return concluded;
     }
 
     static http::header_map stream_headers(http::message_head const& head) {
@@ -420,6 +492,9 @@ private:
     }
 
     static constexpr std::size_t buffer_limit = 33554432;
+    static constexpr int client_closed_status = 499;
+    static constexpr int gateway_timeout_status = 504;
+    static constexpr int bad_gateway_status = 502;
 
     async::reactor* loop_;
     config settings_;
@@ -429,6 +504,9 @@ private:
     std::optional<routing::endpoint_url> upstream_;
     net::connection_pool<net::any_stream> pool_;
     stats counters_;
+    usage::ledger ledger_{};
+    std::function<void(std::string const&)> persist_{};
+    std::function<std::int64_t()> clock_{[] { return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count(); }};
 };
 
 }  // namespace llmgate::gateway

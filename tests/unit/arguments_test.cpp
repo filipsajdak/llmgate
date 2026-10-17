@@ -45,6 +45,19 @@ const suite arguments_suite = [] {
         expect(!parse(words({"--config"})).has_value());
     };
 
+    "capability_usage_takes_a_day_count_and_defaults_to_a_week"_test = [] {
+        expect(parse(words({"usage"}))->days == 7_u);
+        expect(parse(words({"usage", "--days", "30", "--json"}))->days == 30_u);
+        expect(parse(words({"usage", "--days", "30", "--json"}))->as_json);
+    };
+
+    "limit_a_bad_day_count_is_refused"_test = [] {
+        for (auto const bad : {"0", "-3", "abc", "7x", "3661", ""}) {
+            expect(!parse(words({"usage", "--days", bad})).has_value()) << bad;
+        }
+        expect(!parse(words({"usage", "--days"})).has_value());
+    };
+
     "capability_the_listen_address_splits_into_host_and_port"_test = [] {
         auto const address = split_listen("127.0.0.1:9480");
 

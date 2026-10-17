@@ -38,6 +38,24 @@ const suite statusline_suite = [] {
         expect(text == "[llmgate] Haiku | x\nctx [----------] 0% | gateway DOWN\n");
     };
 
+    "capability_a_third_line_shows_todays_tokens_with_or_without_a_budget"_test = [] {
+        auto const plain = render({.model = "O", .directory = "/x", .gateway_up = true, .usage_known = true, .today_tokens = 1500});
+        auto const budgeted = render({.model = "O", .directory = "/x", .gateway_up = true, .usage_known = true, .today_tokens = 410000,
+                                      .budget_limit = 1000000, .budget_percent = 41, .budget_window = "daily", .budget_state = "ok"});
+
+        expect(plain.ends_with("\nusage today 1k tokens\n"));
+        expect(budgeted.ends_with("\nusage today 410k/1.0M daily [####------] 41%\n"));
+    };
+
+    "limit_warning_and_exhausted_budgets_are_called_out_and_no_usage_means_no_third_line"_test = [] {
+        auto const high = usage_line({.today_tokens = 900, .budget_limit = 1000, .budget_percent = 90, .budget_window = "monthly", .budget_state = "warning"});
+        auto const full = usage_line({.today_tokens = 1100, .budget_limit = 1000, .budget_percent = 110, .budget_window = "daily", .budget_state = "exhausted"});
+
+        expect(high.ends_with("90% high"));
+        expect(full.ends_with("110% EXHAUSTED"));
+        expect(std::ranges::count(render({.model = "O"}), '\n') == 2);
+    };
+
     "limit_a_missing_model_is_shown_as_unknown_instead_of_an_empty_slot"_test = [] {
         expect(render({}).starts_with("[llmgate] model? | "));
     };

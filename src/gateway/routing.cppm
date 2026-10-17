@@ -23,6 +23,7 @@ struct endpoint_url {
 struct prepared_request {
     std::string body;
     bool stream;
+    std::string requested{};
 };
 
 constexpr std::uint16_t https_port = 443;
@@ -224,7 +225,7 @@ constexpr std::expected<prepared_request, reply_body> prepare(std::string_view c
         }
         text = std::move(*replaced);
     }
-    return prepared_request{.body = std::move(text), .stream = stream_text == "true"};
+    return prepared_request{.body = std::move(text), .stream = stream_text == "true", .requested = requested};
 }
 
 static_assert(route_of("POST", "/anthropic/v1/messages?beta=true") == route::messages);

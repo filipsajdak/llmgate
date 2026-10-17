@@ -565,6 +565,42 @@ constexpr std::string write(value const& source, std::size_t const indent = 0) {
     return out;
 }
 
+constexpr value const* at(value const& root, std::initializer_list<std::string_view> const path) {
+    value const* current = &root;
+    for (auto const key : path) {
+        auto const* members = std::get_if<object>(&current->data);
+        if (members == nullptr) {
+            return nullptr;
+        }
+        auto const found = std::ranges::find(*members, key, &object::value_type::first);
+        if (found == members->end()) {
+            return nullptr;
+        }
+        current = &found->second;
+    }
+    return current;
+}
+
+constexpr std::string text_at(value const& root, std::initializer_list<std::string_view> const path) {
+    auto const* found = at(root, path);
+    auto const* text = found == nullptr ? nullptr : std::get_if<std::string>(&found->data);
+    return text == nullptr ? std::string{} : *text;
+}
+
+constexpr std::optional<std::uint64_t> count_at(value const& root, std::initializer_list<std::string_view> const path) {
+    auto const* found = at(root, path);
+    if (found == nullptr) {
+        return std::nullopt;
+    }
+    if (auto const* whole = std::get_if<std::int64_t>(&found->data); whole != nullptr && *whole >= 0) {
+        return static_cast<std::uint64_t>(*whole);
+    }
+    if (auto const* real = std::get_if<double>(&found->data); real != nullptr && *real >= 0.0 && *real < 9.0e18) {
+        return static_cast<std::uint64_t>(*real);
+    }
+    return std::nullopt;
+}
+
 constexpr value make_object(std::initializer_list<std::pair<std::string, value>> const members) {
     return value{object{members}};
 }
