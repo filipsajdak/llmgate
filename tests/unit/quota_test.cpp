@@ -1,0 +1,91 @@
+#include <boost/ut.hpp>
+
+import llmgate.json;
+import llmgate.quota;
+import std;
+
+namespace {
+
+using namespace boost::ut;
+using namespace llmgate;
+
+constexpr std::string_view free_plan = R"({"login":"someone","copilot_plan":"individual","access_type_sku":"free_limited_copilot",
+"quota_reset_date":"2026-11-01","unknown_future_key":{"a":[1,2]},
+"quota_snapshots":{"chat":{"entitlement":200,"remaining":196,"percent_remaining":98.2,"unlimited":false,"has_quota":true,"extra":1},
+"completions":{"entitlement":2000,"remaining":1983,"percent_remaining":99.1,"unlimited":false,"has_quota":true},
+"premium_interactions":{"entitlement":0,"remaining":0,"percent_remaining":0.0,"unlimited":false,"has_quota":false}}})";
+
+constexpr std::string_view paid_plan = R"({"copilot_plan":"business","access_type_sku":"copilot_for_business_seat_quota","quota_reset_date":"2026-12-01",
+"quota_snapshots":{"chat":{"unlimited":true,"has_quota":true,"entitlement":0,"remaining":0},
+"premium_interactions":{"entitlement":300,"quota_remaining":42.5,"has_quota":true,"unlimited":false}}})";
+
+constexpr std::size_t flood = 40;
+
+const suite quota_suite = [] {
+    "capability_the_free_plan_reply_is_read_with_unknown_keys_ignored"_test = [] {
+        auto const found = quota::parse(free_plan);
+
+        expect(found.has_value());
+        expect(found->plan == "individual" && found->sku == "free_limited_copilot" && found->reset_date == "2026-11-01");
+        expect(found->allowances.size() == 3_u);
+        expect(found->allowances[0].remaining == 196_u && found->allowances[0].entitlement == 200_u && found->allowances[0].percent_remaining == 98);
+    };
+
+    "capability_the_remaining_count_falls_back_to_the_fractional_field_and_the_percent_is_computed"_test = [] {
+        auto const found = quota::parse(paid_plan);
+
+        expect(found->allowances[1].remaining == 42_u);
+        expect(found->allowances[1].percent_remaining == 14);
+        expect(found->allowances[0].unlimited);
+    };
+
+    "capability_a_low_allowance_is_flagged_but_an_unlimited_or_absent_one_is_not"_test = [] {
+        expect(quota::any_low(*quota::parse(paid_plan)));
+        expect(!quota::any_low(*quota::parse(free_plan)));
+    };
+
+    "capability_the_report_names_each_allowance_with_remaining_total_and_reset_date"_test = [] {
+        auto const drawn = quota::render(*quota::parse(free_plan));
+
+        expect(drawn.contains("plan: individual (free_limited_copilot)"));
+        expect(drawn.contains("resets: 2026-11-01"));
+        expect(drawn.contains("chat: 196 of 200 left (98%)"));
+        expect(drawn.contains("premium requests: not included in this plan"));
+    };
+
+    "limit_a_reply_without_quota_snapshots_is_unusable"_test = [] {
+        expect(!quota::parse(R"({"copilot_plan":"individual"})"));
+        expect(!quota::parse("<html>"));
+        expect(!quota::parse(""));
+    };
+
+    "limit_control_bytes_in_the_reply_never_reach_the_report"_test = [] {
+        auto const drawn = quota::render(*quota::parse(R"({"copilot_plan":"a\u001b[31mred\u0007","quota_snapshots":{"x\u001b":{"has_quota":true}}})"));
+
+        expect(drawn.find('\x1b') == std::string::npos && drawn.find('\x07') == std::string::npos);
+    };
+
+    "limit_at_most_sixteen_allowances_are_kept"_test = [] {
+        std::string many = R"({"quota_snapshots":{)";
+        for (std::size_t index = 0; index < flood; ++index) {
+            many += (index == 0 ? "" : ",") + std::format(R"("q{}":{{"has_quota":true}})", index);
+        }
+
+        expect(quota::parse(many + "}}")->allowances.size() == quota::most_allowances);
+    };
+
+    "capability_the_json_form_parses_back_and_carries_the_numbers"_test = [] {
+        auto const text = quota::to_json(*quota::parse(free_plan));
+        auto const again = json::parse(text, {.jsonc = false});
+
+        expect(again.has_value());
+        expect(json::text_at(*again, {"plan"}) == "individual");
+        expect(text.contains(R"("remaining": 196)"));
+    };
+};
+
+}  // namespace
+
+int main() {
+    return boost::ut::cfg<>.run() ? 1 : 0;
+}
