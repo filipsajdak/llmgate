@@ -61,6 +61,37 @@ std::string groups_for(group_policy const policy) {
     return std::string{classical_groups};
 }
 
+struct bio_deleter {
+    void operator()(BIO* bio) const noexcept { BIO_free(bio); }
+};
+
+struct x509_deleter {
+    void operator()(X509* certificate) const noexcept { X509_free(certificate); }
+};
+
+struct pkey_deleter {
+    void operator()(EVP_PKEY* key) const noexcept { EVP_PKEY_free(key); }
+};
+
+using bio_ptr = std::unique_ptr<BIO, bio_deleter>;
+using x509_ptr = std::unique_ptr<X509, x509_deleter>;
+using pkey_ptr = std::unique_ptr<EVP_PKEY, pkey_deleter>;
+
+bio_ptr memory_bio(std::string_view const text) {
+    return bio_ptr{BIO_new_mem_buf(text.data(), static_cast<int>(text.size()))};
+}
+
+bool trust_pem(SSL_CTX* const context, std::string_view const pem) {
+    auto const source = memory_bio(pem);
+    auto* const store = SSL_CTX_get_cert_store(context);
+    int added = 0;
+    while (x509_ptr const certificate{PEM_read_bio_X509(source.get(), nullptr, nullptr, nullptr)}) {
+        added += X509_STORE_add_cert(store, certificate.get());
+    }
+    ERR_clear_error();
+    return added > 0;
+}
+
 std::string drain_errors() {
     std::string text;
     while (auto const code = ERR_get_error()) {
@@ -86,7 +117,8 @@ std::error_code make_error_code(errc const value) noexcept {
 
 class client_context {
 public:
-    static std::expected<client_context, std::error_code> make(group_policy const policy) {
+    static std::expected<client_context, std::error_code> make(group_policy const policy,
+                                                               std::string_view const extra_trusted_pem = {}) {
         client_context context{SSL_CTX_new(TLS_client_method())};
         auto* const native = context.native_.get();
         if (native == nullptr) {
@@ -106,6 +138,10 @@ public:
         for (auto const* const bundle : detail::ca_bundle_candidates) {
             SSL_CTX_load_verify_file(native, bundle);
         }
+        if (!extra_trusted_pem.empty() && !detail::trust_pem(native, extra_trusted_pem)) {
+            ERR_clear_error();
+            return std::unexpected{make_error_code(errc::context_failed)};
+        }
         ERR_clear_error();
         return context;
     }
@@ -118,22 +154,48 @@ private:
     std::unique_ptr<SSL_CTX, detail::ssl_ctx_deleter> native_;
 };
 
+class server_context {
+public:
+    static std::expected<server_context, std::error_code> make(group_policy const policy,
+                                                               std::string_view const certificate_pem,
+                                                               std::string_view const private_key_pem) {
+        server_context context{SSL_CTX_new(TLS_server_method())};
+        auto* const native = context.native_.get();
+        if (native == nullptr) {
+            return std::unexpected{make_error_code(errc::context_failed)};
+        }
+        auto const certificate_source = detail::memory_bio(certificate_pem);
+        auto const key_source = detail::memory_bio(private_key_pem);
+        detail::x509_ptr const certificate{PEM_read_bio_X509(certificate_source.get(), nullptr, nullptr, nullptr)};
+        detail::pkey_ptr const key{PEM_read_bio_PrivateKey(key_source.get(), nullptr, nullptr, nullptr)};
+        auto const groups = detail::groups_for(policy);
+        auto const configured = certificate && key && SSL_CTX_set_min_proto_version(native, TLS1_2_VERSION) == 1 &&
+                                SSL_CTX_set1_groups_list(native, groups.c_str()) == 1 &&
+                                SSL_CTX_use_certificate(native, certificate.get()) == 1 &&
+                                SSL_CTX_use_PrivateKey(native, key.get()) == 1 && SSL_CTX_check_private_key(native) == 1;
+        if (!configured) {
+            ERR_clear_error();
+            return std::unexpected{make_error_code(errc::context_failed)};
+        }
+        return context;
+    }
+
+    SSL_CTX* native() const noexcept { return native_.get(); }
+
+private:
+    explicit server_context(SSL_CTX* native) noexcept : native_{native} {}
+
+    std::unique_ptr<SSL_CTX, detail::ssl_ctx_deleter> native_;
+};
+
 class connection {
 public:
     static std::expected<connection, std::error_code> make(client_context const& context, std::string const& host) {
-        connection created{SSL_new(context.native())};
-        auto* const session = created.session_.get();
-        if (session == nullptr) {
-            return std::unexpected{make_error_code(errc::connection_failed)};
+        auto created = attach(SSL_new(context.native()));
+        if (!created) {
+            return created;
         }
-        created.incoming_ = BIO_new(BIO_s_mem());
-        created.outgoing_ = BIO_new(BIO_s_mem());
-        if (created.incoming_ == nullptr || created.outgoing_ == nullptr) {
-            BIO_free(created.incoming_);
-            BIO_free(created.outgoing_);
-            return std::unexpected{make_error_code(errc::connection_failed)};
-        }
-        SSL_set_bio(session, created.incoming_, created.outgoing_);
+        auto* const session = created->session_.get();
         SSL_set_connect_state(session);
         if (SSL_set_tlsext_host_name(session, host.c_str()) != 1 || SSL_set1_host(session, host.c_str()) != 1) {
             ERR_clear_error();
@@ -141,6 +203,16 @@ public:
         }
         return created;
     }
+
+    static std::expected<connection, std::error_code> accept(server_context const& context) {
+        auto created = attach(SSL_new(context.native()));
+        if (created) {
+            SSL_set_accept_state(created->session_.get());
+        }
+        return created;
+    }
+
+    void shutdown() noexcept { SSL_shutdown(session_.get()); }
 
     std::expected<want, std::error_code> handshake() {
         auto const result = SSL_do_handshake(session_.get());
@@ -200,6 +272,23 @@ public:
 
 private:
     explicit connection(SSL* session) noexcept : session_{session} {}
+
+    static std::expected<connection, std::error_code> attach(SSL* const raw) {
+        connection created{raw};
+        auto* const session = created.session_.get();
+        if (session == nullptr) {
+            return std::unexpected{make_error_code(errc::connection_failed)};
+        }
+        created.incoming_ = BIO_new(BIO_s_mem());
+        created.outgoing_ = BIO_new(BIO_s_mem());
+        if (created.incoming_ == nullptr || created.outgoing_ == nullptr) {
+            BIO_free(created.incoming_);
+            BIO_free(created.outgoing_);
+            return std::unexpected{make_error_code(errc::connection_failed)};
+        }
+        SSL_set_bio(session, created.incoming_, created.outgoing_);
+        return created;
+    }
 
     std::expected<io_result, std::error_code> classify(int const result) {
         switch (SSL_get_error(session_.get(), result)) {

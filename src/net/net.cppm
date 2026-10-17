@@ -225,6 +225,7 @@ public:
     }
 
     int descriptor() const noexcept { return socket_.get(); }
+    unique_fd release() && noexcept { return std::move(socket_); }
 
 private:
     async::reactor* reactor_;
@@ -311,6 +312,25 @@ public:
             co_return std::unexpected{done.error()};
         }
         co_return stream;
+    }
+
+    static async::task<std::expected<tls_stream, std::error_code>> accept(async::reactor& reactor,
+                                                                          tls::server_context const& context,
+                                                                          tcp_stream plain) {
+        auto session = tls::connection::accept(context);
+        if (!session) {
+            co_return std::unexpected{session.error()};
+        }
+        tls_stream stream{reactor, std::move(plain).release(), std::move(*session)};
+        if (auto const done = co_await stream.complete_handshake(); !done) {
+            co_return std::unexpected{done.error()};
+        }
+        co_return stream;
+    }
+
+    async::task<result_void> close() {
+        session_.shutdown();
+        co_return co_await flush();
     }
 
     async::task<result_size> read_some(std::span<std::byte> destination, read_options const options) {
