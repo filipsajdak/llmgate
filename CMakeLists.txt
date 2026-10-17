@@ -84,7 +84,8 @@ llmgate_module(llmgate_selection INTERFACE src/gateway/selection.cppm LIBS llmga
 llmgate_module(llmgate_quota INTERFACE src/gateway/quota.cppm LIBS llmgate_json llmgate_text llmgate_usage)
 llmgate_module(llmgate_doctor INTERFACE src/app/doctor.cppm LIBS llmgate_reflect llmgate_arguments llmgate_json llmgate_quota llmgate_routing llmgate_text)
 llmgate_module(llmgate_fetch INTERFACE src/gateway/fetch.cppm SOURCES src/gateway/fetch.cpp LIBS llmgate_async llmgate_http llmgate_httpio llmgate_net llmgate_routing llmgate_tls)
-llmgate_module(llmgate_gateway INTERFACE src/gateway/gateway.cppm LIBS llmgate_selection llmgate_usage llmgate_proof llmgate_claude llmgate_routing llmgate_anthropic llmgate_httpio llmgate_json llmgate_jsonscan llmgate_net llmgate_reflect llmgate_sse llmgate_tls llmgate_shutdown)
+llmgate_module(llmgate_config INTERFACE src/gateway/config.cppm LIBS llmgate_claude llmgate_json llmgate_selection llmgate_shutdown llmgate_tls llmgate_usage)
+llmgate_module(llmgate_gateway INTERFACE src/gateway/gateway.cppm LIBS llmgate_config llmgate_selection llmgate_usage llmgate_proof llmgate_claude llmgate_routing llmgate_anthropic llmgate_httpio llmgate_json llmgate_jsonscan llmgate_net llmgate_reflect llmgate_sse llmgate_tls llmgate_shutdown)
 llmgate_module(llmgate_copilot INTERFACE src/gateway/copilot.cppm SOURCES src/gateway/copilot.cpp LIBS llmgate_members llmgate_process llmgate_gateway llmgate_fetch llmgate_json llmgate_jsonscan llmgate_reflect)
 
 enable_testing()
