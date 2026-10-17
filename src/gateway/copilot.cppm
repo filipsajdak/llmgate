@@ -22,6 +22,7 @@ using std::chrono::seconds;
 using system_clock = std::chrono::system_clock;
 
 enum class errc { login_required = 1, login_denied, login_expired, github_unreachable, github_rejected, bad_reply };
+static_assert(reflect::unique_values<errc>() && reflect::starts_at_one<errc>());
 
 }  // namespace llmgate::copilot
 

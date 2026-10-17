@@ -19,6 +19,7 @@ enum class repair_kind {
     unparseable_event,
     truncated_stream,
 };
+static_assert(reflect::unique_values<repair_kind>());
 
 struct repair {
     repair_kind kind;
@@ -31,6 +32,7 @@ struct output_event {
 };
 
 enum class event_type { message_start, content_block_start, content_block_delta, content_block_stop, message_delta, message_stop, ping, error, other };
+static_assert(reflect::unique_values<event_type>());
 
 }  // namespace llmgate::anthropic
 

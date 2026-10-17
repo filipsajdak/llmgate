@@ -19,6 +19,7 @@ enum class errc {
     truncated,
     peer_closed,
 };
+static_assert(reflect::unique_values<errc>() && reflect::starts_at_one<errc>());
 
 enum class group_policy { post_quantum_required, post_quantum_preferred, classical_only };
 

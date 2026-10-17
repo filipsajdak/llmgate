@@ -10,6 +10,7 @@ import llmgate.reflect;
 export namespace llmgate::http {
 
 enum class errc { malformed_message = 1, head_too_large, truncated_message, connection_closed, invalid_header };
+static_assert(reflect::unique_values<errc>() && reflect::starts_at_one<errc>());
 
 }  // namespace llmgate::http
 

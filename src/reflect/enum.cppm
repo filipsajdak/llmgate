@@ -25,10 +25,53 @@ consteval std::span<enumerator_entry<E> const> enumerator_table() {
 
 template <class E>
     requires std::is_enum_v<E>
+inline constexpr std::size_t enum_count = std::meta::enumerators_of(^^E).size();
+
+template <class E>
+    requires std::is_enum_v<E>
+inline constexpr std::span<E const> enum_values = std::define_static_array(std::meta::enumerators_of(^^E) | std::views::transform([](std::meta::info const item) {
+                                                                               return std::meta::extract<E>(item);
+                                                                           }));
+
+template <class E>
+    requires std::is_enum_v<E>
+constexpr bool unique_values() {
+    auto const values = enum_values<E>;
+    for (std::size_t at = 0; at < values.size(); ++at) {
+        if (std::ranges::contains(values.subspan(at + 1), values[at])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+template <class E>
+    requires std::is_enum_v<E>
+consteval bool starts_at_one() {
+    return enum_count<E> != 0 && std::to_underlying(enum_values<E>.front()) == 1;
+}
+
+template <class E>
+    requires std::is_enum_v<E>
 constexpr std::string_view enum_name(E const value) noexcept {
     static constexpr auto table = enumerator_table<E>();
     auto const match = std::ranges::find(table, value, &enumerator_entry<E>::value);
     return match == table.end() ? std::string_view{} : std::string_view{match->name};
+}
+
+constexpr std::string copy_of(std::string_view const text) {
+    std::string out;
+    out.reserve(text.size());
+    for (auto const c : text) {
+        out.push_back(c);
+    }
+    return out;
+}
+
+template <class E>
+    requires std::is_enum_v<E>
+constexpr std::string enum_string(E const value) {
+    return copy_of(enum_name(value));
 }
 
 template <class E>
