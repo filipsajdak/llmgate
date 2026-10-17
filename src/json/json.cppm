@@ -1036,3 +1036,5 @@ constexpr value make_string(std::string text) {
 }  // namespace llmgate::json
 
 template class std::expected<llmgate::json::value, llmgate::json::parse_error>;
+template class std::optional<llmgate::json::read_error>;
+template llmgate::json::object const* llmgate::json::detail::alternative_of<llmgate::json::object>(llmgate::json::value const&);

@@ -13,13 +13,12 @@ import std;
 import llmgate.fetch;
 import llmgate.json;
 import llmgate.process;
-import llmgate.jsonscan;
 
 namespace llmgate::copilot {
 
 std::expected<void, std::error_code> save_oauth_token(std::string_view const path, std::string_view const token) {
     constexpr mode_t private_file_mode = 0600;
-    auto const content = R"({"oauth_token":)" + jsonscan::encode_string(token) + "}\n";
+    auto const content = json::write(json::to_value(stored_token{.oauth_token = std::string{token}})) + "\n";
     return process::write_file_atomic(detail::expand_home(path), content, private_file_mode, true);
 }
 
@@ -39,13 +38,10 @@ async::task<std::expected<device_code, std::error_code>> request_device_code(asy
 namespace {
 
 std::error_code poll_failure(std::string_view const error) {
-    if (error == "access_denied") {
-        return make_error_code(errc::login_denied);
+    if (error == "authorization_pending") {
+        return {};
     }
-    if (error == "expired_token") {
-        return make_error_code(errc::login_expired);
-    }
-    return error == "authorization_pending" ? std::error_code{} : make_error_code(errc::github_rejected);
+    return make_error_code(detail::errc_for_github_error(error).value_or(errc::github_rejected));
 }
 
 std::optional<std::expected<std::string, std::error_code>> settle_poll(oauth_reply const& reply, milliseconds& interval) {

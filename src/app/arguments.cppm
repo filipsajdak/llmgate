@@ -330,18 +330,25 @@ constexpr std::string base_url(gateway_address const& address) {
     return "http://" + address.host + ":" + std::string{digits.data(), end} + "/anthropic";
 }
 
-constexpr int percent_at(json::value const& root, std::initializer_list<std::string_view> const path) {
+constexpr double percent_cap = 1000.0;
+
+struct model_wire {
+    std::string display_name{};
+    std::string id{};
+};
+
+struct workspace_wire {
+    std::string current_dir{};
+};
+
+struct context_wire {
+    double used_percentage = 0.0;
+};
+
+template <class Wire>
+constexpr Wire lenient_at(json::value const& root, std::initializer_list<std::string_view> const path) {
     auto const* found = json::at(root, path);
-    if (found == nullptr) {
-        return 0;
-    }
-    if (auto const* whole = std::get_if<std::int64_t>(&found->data)) {
-        return static_cast<int>(std::clamp<std::int64_t>(*whole, 0, 1000));
-    }
-    if (auto const* real = std::get_if<double>(&found->data)) {
-        return static_cast<int>(std::clamp(*real, 0.0, 1000.0));
-    }
-    return 0;
+    return found == nullptr ? Wire{} : json::read<Wire>(*found, {.allow_unknown_keys = true}).value_or(Wire{});
 }
 
 constexpr statusline::snapshot statusline_input(std::string_view const text) {
@@ -349,17 +356,13 @@ constexpr statusline::snapshot statusline_input(std::string_view const text) {
     if (!parsed) {
         return {};
     }
-    statusline::snapshot now;
-    now.model = json::text_at(*parsed, {"model", "display_name"});
-    if (now.model.empty()) {
-        now.model = json::text_at(*parsed, {"model", "id"});
-    }
-    now.directory = json::text_at(*parsed, {"workspace", "current_dir"});
-    if (now.directory.empty()) {
-        now.directory = json::text_at(*parsed, {"cwd"});
-    }
-    now.context_percent = percent_at(*parsed, {"context_window", "used_percentage"});
-    return now;
+    auto const model = lenient_at<model_wire>(*parsed, {"model"});
+    auto const workspace = lenient_at<workspace_wire>(*parsed, {"workspace"});
+    auto const context = lenient_at<context_wire>(*parsed, {"context_window"});
+    auto const directory = workspace.current_dir.empty() ? lenient_at<std::string>(*parsed, {"cwd"}) : workspace.current_dir;
+    return {.model = model.display_name.empty() ? model.id : model.display_name,
+            .directory = directory,
+            .context_percent = static_cast<int>(std::clamp(context.used_percentage, 0.0, percent_cap))};
 }
 
 constexpr std::pair<std::uint64_t, std::uint64_t> counters_from(std::string_view const body) {
@@ -368,16 +371,14 @@ constexpr std::pair<std::uint64_t, std::uint64_t> counters_from(std::string_view
         return {0, 0};
     }
     std::uint64_t repairs = 0;
-    if (auto const* group = json::at(*parsed, {"repairs"})) {
-        if (auto const* members = std::get_if<json::object>(&group->data)) {
-            for (auto const& [name, value] : *members) {
-                if (auto const* whole = std::get_if<std::int64_t>(&value.data); whole != nullptr && *whole > 0) {
-                    repairs += static_cast<std::uint64_t>(*whole);
-                }
-            }
+    auto const* group = json::at(*parsed, {"repairs"});
+    auto const* members = group == nullptr ? nullptr : std::get_if<json::object>(&group->data);
+    if (members != nullptr) {
+        for (auto const& member : *members) {
+            repairs += json::read<std::uint64_t>(member.second).value_or(0);
         }
     }
-    return {json::count_at(*parsed, {"requests"}).value_or(0), repairs};
+    return {lenient_at<std::uint64_t>(*parsed, {"requests"}), repairs};
 }
 
 constexpr std::vector<std::string> as_strings(std::initializer_list<std::string_view> const words) {

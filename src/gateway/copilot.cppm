@@ -1,6 +1,7 @@
 module;
 
 #include <cstdlib>
+#include <meta>
 
 export module llmgate.copilot;
 
@@ -11,7 +12,7 @@ import llmgate.gateway;
 import llmgate.http;
 import llmgate.httpio;
 import llmgate.json;
-import llmgate.jsonscan;
+import llmgate.members;
 import llmgate.reflect;
 import llmgate.tls;
 
@@ -21,7 +22,27 @@ using std::chrono::milliseconds;
 using std::chrono::seconds;
 using system_clock = std::chrono::system_clock;
 
-enum class errc { login_required = 1, login_denied, login_expired, github_unreachable, github_rejected, bad_reply };
+constexpr std::size_t github_error_capacity = 24;
+
+struct github_error {
+    char text[github_error_capacity]{};
+
+    consteval github_error(std::string_view const word) {
+        if (word.size() >= github_error_capacity) {
+            throw "copilot::github_error: the word does not fit github_error_capacity";
+        }
+        std::ranges::copy(word, text);
+    }
+};
+
+enum class errc {
+    login_required = 1,
+    login_denied [[= github_error{"access_denied"}]],
+    login_expired [[= github_error{"expired_token"}]],
+    github_unreachable,
+    github_rejected,
+    bad_reply
+};
 static_assert(reflect::unique_values<errc>() && reflect::starts_at_one<errc>());
 
 }  // namespace llmgate::copilot
@@ -81,11 +102,24 @@ constexpr bool unreserved(char const c) {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || std::string_view{"-._~"}.contains(c);
 }
 
+constexpr std::optional<errc> errc_for_github_error(std::string_view const word) {
+    std::optional<errc> found;
+    template for (constexpr auto enumerator : std::define_static_array(std::meta::enumerators_of(^^errc))) {
+        if constexpr (reflect::has_annotation<github_error>(enumerator)) {
+            constexpr auto note = *reflect::annotation_of<github_error>(enumerator);
+            if (word == std::string_view{note.text}) {
+                found = [:enumerator:];
+            }
+        }
+    }
+    return found;
+}
+
+static_assert(errc_for_github_error("access_denied") == errc::login_denied && errc_for_github_error("expired_token") == errc::login_expired);
+static_assert(!errc_for_github_error("authorization_pending") && !errc_for_github_error("") && !errc_for_github_error("access_denied "));
+
 void append_percent(std::string& out, char const c) {
-    constexpr std::string_view digits = "0123456789ABCDEF";
-    out.push_back('%');
-    out.push_back(digits[static_cast<unsigned char>(c) >> 4]);
-    out.push_back(digits[static_cast<unsigned char>(c) & 0xF]);
+    std::format_to(std::back_inserter(out), "%{:02X}", static_cast<unsigned char>(c));
 }
 
 std::string url_encode(std::string_view const text) {

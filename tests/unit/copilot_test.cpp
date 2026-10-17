@@ -205,6 +205,16 @@ const suite copilot_suite = [] {
         expect((info.st_mode & 0777) == 0600);
     };
 
+    "capability_the_token_file_keeps_its_text_and_escapes_the_token"_test = [] {
+        world w{std::nullopt};
+
+        (void)copilot::save_oauth_token(w.settings.token_file, "gho_\"q\"");
+
+        std::ifstream in{w.settings.token_file};
+        std::string const text{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+        expect(text == "{\"oauth_token\":\"gho_\\\"q\\\"\"}\n") << text;
+    };
+
     "limit_saving_over_a_symlink_replaces_the_link_and_leaves_its_target_untouched"_test = [] {
         world w{std::nullopt};
         std::filesystem::create_directories(w.directory);
