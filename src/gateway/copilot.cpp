@@ -36,6 +36,34 @@ async::task<std::expected<device_code, std::error_code>> request_device_code(asy
     co_return detail::parse_reply<device_code>(answer->body);
 }
 
+namespace {
+
+std::error_code poll_failure(std::string_view const error) {
+    if (error == "access_denied") {
+        return make_error_code(errc::login_denied);
+    }
+    if (error == "expired_token") {
+        return make_error_code(errc::login_expired);
+    }
+    return error == "authorization_pending" ? std::error_code{} : make_error_code(errc::github_rejected);
+}
+
+std::optional<std::expected<std::string, std::error_code>> settle_poll(oauth_reply const& reply, milliseconds& interval) {
+    if (!reply.access_token.empty()) {
+        return reply.access_token;
+    }
+    if (reply.error == "slow_down") {
+        interval += slow_down_step;
+        return std::nullopt;
+    }
+    if (auto const failure = poll_failure(reply.error)) {
+        return std::unexpected{failure};
+    }
+    return std::nullopt;
+}
+
+}  // namespace
+
 async::task<std::expected<std::string, std::error_code>> wait_for_authorisation(async::reactor& loop, tls::client_context const& tls_context,
                                                                                 gateway::copilot_config settings, device_code code) {
     auto interval = settings.poll_interval.value_or(milliseconds{code.interval * 1000});
@@ -53,17 +81,8 @@ async::task<std::expected<std::string, std::error_code>> wait_for_authorisation(
         if (!reply) {
             co_return std::unexpected{reply.error()};
         }
-        if (!reply->access_token.empty()) {
-            co_return reply->access_token;
-        }
-        if (reply->error == "slow_down") {
-            interval += slow_down_step;
-        } else if (reply->error == "access_denied") {
-            co_return std::unexpected{make_error_code(errc::login_denied)};
-        } else if (reply->error == "expired_token") {
-            co_return std::unexpected{make_error_code(errc::login_expired)};
-        } else if (reply->error != "authorization_pending") {
-            co_return std::unexpected{make_error_code(errc::github_rejected)};
+        if (auto settled = settle_poll(*reply, interval)) {
+            co_return std::move(*settled);
         }
     }
     co_return std::unexpected{make_error_code(errc::login_expired)};

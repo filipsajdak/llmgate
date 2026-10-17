@@ -1,6 +1,7 @@
 export module llmgate.selection;
 
 import std;
+import llmgate.reflect;
 
 export namespace llmgate::selection {
 
@@ -62,12 +63,7 @@ constexpr void on_failure(breaker& book, breaker_settings const& settings, std::
 }
 
 constexpr std::string_view circuit_name(circuit const state) noexcept {
-    switch (state) {
-        case circuit::closed: return "closed";
-        case circuit::open: return "open";
-        case circuit::half_open: return "half_open";
-    }
-    return "closed";
+    return reflect::enum_name(state);
 }
 
 struct role_route {

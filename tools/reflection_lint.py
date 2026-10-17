@@ -101,7 +101,7 @@ def is_allowed(finding, allowances):
 
 def stale_allowances(allowances, raw_findings):
     return [
-        Finding(path, 0, rule, f"allowance no longer matches anything: {fragment}")
+        Finding(path, 0, "stale-allowance", f"{rule}|{fragment}")
         for path, rule, fragment, _ in allowances
         if not any(f.path == path and f.rule == rule and fragment in f.text for f in raw_findings)
     ]
