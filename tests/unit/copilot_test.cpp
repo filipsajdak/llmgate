@@ -33,6 +33,10 @@ struct fake_github {
     int polls = 0;
     int exchanges = 0;
     int exchange_status = 200;
+    int user_status = 200;
+    int user_requests = 0;
+    std::string user_reply = R"({"copilot_plan":"individual","quota_snapshots":{}})";
+    std::vector<std::string> user_authorisations;
     std::int64_t expires_at = 0;
     std::string api = "http://127.0.0.1:1";
     std::vector<std::string> exchange_authorisations;
@@ -74,6 +78,11 @@ struct fake_github {
                 co_return co_await json(out, exchange_status, R"({"message":"no"})");
             }
             co_return co_await json(out, 200, std::format(R"({{"token":"jwt-{}","expires_at":{},"refresh_in":1500,"endpoints":{{"api":"{}"}},"chat_enabled":true}})", exchanges, expires_at, api));
+        }
+        if (path == "/copilot_internal/user") {
+            ++user_requests;
+            user_authorisations.push_back(std::string{incoming.head.fields.find("authorization").value_or("")});
+            co_return co_await json(out, user_status, user_reply);
         }
         co_return co_await json(out, 404, "{}");
     }
@@ -330,6 +339,46 @@ const suite copilot_suite = [] {
 
         expect(result == copilot::make_error_code(copilot::errc::login_required).message());
         expect(w.github.exchanges == 0);
+    };
+    "capability_the_user_endpoint_is_read_with_the_stored_login_and_no_token_exchange"_test = [] {
+        world w;
+
+        auto const body = w.loop.run(copilot::fetch_user(w.loop, w.tls_context, w.settings));
+
+        expect(body.has_value());
+        expect(body->contains("individual"));
+        expect(w.github.user_authorisations == std::vector<std::string>{"token gho_stored"});
+        expect(w.github.exchanges == 0);
+    };
+
+    "limit_the_user_endpoint_reports_a_rejected_login_an_error_status_and_a_missing_login"_test = [] {
+        world rejected;
+        rejected.github.user_status = 401;
+        world broken;
+        broken.github.user_status = 500;
+        world absent{std::nullopt};
+
+        expect(rejected.loop.run(copilot::fetch_user(rejected.loop, rejected.tls_context, rejected.settings)).error() == copilot::errc::login_required);
+        expect(broken.loop.run(copilot::fetch_user(broken.loop, broken.tls_context, broken.settings)).error() == copilot::errc::github_rejected);
+        expect(absent.loop.run(copilot::fetch_user(absent.loop, absent.tls_context, absent.settings)).error() == copilot::errc::login_required);
+        expect(absent.github.user_requests == 0);
+    };
+
+    "limit_the_user_endpoint_on_an_unreachable_host_does_not_hang"_test = [] {
+        world w;
+        w.settings.api_url = "http://127.0.0.1:1";
+
+        expect(w.loop.run(copilot::fetch_user(w.loop, w.tls_context, w.settings)).error() == copilot::errc::github_unreachable);
+    };
+
+    "capability_check_login_exchanges_the_token_and_reports_the_outcome"_test = [] {
+        world accepted;
+        world refused;
+        refused.github.exchange_status = 401;
+
+        expect(!accepted.loop.run(copilot::check_login(accepted.loop, accepted.tls_context, accepted.settings)));
+        expect(refused.loop.run(copilot::check_login(refused.loop, refused.tls_context, refused.settings)) == copilot::errc::login_required);
+        expect(accepted.github.exchanges == 1);
     };
 };
 

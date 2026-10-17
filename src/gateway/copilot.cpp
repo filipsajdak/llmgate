@@ -69,4 +69,35 @@ async::task<std::expected<std::string, std::error_code>> wait_for_authorisation(
     co_return std::unexpected{make_error_code(errc::login_expired)};
 }
 
+async::task<std::expected<std::string, std::error_code>> fetch_user(async::reactor& loop, tls::client_context const& tls_context,
+                                                                    gateway::copilot_config settings) {
+    auto oauth = load_oauth_token(settings.token_file);
+    if (!oauth) {
+        co_return std::unexpected{oauth.error()};
+    }
+    http::header_map fields;
+    fields.add("Authorization", "token " + *oauth);
+    fields.add("Accept", "application/json");
+    fields.add("Editor-Version", std::string{editor_version});
+    fields.add("User-Agent", "llmgate/0.0");
+    auto const answer = co_await fetch::request(loop, tls_context, settings.api_url,
+                                                {.method = "GET", .target = std::string{user_target}, .host = {}, .fields = std::move(fields)}, github_limit);
+    if (!answer) {
+        co_return std::unexpected{make_error_code(errc::github_unreachable)};
+    }
+    if (answer->status == 401) {
+        co_return std::unexpected{make_error_code(errc::login_required)};
+    }
+    if (answer->status != 200) {
+        co_return std::unexpected{make_error_code(errc::github_rejected)};
+    }
+    co_return answer->body;
+}
+
+async::task<std::error_code> check_login(async::reactor& loop, tls::client_context const& tls_context, gateway::copilot_config settings) {
+    copilot_credential credential{loop, tls_context, std::move(settings)};
+    auto const token = co_await credential.bearer();
+    co_return token ? std::error_code{} : token.error();
+}
+
 }  // namespace llmgate::copilot
