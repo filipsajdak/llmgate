@@ -1,21 +1,41 @@
 #!/usr/bin/env python3
 import argparse
-import dataclasses
 import pathlib
 import re
 import sys
 
-SOURCE_SUFFIXES = {".cpp", ".cppm"}
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import cpp_source
+import lint_common
+from lint_common import Finding, SOURCE_SUFFIXES, is_allowed, load_allowances
+
 ALLOW_FILE = pathlib.Path(__file__).with_name("reflection_lint_allow.txt")
+DEFAULT_PATHS = ["src", "app", "tests"]
+EXCLUDED = ("tests/constexpr/capabilities/",)
 MIN_RUN = 3
 MIN_CHAIN = 4
+MIN_JSON_KEYS = 3
+MIN_WORDS = 3
 CHAIN_WINDOW = 12
+RUN_GAP_CHARS = " \t\r\n,"
 
-ENUM_STRING_CASE = re.compile(r'^\s*case\s+[\w:]+::\w+\s*:\s*return\s+(?:"[^"]*"|std::string(?:_view)?\{[^}]*\})\s*;')
-ENUM_STRING_TERNARY = re.compile(r'\w+\s*==\s*[\w:]+::\w+\s*\?\s*"[^"]*"\s*:')
-NAME_ENUM_PAIR = re.compile(r'^\s*\{\s*"[^"]+"\s*,\s*[\w:]+::\w+\s*\}\s*,?\s*$')
-WORD_COMPARISON = re.compile(r'\bif\s*\(\s*(?:[\w.\[\]]+)\s*==\s*"[^"]+"')
-KEY_FROM_MEMBER = re.compile(r'\{\s*"(\w+)"\s*,.*\.\1\b')
+STRING = r'"(?:[^"\\\n]|\\.)*"'
+QUALIFIED = r"[\w:]+::\w+"
+STRING_VALUE = rf"(?:{STRING}|std::string(?:_view)?\{{[^}}]*\}})"
+ENUM_STRING_CASE = re.compile(rf"\bcase\s+{QUALIFIED}\s*:\s*(?:return\s+{STRING_VALUE}\s*;|break\s*;)")
+MIN_STRING_ARMS = 2
+ENUM_STRING_TERNARY = re.compile(rf'\w+\s*==\s*{QUALIFIED}\s*\?\s*{STRING}\s*:')
+NAME_ENUM_PAIR = re.compile(rf"\{{\s*{STRING}\s*,\s*{QUALIFIED}\s*\}}")
+HANDLER_PAIR = re.compile(rf"\{{\s*{QUALIFIED}\s*,\s*&[\w:]+\s*\}}")
+ROUTE_ROW = re.compile(rf'\{{\s*"[A-Z]+"\s*,\s*{STRING}\s*,\s*{QUALIFIED}\s*\}}')
+WORD_COMPARISON = re.compile(rf"\bif\s*\(\s*(?:[\w.\[\]]+)\s*==\s*{STRING}")
+KEY_FROM_MEMBER = re.compile(r'\{\s*"(\w+)"\s*,.*\.\1\b.*')
+JSON_PLACEHOLDER = re.compile(r'"\w+"\s*:\s*(?:\{\{)*"?\{\}"?')
+ENUM_CAST_MODULO = re.compile(r"static_cast<\s*([\w:]+)\s*>\s*\(((?:[^;()]|\((?:[^;()]|\([^;()]*\))*\))*)%\s*\w+")
+STRING_LIST = re.compile(r"std::to_array<\s*std::string_view\s*>\s*\(\s*\{(.*?)\}\s*\)", re.DOTALL)
+ENUM_DEFINITION = re.compile(r"\benum\s+(?:class|struct)\s+(\w+)\s*(?::\s*[\w:\s]+?)?\s*\{([^}]*)\}")
+ATTRIBUTE = re.compile(r"\[\[.*?\]\]", re.DOTALL)
+ARITHMETIC_TYPE = re.compile(r"^(?:u?int(?:8|16|32|64|max|ptr)?_t|size_t|ptrdiff_t|ssize_t|int|unsigned|long|short|char|bool|double|float|time_t|off_t)$")
 
 RULES = {
     "stale-allowance": "remove the line from tools/reflection_lint_allow.txt, the code it excused is gone",
@@ -23,34 +43,30 @@ RULES = {
     "name-enum-table": "a table of {\"word\", Type::member} pairs repeats the enumerator names; use reflect::enum_from_name<E>(word)",
     "word-chain": "a chain of if (word == \"...\") comparisons repeats member or flag names; annotate the members and walk them with std::meta (see json::read_aggregate)",
     "key-member-block": "a block of {\"key\", x.key} pairs repeats member names; derive the object from the aggregate with reflection",
+    "json-format-template": "a std::format template spells out the keys of a JSON object; build a wire aggregate and use json::to_value, or walk the members",
+    "enum-handler-table": "a table of {Enum::x, &fn} pairs must stay in step with the enum by hand; annotate the enumerators and static_assert the table is exhaustive",
+    "route-table": "a table of {\"METHOD\", \"/path\", route::x} rows repeats the route enum; annotate the enumerators with the method and path",
+    "enum-modulo": "static_cast<Enum>(n % N) hard-codes the enumerator count; use reflect::enum_count<E>",
+    "enum-word-list": "a std::to_array<std::string_view> word list repeats the enumerator names of an enum; use reflect::enum_values<E> and reflect::enum_name",
 }
+lint_common.ADVICE.update(RULES)
+OWN_RULES = frozenset(RULES) - {"stale-allowance"}
 
 
-@dataclasses.dataclass(frozen=True)
-class Finding:
-    path: str
-    line: int
-    rule: str
-    text: str
+def adjacent_runs(code, pattern, accept=lambda group: True):
+    group = []
+    for match in pattern.finditer(code):
+        if group and code[group[-1].end() : match.start()].strip(RUN_GAP_CHARS):
+            if len(group) >= MIN_RUN and accept(group):
+                yield group[0]
+            group = []
+        group.append(match)
+    if len(group) >= MIN_RUN and accept(group):
+        yield group[0]
 
-    def render(self) -> str:
-        return f"{self.path}:{self.line}: [{self.rule}] {RULES[self.rule]}\n    {self.text.strip()}"
 
-
-def runs(lines, matches):
-    start = None
-    count = 0
-    for index, line in enumerate(lines):
-        if matches(line):
-            if start is None:
-                start = index
-            count += 1
-            continue
-        if start is not None and count >= MIN_RUN:
-            yield start, count
-        start, count = None, 0
-    if start is not None and count >= MIN_RUN:
-        yield start, count
+def has_string_arms(group):
+    return sum("return" in m.group() for m in group) >= MIN_STRING_ARMS
 
 
 def chains(lines):
@@ -66,58 +82,74 @@ def chains(lines):
         yield group[0]
 
 
-def scan_text(path, text):
-    lines = text.splitlines()
-    for start, _ in runs(lines, ENUM_STRING_CASE.match):
-        yield Finding(path, start + 1, "enum-name-switch", lines[start])
-    ternaries = [i for i, line in enumerate(lines) if len(ENUM_STRING_TERNARY.findall(line)) >= 1 and line.count("?") >= 2]
-    for index in ternaries:
-        yield Finding(path, index + 1, "enum-name-switch", lines[index])
-    for start, _ in runs(lines, NAME_ENUM_PAIR.match):
-        yield Finding(path, start + 1, "name-enum-table", lines[start])
-    for start in chains(lines):
-        yield Finding(path, start + 1, "word-chain", lines[start])
-    for start, _ in runs(lines, KEY_FROM_MEMBER.search):
-        yield Finding(path, start + 1, "key-member-block", lines[start])
+def unquote(literal):
+    return literal[1:-1].replace('\\"', '"')
 
 
-def load_allowances(allow_file):
-    allowed = []
-    if not allow_file.exists():
-        return allowed
-    for raw in allow_file.read_text().splitlines():
-        if not raw.strip() or raw.startswith("#"):
-            continue
-        parts = raw.split("|", 3)
-        if len(parts) != 4 or not parts[3].strip():
-            raise SystemExit(f"{allow_file}: every line needs path|rule|text|reason, got: {raw}")
-        allowed.append(tuple(part.strip() for part in parts))
-    return allowed
+def enumerators(body):
+    names = []
+    for part in ATTRIBUTE.sub("", body).split(","):
+        found = re.match(r"\s*(\w+)", part)
+        if found:
+            names.append(found.group(1))
+    return names
 
 
-def is_allowed(finding, allowances):
-    return any(path == finding.path and rule == finding.rule and fragment in finding.text for path, rule, fragment, _ in allowances)
+def collect_enums(texts):
+    enums = {}
+    for text in texts:
+        for match in ENUM_DEFINITION.finditer(cpp_source.scan(text).code):
+            enums[match.group(1)] = frozenset(enumerators(match.group(2)))
+    return enums
 
 
-def stale_allowances(allowances, raw_findings):
-    return [
-        Finding(path, 0, "stale-allowance", f"{rule}|{fragment}")
-        for path, rule, fragment, _ in allowances
-        if not any(f.path == path and f.rule == rule and fragment in f.text for f in raw_findings)
-    ]
+def literal_bodies(source):
+    for literal in source.literals:
+        yield literal.line, literal.body.replace('\\"', '"')
+
+
+def scan_text(path, text, enums=None):
+    source = cpp_source.scan(text)
+    code = source.code
+
+    def at(match):
+        return source.line(match.start()), source.text_at(match.start())
+
+    def found(rule, match):
+        line, shown = at(match)
+        return Finding(path, line, rule, shown)
+
+    for pattern, rule in ((ENUM_STRING_CASE, "enum-name-switch"), (NAME_ENUM_PAIR, "name-enum-table"), (HANDLER_PAIR, "enum-handler-table"), (ROUTE_ROW, "route-table"), (KEY_FROM_MEMBER, "key-member-block")):
+        accept = has_string_arms if pattern is ENUM_STRING_CASE else (lambda group: True)
+        for match in adjacent_runs(code, pattern, accept):
+            yield found(rule, match)
+    for match in ENUM_STRING_TERNARY.finditer(code):
+        if source.text_at(match.start()).count("?") >= 2:
+            yield found("enum-name-switch", match)
+    code_lines = code.splitlines()
+    for start in chains(code_lines):
+        yield Finding(path, start + 1, "word-chain", source.line_text(start + 1).strip())
+    for line, body in literal_bodies(source):
+        if len(JSON_PLACEHOLDER.findall(body)) >= MIN_JSON_KEYS:
+            yield Finding(path, line, "json-format-template", source.line_text(line).strip())
+    for match in ENUM_CAST_MODULO.finditer(source.skeleton):
+        if not ARITHMETIC_TYPE.match(match.group(1).split("::")[-1]):
+            yield Finding(path, source.line(match.start()), "enum-modulo", source.text_at(match.start()))
+    for match in STRING_LIST.finditer(code):
+        words = {unquote(word) for word in re.findall(STRING, match.group(1))}
+        if len(words) >= MIN_WORDS and any(words <= names for names in (enums or {}).values()):
+            yield found("enum-word-list", match)
 
 
 def scan_paths(root, paths, allow_file=ALLOW_FILE):
     allowances = load_allowances(allow_file)
+    files = list(lint_common.source_files(root, paths, EXCLUDED))
+    texts = {relative: file.read_text() for relative, file in files}
+    enums = collect_enums(texts.values())
     raw = []
-    for base in paths:
-        target = root / base
-        files = [target] if target.is_file() else sorted(target.rglob("*"))
-        for file in files:
-            if file.suffix in SOURCE_SUFFIXES and file.is_file():
-                relative = file.relative_to(root).as_posix()
-                raw.extend(scan_text(relative, file.read_text()))
-    return [f for f in raw if not is_allowed(f, allowances)] + stale_allowances(allowances, raw)
+    for relative, text in texts.items():
+        raw.extend(scan_text(relative, text, enums))
+    return [f for f in raw if not is_allowed(f, allowances)] + lint_common.stale_allowances(allowances, raw, OWN_RULES)
 
 
 FIXTURES = {
@@ -125,30 +157,54 @@ FIXTURES = {
     "name-enum-table": 'constexpr auto t = {\n  {"a", E::a},\n  {"b", E::b},\n  {"c", E::c},\n};\n',
     "word-chain": 'void p(std::string_view w) {\n if (w == "--a") {}\n else if (w == "--b") {}\n else if (w == "--c") {}\n else if (w == "--d") {}\n}\n',
     "key-member-block": 'auto j = make({\n {"input", n(s.input)},\n {"output", n(s.output)},\n {"cache", n(s.cache)},\n});\n',
+    "json-format-template": 'auto j = std::format(R"({{"a":{},"b":{},"c":{{{}}}}})", x, y, z);\n',
+    "enum-handler-table": 'constexpr auto h = std::to_array<H>({\n  {E::a, &f},\n  {E::b, &g},\n  {E::c, &x::h},\n});\n',
+    "route-table": 'constexpr auto r = std::to_array<R>({\n  {"GET", "/a", route::a},\n  {"POST", "/b", route::b},\n  {"GET", "/c", route::c},\n});\n',
+    "enum-modulo": "auto s = static_cast<doctor::state>(bits(c, 0, 3) % 5);\n",
 }
-CLEAN = 'void ok(E e) {\n  switch (e) {\n    case E::a: return 1;\n    case E::b: return 2;\n    case E::c: return 3;\n  }\n  if (w == "x") {}\n  if (w == "y") {}\n}\n{"a", 1},\n{"b", 2},\n'
+CLEAN = (
+    "void ok(E e) {\n  switch (e) {\n    case E::a: return 1;\n    case E::b: return 2;\n    case E::c: return 3;\n  }\n"
+    '  if (w == "x") {}\n  if (w == "y") {}\n}\n{"a", 1},\n{"b", 2},\n'
+    '// case E::a: return "a"; case E::b: return "b"; case E::c: return "c";\n'
+    'auto raw = R"(case E::a: return "a"; case E::b: return "b"; case E::c: return "c";)";\n'
+    'auto j = std::format(R"({{"a":{},"b":{}}})", x, y);\n'
+    "auto n = static_cast<int>(x % 5);\nauto m = static_cast<std::uint8_t>(x % 5);\nauto u = static_cast<doctor::state>(x);\n"
+)
+TWO_LINE_SWITCH = 'switch (s) {\n  case status::pass:\n    return "PASS";\n  case status::warn:\n    return "WARN";\n  case status::fail:\n    return "FAIL";\n}\n'
+ESCAPED_QUOTES = 'switch (s) {\n  case k::a: return "say \\"a\\"";\n  case k::b: return "say \\"b\\"";\n  case k::c: return "say \\"c\\"";\n}\n'
+WORD_LIST = 'constexpr auto roles = std::to_array<std::string_view>({"opus", "sonnet", "haiku"});\n'
+ESCAPED_JSON = 'auto j = std::format("{{\\"a\\":{},\\"b\\":{},\\"c\\":{}}}", x, y, z);\n'
+ENUM_SOURCE = "enum class role { opus, sonnet, haiku, other };\n"
+TERNARY = 'return s == level::a ? "a" : s == level::b ? "b" : "c";\n'
+
+
+def expect(label, findings, rules):
+    got = {f.rule for f in findings}
+    if got != rules:
+        print(f"self-test: {label} found {sorted(got)}, expected {sorted(rules)}")
+        return 1
+    return 0
 
 
 def self_test():
     failures = 0
     for rule, text in FIXTURES.items():
-        found = {f.rule for f in scan_text("fixture.cppm", text)}
-        if found != {rule}:
-            print(f"self-test: {rule} fixture found {sorted(found)}")
-            failures += 1
-    if list(scan_text("clean.cppm", CLEAN)):
-        print("self-test: the clean fixture produced findings")
-        failures += 1
-    ternary = 'return s == level::a ? "a" : s == level::b ? "b" : "c";\n'
-    if {f.rule for f in scan_text("t.cppm", ternary)} != {"enum-name-switch"}:
-        print("self-test: the ternary chain was not found")
-        failures += 1
+        failures += expect(rule, scan_text("fixture.cppm", text), {rule})
+    failures += expect("clean", scan_text("clean.cppm", CLEAN), set())
+    failures += expect("ternary chain", scan_text("t.cppm", TERNARY), {"enum-name-switch"})
+    failures += expect("two-line switch", scan_text("t.cppm", TWO_LINE_SWITCH), {"enum-name-switch"})
+    failures += expect("escaped quotes", scan_text("t.cppm", ESCAPED_QUOTES), {"enum-name-switch"})
+    failures += expect("escaped json template", scan_text("t.cppm", ESCAPED_JSON), {"json-format-template"})
+    enums = collect_enums([ENUM_SOURCE])
+    failures += expect("enum word list", scan_text("t.cppm", WORD_LIST, enums), {"enum-word-list"})
+    failures += expect("enum word list without the enum", scan_text("t.cppm", WORD_LIST), set())
+    failures += expect("unrelated word list", scan_text("t.cppm", 'auto w = std::to_array<std::string_view>({"x", "y", "z"});\n', enums), set())
     return failures
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("paths", nargs="*", default=["src", "app"])
+    parser.add_argument("paths", nargs="*", default=DEFAULT_PATHS)
     parser.add_argument("--strict", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--root", default=str(pathlib.Path(__file__).resolve().parent.parent))

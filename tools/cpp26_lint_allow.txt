@@ -1,0 +1,12 @@
+# path|rule|text fragment of the first matching line|reason. Debt entries start with 'pending:' and name the tier that removes them; anything else is a justified exception. A path ending in / covers the directory.
+src/async/async.cppm|std-include|#include <coroutine>|pending: Tier 3 H checks whether import std alone suffices for the coroutine machinery on GCC 16.2, else turns this into a justified exception
+src/async/shutdown.cppm|std-include|#include <coroutine>|pending: Tier 3 H checks whether import std alone suffices for the coroutine machinery on GCC 16.2, else turns this into a justified exception
+src/core/contract_violation.cpp|legacy-io|std::fprintf(stderr|pending: Tier 3 H moves the handler to std::println(stderr, ...) if it is safe inside a violation handler
+app/llmgate.cpp|legacy-io|std::istreambuf_iterator<char>{std::cin}|pending: Tier 2 F reads standard input without iostream
+tests/fuzz/driver.cppm|legacy-io|read_all(std::cin)|pending: Tier 3 H reads standard input without iostream
+src/gateway/copilot.cppm|append-chain|out.push_back('%');|pending: Tier 2 D2 builds the percent escape with std::format_to
+tests/support/properties.cppm|unconstrained-template|template <class Property> constexpr bool for_all_sequences|pending: Tier 3 H constrains Property with std::predicate
+tests/support/scenarios.cppm|unconstrained-template|template <class Reader> async::task<std::string> drain|pending: Tier 3 H constrains Reader with net::byte_stream
+tests/unit/http_test.cpp|unconstrained-template|template <class Sink> std::expected<void, std::error_code> feed_all|pending: Tier 3 H constrains Sink with sse::event_sink or the parser sink concept
+tests/unit/httpio_test.cpp|unconstrained-template|template <class Handler> async::task<reply> single_request|pending: Tier 3 H constrains Handler with httpio::request_handler
+tests/unit/httpio_test.cpp|unconstrained-template|template <class Handler> reply run_single|pending: Tier 3 H constrains Handler with httpio::request_handler
