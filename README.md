@@ -13,6 +13,19 @@ build/host/llmgate                  # serves on 127.0.0.1:9480
 ANTHROPIC_BASE_URL=http://127.0.0.1:9480/anthropic ANTHROPIC_API_KEY=any claude
 ```
 
+## Who may use the gateway
+
+The gateway attaches your upstream credential to every request, so it checks who is asking:
+
+| Check | Rule |
+|---|---|
+| Host header | must match the listen address (`127.0.0.1:PORT`, `localhost:PORT` and `[::1]:PORT` for a loopback listen), compared case-insensitively; anything else gets 403, which stops DNS rebinding. Extra names go in `allowed_hosts` |
+| Client key | set `client_key_env` to the name of an environment variable holding a secret; requests must then carry it in `x-api-key` or as a bearer token (compared in constant time), otherwise 401. Claude Code sends `ANTHROPIC_API_KEY` as `x-api-key`. `/healthz` stays open |
+| Listen address | a non-loopback address is refused at start-up unless a client key is configured |
+| Token file | written atomically (`0600`, `O_EXCL|O_NOFOLLOW`, rename), its directory `0700` when created |
+
+The client key is never forwarded upstream.
+
 `llmgate --check-config` validates a configuration (unknown keys and wrong types are reported with their path), `llmgate --version` prints the version.
 
 ## Build
