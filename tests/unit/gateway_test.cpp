@@ -8,6 +8,7 @@ import llmgate.httpio;
 import llmgate.json;
 import llmgate.net;
 import llmgate.proof;
+import llmgate.reflect;
 import llmgate.routing;
 import llmgate.sse;
 import llmgate.tls;
@@ -530,6 +531,29 @@ const suite gateway_suite = [] {
         }
     };
 
+    "capability_every_repair_kind_has_a_counter_and_a_statistics_key_without_further_code"_test = [] {
+        world w;
+        gateway::repair_counts counts{};
+        for (auto const kind : reflect::enum_values<anthropic::repair_kind>) {
+            ++gateway::repair_slot(counts, kind);
+        }
+        auto stats = messages_request("");
+        stats.method = "GET";
+        stats.target = "/llmgate/stats";
+
+        auto const fresh = json::parse(w.ask(std::move(stats)).body);
+
+        expect(fresh.has_value());
+        for (auto const kind : reflect::enum_values<anthropic::repair_kind>) {
+            expect(gateway::repair_slot(counts, kind) == 1_u);
+            expect(json::count_at(*fresh, {"repairs", reflect::enum_name(kind)}) == std::optional<std::uint64_t>{0}) << reflect::enum_name(kind);
+        }
+        auto const written = json::to_value(counts);
+        for (auto const kind : reflect::enum_values<anthropic::repair_kind>) {
+            expect(json::count_at(written, {reflect::enum_name(kind)}) == std::optional<std::uint64_t>{1});
+        }
+    };
+
     "capability_the_models_wire_format_keeps_every_key_and_value"_test = [] {
         world w;
         auto request = messages_request("");
@@ -605,7 +629,7 @@ const suite gateway_suite = [] {
 
         expect(answer.status == 200);
         expect(event_names(answer.body) == complete_stream);
-        expect(w.gateway.counters().repairs.empty());
+        expect(std::ranges::all_of(reflect::enum_values<anthropic::repair_kind>, [&](auto const kind) { return gateway::repair_slot(w.gateway.counters().repairs, kind) == 0; }));
     };
 
     "defect_repeated_message_start_from_the_upstream_reaches_the_client_once"_test = [] {
@@ -615,7 +639,7 @@ const suite gateway_suite = [] {
         auto const answer = w.ask(messages_request(chat("opus", true)));
 
         expect(event_names(answer.body) == complete_stream);
-        expect(w.gateway.counters().repairs.at(anthropic::repair_kind::duplicate_message_start) == 2_u);
+        expect(gateway::repair_slot(w.gateway.counters().repairs, anthropic::repair_kind::duplicate_message_start) == 2_u);
     };
 
     "defect_a_stream_with_no_message_start_gets_one"_test = [] {
@@ -625,7 +649,7 @@ const suite gateway_suite = [] {
         auto const answer = w.ask(messages_request(chat("opus", true)));
 
         expect(event_names(answer.body) == complete_stream);
-        expect(w.gateway.counters().repairs.at(anthropic::repair_kind::missing_message_start) == 1_u);
+        expect(gateway::repair_slot(w.gateway.counters().repairs, anthropic::repair_kind::missing_message_start) == 1_u);
     };
 
     "defect_a_block_the_upstream_never_closed_is_closed_for_the_client"_test = [] {
@@ -635,7 +659,7 @@ const suite gateway_suite = [] {
         auto const answer = w.ask(messages_request(chat("opus", true)));
 
         expect(event_names(answer.body) == complete_stream);
-        expect(w.gateway.counters().repairs.at(anthropic::repair_kind::unclosed_block) == 1_u);
+        expect(gateway::repair_slot(w.gateway.counters().repairs, anthropic::repair_kind::unclosed_block) == 1_u);
     };
 
     "limit_an_upstream_that_dies_mid_stream_ends_the_client_stream_with_an_error_event"_test = [] {
@@ -647,7 +671,7 @@ const suite gateway_suite = [] {
         auto const names = event_names(answer.body);
         expect(names.back() == "error");
         expect(!std::ranges::contains(names, std::string{"message_stop"}));
-        expect(w.gateway.counters().repairs.at(anthropic::repair_kind::truncated_stream) == 1_u);
+        expect(gateway::repair_slot(w.gateway.counters().repairs, anthropic::repair_kind::truncated_stream) == 1_u);
     };
 
     "limit_an_upstream_that_goes_silent_is_cut_at_the_stream_idle_limit"_test = [] {

@@ -13,6 +13,7 @@ import llmgate.httpio;
 import llmgate.json;
 import llmgate.net;
 import llmgate.proof;
+import llmgate.reflect;
 import llmgate.routing;
 import llmgate.selection;
 import llmgate.shutdown;
@@ -185,6 +186,32 @@ struct provider_stats {
     std::uint64_t skipped = 0;
 };
 
+using counter = std::uint64_t;
+
+struct repair_counts;
+
+consteval {
+    std::vector<std::meta::info> counters;
+    for (auto const kind : std::meta::enumerators_of(^^anthropic::repair_kind)) {
+        counters.push_back(std::meta::data_member_spec(^^counter, {.name = std::meta::identifier_of(kind)}));
+    }
+    std::meta::define_aggregate(^^repair_counts, counters);
+}
+
+static_assert(sizeof(repair_counts) == reflect::enum_count<anthropic::repair_kind> * sizeof(counter));
+
+template <class Counts>
+    requires std::same_as<std::remove_const_t<Counts>, repair_counts>
+constexpr auto& repair_slot(Counts& counts, anthropic::repair_kind const kind) {
+    std::conditional_t<std::is_const_v<Counts>, counter const, counter>* slot = nullptr;
+    template for (constexpr auto enumerator : std::define_static_array(std::meta::enumerators_of(^^anthropic::repair_kind))) {
+        if (kind == [:enumerator:]) {
+            slot = &counts.[:*member_named(^^repair_counts, std::meta::identifier_of(enumerator)):];
+        }
+    }
+    return *slot;
+}
+
 struct stats {
     std::uint64_t requests = 0;
     std::uint64_t streamed = 0;
@@ -196,7 +223,7 @@ struct stats {
     std::uint64_t no_provider = 0;
     std::uint64_t connections_opened = 0;
     std::uint64_t connections_reused = 0;
-    std::map<anthropic::repair_kind, std::uint64_t> repairs;
+    repair_counts repairs{};
     [[= json::skip]] std::map<std::string, provider_stats> providers;
 };
 
@@ -297,7 +324,7 @@ struct relay_state {
     }
 
     void note(anthropic::repair const& item) {
-        ++counters->repairs[item.kind];
+        ++repair_slot(counters->repairs, item.kind);
         ++repairs_seen;
     }
 
