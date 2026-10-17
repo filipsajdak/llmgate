@@ -34,10 +34,28 @@ Only when the text is **not** an identifier of the type: an HTTP status phrase, 
 
 ## Checks
 
-- `python3 tools/reflection_lint.py --strict src app` fails on a new hand-written mirror and on a stale allowance.
-- A hook runs it on each `src/` or `app/` file you edit and returns the findings as context.
-- GCC 16.2 notes: `std::format` is not constexpr here (`__cpp_lib_constexpr_format` is undefined), so in constexpr code build text with `text::append_all`; `std::meta::define_static_string` is how a reflected name becomes a `string_view`.
+- `python3 tools/reflection_lint.py --strict src app tests` fails on a new hand-written mirror and on a stale allowance. It also reports `{Enum::x, &fn}` and `{"GET", "/p", route::x}` tables, raw-string `std::format` JSON templates, `static_cast<Enum>(n % N)` and `std::to_array<std::string_view>` lists that equal an enum.
+- A PreToolUse hook (`tools/cpp26_precheck.py`) scans the new text before it is written and a PostToolUse hook (`tools/reflection_hook.py`) the whole file afterwards; both return the findings as context and never block.
 
-## Pending
+## GCC 16.2 facts (verified by `ctest -L capability`, probes in `tests/constexpr/capabilities`)
 
-`json::write` takes a `json::value`. A reflection-based `json::to_value<T>(aggregate)` is the missing sibling of `json::read<T>`; until it exists the `key-member-block` findings in `tools/reflection_lint_allow.txt` stay as debt.
+The reflection posts are mostly written for the Bloomberg clang fork. On GCC 16.2.0 with `-freflection`:
+
+| Do | Do not |
+|---|---|
+| `std::meta::annotations_of_with_type(member, ^^A)` and test `.empty()` or take `[0]` | `annotation_of_type` does not exist (the must-fail probe `absent/annotation_of_type.cpp` fails the day a compiler adds it) |
+| Annotation payloads that hold text as `char text[N]` filled by a consteval factory, as `flag` does in `arguments.cppm` | a `std::string_view` member in an annotation |
+| A `char const*` payload only when a consteval factory builds it with `std::define_static_string(std::string_view)` | `define_static_string(char const*)`: it takes a string_view or range |
+| `std::define_static_array(...)` around `enumerators_of` and `nonstatic_data_members_of` before `template for` | iterating the raw `std::vector<info>` in `template for`: it is not a constant range |
+| `std::remove_cvref_t` before using `type_of(m)` as a key or comparing it | using `type_of(m)` of a `const` or reference member as a key without stripping it |
+| `std::meta::identifier_of(e)` (null-terminated: `n.data()[n.size()] == 0`) as a `string_view` | assuming `display_string_of(^^T)` text: it is implementation-defined, never parse or compare it |
+| `std::meta::subobjects_of` to include bases; `nonstatic_data_members_of` skips them | `namespace_members_of`, `info_pack` and the `reflect_*` libraries from the posts |
+| `access_context::current()` in the type's own scope, `unchecked()` to read private members, `unprivileged()` for public only | reading private members under `unprivileged()` |
+| `enumerators_of(^^E).size()` as a constant, and a pairwise `extract<E>` comparison to detect alias enumerators | trusting a hand-kept count |
+| `define_aggregate` from a `consteval {}` block in a class template (probe `define_aggregate_from_consteval_block`) | (not probed: other contexts) |
+| An aggregate `std::formatter<T>` built with `template for` and `std::format_to` | (not probed: types with bases) |
+| `std::meta::current_function()` as a template default argument | (not probed: function default arguments) |
+| `#embed` into a `constexpr char[]` and parse it at compile time | `std::format` or `std::to_string` in constexpr code: `__cpp_lib_constexpr_format` is undefined, so build text with `text::append_all` |
+| `std::string{reflect::enum_name(v)}` at run time, also under the sanitizers; corpus targets compile with `-fno-sanitize=all` | an `#include` of a standard header next to `import std` in a module: measured 2.2x slower and `__mbstate_t` conflicts; only `<meta>` and `<contracts>` sit in the global module fragment today |
+
+Probes are plain translation units, so module-specific behaviour (explicit instantiation of `std::optional<T>` for module types, coroutines exported from interfaces) is in the README "Toolchain findings" table, not here. Add a probe to `tests/constexpr/capabilities/supported` before relying on a new feature; move it to `absent` when it fails.
