@@ -654,4 +654,20 @@ constexpr bool writer_holds(std::string_view const text) {
            same(json::to_value(sample), written);
 }
 
+constexpr bool route_table_answers(std::string_view const text) {
+    return std::ranges::all_of(routing::route_table, [&](routing::route_entry const& item) {
+        auto const target = std::string{item.where.target()} + "?" + std::string{text};
+        auto const other_verb = std::string{item.where.verb()} + "X";
+        return routing::route_of(item.where.verb(), target) == item.which && routing::route_of(other_verb, target) == routing::route::wrong_method;
+    });
+}
+
+constexpr bool gateway_wire_holds(std::string_view const text) {
+    auto const body = routing::error_json(text, text);
+    auto const back = json::read_text<routing::error_body>(body, {.jsonc = false});
+    auto const known_path = std::ranges::any_of(routing::route_table, [&](routing::route_entry const& item) { return item.where.target() == routing::path_of(text); });
+    return back.has_value() && back->type == "error" && back->error.type == text && back->error.message == text && jsonscan::top_level_members(body).has_value() &&
+           (routing::route_of("GET", text) == routing::route::unknown_path) != known_path && route_table_answers(text);
+}
+
 }  // namespace llmgate::properties
