@@ -70,6 +70,8 @@ jobs:
       - uses: actions/checkout@v4
       - run: pip install lizard
       - run: python3 tools/coroutine_lint.py --strict src
+      - run: python3 tools/reflection_lint.py --self-test
+      - run: python3 tools/reflection_lint.py --strict src app
 
   crap:
     if: github.event_name != 'schedule'

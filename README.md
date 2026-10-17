@@ -172,6 +172,7 @@ TSan and ASan cannot see bugs that need two coroutines to interleave on one thre
 | `chaos::stream` | Random short reads and random yields around every I/O call | `tests/support/chaos.cppm` |
 | Seed-sweep scenarios | Concurrent writers, concurrent HTTP clients and a full-duplex TLS echo run under 136 seeds; a failure prints the seed | `tests/unit/schedule_test.cpp` |
 | AFL++ schedule harness | Coverage-guided search over seeds and scenarios | `tests/fuzz/schedule` |
+| `tools/reflection_lint.py --strict src app` | Hand-written copies of a definition: enum-to-string switches, `{"word", Type::member}` tables, `if (word == ...)` chains and `{"key", x.key}` blocks; use `reflect::enum_name`, `reflect::enum_from_name` and annotated members instead. A hook runs it on each edited `src/` or `app/` file and the `reflect-dont-hand-write` skill (`.claude/skills`) explains the patterns; `tools/reflection_lint_allow.txt` holds justified exceptions and `pending:` debt, and a stale line fails the gate |
 | `tools/coroutine_lint.py --strict src` | Coroutines that take references or views (clang-tidy CP.53 cannot parse this code); every allowed case carries its reason in `tools/coroutine_lint_allow.txt` | `tools/` |
 
 The tests were validated by reintroducing the defects they target: an epoll mask that ignores writers hangs `async_test`, and a reactor without the duplicate-wait refusal fails its test.
