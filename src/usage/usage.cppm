@@ -1,8 +1,14 @@
+module;
+
+#include <meta>
+
 export module llmgate.usage;
 
 import std;
 import llmgate.json;
 import llmgate.jsonscan;
+import llmgate.lenient;
+import llmgate.members;
 import llmgate.reflect;
 import llmgate.role;
 import llmgate.text;
@@ -14,6 +20,7 @@ using text::compact;
 constexpr std::int64_t seconds_per_day = 86400;
 constexpr std::size_t longest_session = 64;
 constexpr unsigned percent_cap = 999;
+constexpr int status_cap = 999;
 constexpr unsigned default_warn_percent = 80;
 constexpr std::string_view session_marker = "_session_";
 
@@ -21,40 +28,101 @@ constexpr std::uint64_t add_sat(std::uint64_t const left, std::uint64_t const ri
     return left > std::numeric_limits<std::uint64_t>::max() - right ? std::numeric_limits<std::uint64_t>::max() : left + right;
 }
 
-struct tokens {
-    std::uint64_t input = 0;
-    std::uint64_t output = 0;
-    std::uint64_t cache_read = 0;
-    std::uint64_t cache_creation = 0;
+constexpr std::size_t column_capacity = 16;
 
-    constexpr std::uint64_t counted() const noexcept { return add_sat(add_sat(input, output), cache_creation); }
+struct column {
+    char text[column_capacity]{};
 
-    constexpr tokens& operator+=(tokens const& other) noexcept {
-        input = add_sat(input, other.input);
-        output = add_sat(output, other.output);
-        cache_read = add_sat(cache_read, other.cache_read);
-        cache_creation = add_sat(cache_creation, other.cache_creation);
-        return *this;
+    consteval column(std::string_view const heading) {
+        if (heading.size() >= column_capacity) {
+            throw "usage::column: the heading does not fit in column_capacity";
+        }
+        std::ranges::copy(heading, text);
     }
+};
+
+struct uncounted_t {};
+inline constexpr uncounted_t uncounted{};
+
+struct tokens {
+    [[= column{"input"}]] std::uint64_t input = 0;
+    [[= column{"output"}]] std::uint64_t output = 0;
+    [[= column{"cache read"}]] [[= uncounted]] std::uint64_t cache_read = 0;
+    [[= column{"cache write"}]] std::uint64_t cache_creation = 0;
+
+    constexpr std::uint64_t counted() const noexcept;
+    constexpr tokens& operator+=(tokens const& other) noexcept;
+    constexpr void raise_to(tokens const& seen) noexcept;
 
     friend constexpr bool operator==(tokens const&, tokens const&) = default;
 };
 
+template <class T>
+inline constexpr auto members_of = std::define_static_array(std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::current()));
+
+template <class T>
+inline constexpr std::meta::info type_info = ^^T;
+
+consteval bool every_member_counts(std::span<std::meta::info const> const fields) {
+    return std::ranges::all_of(fields, [](std::meta::info const field) { return std::meta::type_of(field) == type_info<std::uint64_t>; });
+}
+
+static_assert(every_member_counts(members_of<tokens>));
+
+constexpr std::uint64_t tokens::counted() const noexcept {
+    std::uint64_t sum = 0;
+    template for (constexpr auto field : members_of<tokens>) {
+        if constexpr (!reflect::has_annotation<uncounted_t>(field)) {
+            sum = add_sat(sum, this->[:field:]);
+        }
+    }
+    return sum;
+}
+
+constexpr tokens& tokens::operator+=(tokens const& other) noexcept {
+    template for (constexpr auto field : members_of<tokens>) {
+        this->[:field:] = add_sat(this->[:field:], other.[:field:]);
+    }
+    return *this;
+}
+
+constexpr void tokens::raise_to(tokens const& seen) noexcept {
+    template for (constexpr auto field : members_of<tokens>) {
+        this->[:field:] = std::max(this->[:field:], seen.[:field:]);
+    }
+}
+
+consteval std::string_view heading_of(std::meta::info const field) {
+    auto const named = reflect::annotation_of<column>(field);
+    std::string_view const heading{named->text};
+    return {std::define_static_string(heading), heading.size()};
+}
+
+template <class To, class From>
+    requires(members_of<To>.size() == members_of<From>.size())
+constexpr To copy_by_position(From const& from) {
+    To to{};
+    template for (constexpr auto at : std::define_static_array(std::views::iota(std::size_t{0}, members_of<To>.size()))) {
+        to.[:members_of<To>[at]:] = from.[:members_of<From>[at]:];
+    }
+    return to;
+}
+
 struct totals {
-    tokens used{};
+    [[= json::flatten]] tokens used{};
     std::uint64_t requests = 0;
 
     friend constexpr bool operator==(totals const&, totals const&) = default;
 };
 
 struct record {
-    std::int64_t time = 0;
+    [[= json::required]] std::int64_t time = 0;
     std::string requested{};
     std::string model{};
     std::string role{};
     std::string provider{};
     std::string session{};
-    tokens used{};
+    [[= json::flatten]] tokens used{};
     std::int64_t duration_ms = 0;
     int status = 0;
     std::uint64_t repairs = 0;
@@ -62,12 +130,15 @@ struct record {
     friend constexpr bool operator==(record const&, record const&) = default;
 };
 
+struct usage_counts {
+    [[= json::key{"input_tokens"}]] std::uint64_t input = 0;
+    [[= json::key{"output_tokens"}]] std::uint64_t output = 0;
+    [[= json::key{"cache_read_input_tokens"}]] std::uint64_t cache_read = 0;
+    [[= json::key{"cache_creation_input_tokens"}]] std::uint64_t cache_creation = 0;
+};
+
 constexpr tokens read_tokens(json::value const& source) {
-    auto const get = [&source](std::string_view const key) { return json::count_at(source, {key}).value_or(0); };
-    return {.input = get("input_tokens"),
-            .output = get("output_tokens"),
-            .cache_read = get("cache_read_input_tokens"),
-            .cache_creation = get("cache_creation_input_tokens")};
+    return copy_by_position<tokens>(lenient::read<usage_counts>(source).value_or(usage_counts{}));
 }
 
 class observer {
@@ -112,11 +183,7 @@ private:
         if (usage == nullptr) {
             return;
         }
-        auto const seen = read_tokens(*usage);
-        used_.input = std::max(used_.input, seen.input);
-        used_.output = std::max(used_.output, seen.output);
-        used_.cache_read = std::max(used_.cache_read, seen.cache_read);
-        used_.cache_creation = std::max(used_.cache_creation, seen.cache_creation);
+        used_.raise_to(read_tokens(*usage));
     }
 
     std::string model_{};
@@ -170,28 +237,20 @@ constexpr std::string_view role_of(std::string_view const requested) {
     return roles::name_of(roles::of(requested));
 }
 
-constexpr json::value number(std::uint64_t const value) {
-    return json::value{static_cast<std::int64_t>(std::min<std::uint64_t>(value, std::numeric_limits<std::int64_t>::max()))};
-}
-
 constexpr std::string to_line(record const& entry) {
-    auto line = json::write(json::make_object({
-        {"time", json::value{entry.time}},
-        {"requested", json::make_string(entry.requested)},
-        {"model", json::make_string(entry.model)},
-        {"role", json::make_string(entry.role)},
-        {"provider", json::make_string(entry.provider)},
-        {"session", json::make_string(entry.session)},
-        {"input", number(entry.used.input)},
-        {"output", number(entry.used.output)},
-        {"cache_read", number(entry.used.cache_read)},
-        {"cache_creation", number(entry.used.cache_creation)},
-        {"duration_ms", json::value{entry.duration_ms}},
-        {"status", json::value{static_cast<std::int64_t>(entry.status)}},
-        {"repairs", number(entry.repairs)},
-    }));
+    auto line = json::write(json::to_value(entry));
     line += '\n';
     return line;
+}
+
+constexpr record cleaned(record entry) {
+    entry.requested = label(entry.requested);
+    entry.model = label(entry.model);
+    entry.role = label(entry.role);
+    entry.provider = label(entry.provider);
+    entry.session = checked_session(entry.session);
+    entry.status = std::clamp(entry.status, 0, status_cap);
+    return entry;
 }
 
 constexpr std::optional<record> from_line(std::string_view const line) {
@@ -199,27 +258,11 @@ constexpr std::optional<record> from_line(std::string_view const line) {
     if (!parsed) {
         return std::nullopt;
     }
-    auto const* time = json::at(*parsed, {"time"});
-    auto const* whole = time == nullptr ? nullptr : std::get_if<std::int64_t>(&time->data);
-    if (whole == nullptr) {
+    auto entry = lenient::read<record>(*parsed);
+    if (!entry) {
         return std::nullopt;
     }
-    auto const count = [&parsed](std::string_view const key) { return json::count_at(*parsed, {key}).value_or(0); };
-    auto const signed_at = [&parsed](std::string_view const key) {
-        auto const* found = json::at(*parsed, {key});
-        auto const* value = found == nullptr ? nullptr : std::get_if<std::int64_t>(&found->data);
-        return value == nullptr ? std::int64_t{0} : *value;
-    };
-    return record{.time = *whole,
-                  .requested = label(json::text_at(*parsed, {"requested"})),
-                  .model = label(json::text_at(*parsed, {"model"})),
-                  .role = label(json::text_at(*parsed, {"role"})),
-                  .provider = label(json::text_at(*parsed, {"provider"})),
-                  .session = checked_session(json::text_at(*parsed, {"session"})),
-                  .used = {.input = count("input"), .output = count("output"), .cache_read = count("cache_read"), .cache_creation = count("cache_creation")},
-                  .duration_ms = signed_at("duration_ms"),
-                  .status = static_cast<int>(std::clamp<std::int64_t>(signed_at("status"), 0, 999)),
-                  .repairs = count("repairs")};
+    return cleaned(std::move(*entry));
 }
 
 constexpr std::int64_t day_of(std::int64_t const seconds) noexcept {
@@ -343,7 +386,7 @@ static_assert(reflect::unique_values<level>());
 
 struct verdict {
     level state = level::ok;
-    std::string_view window{};
+    std::string window{};
     std::uint64_t used = 0;
     std::uint64_t limit = 0;
     unsigned percent = 0;
@@ -361,7 +404,7 @@ constexpr unsigned percent_of(std::uint64_t const used, std::uint64_t const limi
     return static_cast<unsigned>(std::min<std::uint64_t>(percent, percent_cap));
 }
 
-constexpr verdict evaluate(budget const& limits, std::uint64_t const today, std::uint64_t const month) noexcept {
+constexpr verdict evaluate(budget const& limits, std::uint64_t const today, std::uint64_t const month) {
     verdict best;
     auto const consider = [&best](std::string_view const window, std::uint64_t const used, std::uint64_t const limit) {
         if (limit == 0) {
@@ -369,7 +412,7 @@ constexpr verdict evaluate(budget const& limits, std::uint64_t const today, std:
         }
         auto const percent = percent_of(used, limit);
         if (best.limit == 0 || percent > best.percent) {
-            best = {.state = level::ok, .window = window, .used = used, .limit = limit, .percent = percent};
+            best = {.state = level::ok, .window = std::string{window}, .used = used, .limit = limit, .percent = percent};
         }
     };
     consider("daily", today, limits.daily_tokens);
@@ -392,29 +435,17 @@ constexpr std::string refusal_message(verdict const& now) {
     return message;
 }
 
-constexpr json::value totals_object(totals const& sum) {
-    return json::make_object({{"input", number(sum.used.input)},
-                              {"output", number(sum.used.output)},
-                              {"cache_read", number(sum.used.cache_read)},
-                              {"cache_creation", number(sum.used.cache_creation)},
-                              {"requests", number(sum.requests)}});
-}
-
-constexpr json::value verdict_object(verdict const& now) {
-    return json::make_object({{"state", json::make_string(std::string{level_name(now.state)})},
-                              {"window", json::make_string(std::string{now.window})},
-                              {"used", number(now.used)},
-                              {"limit", number(now.limit)},
-                              {"percent", number(now.percent)}});
-}
+struct summary {
+    totals today{};
+    totals month{};
+    verdict budget{};
+};
 
 constexpr std::string summary_json(ledger const& book, budget const& limits, std::int64_t const now_seconds) {
     auto const day = day_of(now_seconds);
     auto const today = book.on_day(day);
     auto const month = book.in_month(month_of(day));
-    return json::write(json::make_object({{"today", totals_object(today)},
-                                          {"month", totals_object(month)},
-                                          {"budget", verdict_object(evaluate(limits, today.used.counted(), month.used.counted()))}}));
+    return json::write(json::to_value(summary{.today = today, .month = month, .budget = evaluate(limits, today.used.counted(), month.used.counted())}));
 }
 
 struct headline {
@@ -426,22 +457,35 @@ struct headline {
     unsigned percent = 0;
 };
 
+struct budget_reading {
+    std::string state{};
+    std::string window{};
+    std::uint64_t used = 0;
+    std::uint64_t limit = 0;
+    unsigned percent = 0;
+};
+
+struct usage_reading {
+    totals today{};
+    budget_reading budget{};
+};
+
+struct stats_reading {
+    usage_reading usage{};
+};
+
 constexpr headline headline_from(std::string_view const stats_body) {
     auto const parsed = json::parse(stats_body, {.jsonc = false});
     if (!parsed) {
         return {};
     }
-    auto const* usage = json::at(*parsed, {"usage"});
-    if (usage == nullptr) {
-        return {};
-    }
-    auto const count = [usage](std::initializer_list<std::string_view> const path) { return json::count_at(*usage, path).value_or(0); };
-    return {.today = add_sat(add_sat(count({"today", "input"}), count({"today", "output"})), count({"today", "cache_creation"})),
-            .state = json::text_at(*usage, {"budget", "state"}),
-            .window = json::text_at(*usage, {"budget", "window"}),
-            .used = count({"budget", "used"}),
-            .limit = count({"budget", "limit"}),
-            .percent = static_cast<unsigned>(std::min<std::uint64_t>(count({"budget", "percent"}), percent_cap))};
+    auto const [usage] = lenient::read<stats_reading>(*parsed).value_or(stats_reading{});
+    return {.today = usage.today.used.counted(),
+            .state = usage.budget.state,
+            .window = usage.budget.window,
+            .used = usage.budget.used,
+            .limit = usage.budget.limit,
+            .percent = std::min(usage.budget.percent, percent_cap)};
 }
 
 constexpr std::string pad_right(std::string text, std::size_t const width) {
@@ -465,64 +509,66 @@ constexpr std::vector<group> rows_between(ledger const& book, std::int64_t const
     return rows;
 }
 
-constexpr std::string report(ledger const& book, std::int64_t const first_day, std::int64_t const last_day) {
-    constexpr std::size_t model_width = 22;
-    constexpr std::size_t number_width = 12;
-    std::string out = pad_right("date", 12) + pad_right("model", model_width) + pad_left("requests", 9) + pad_left("input", number_width) +
-                      pad_left("output", number_width) + pad_left("cache read", number_width) + pad_left("cache write", number_width) + "\n";
-    totals all;
-    for (auto const& item : rows_between(book, first_day, last_day)) {
-        out += pad_right(iso_date(item.day), 12) + pad_right(item.model, model_width) + pad_left(text::decimal(item.sum.requests), 9) +
-               pad_left(compact(item.sum.used.input), number_width) + pad_left(compact(item.sum.used.output), number_width) +
-               pad_left(compact(item.sum.used.cache_read), number_width) + pad_left(compact(item.sum.used.cache_creation), number_width) + "\n";
-        all.used += item.sum.used;
-        all.requests = add_sat(all.requests, item.sum.requests);
+constexpr std::size_t date_width = 12;
+constexpr std::size_t model_width = 22;
+constexpr std::size_t request_width = 9;
+constexpr std::size_t number_width = 12;
+
+constexpr std::string token_headings() {
+    std::string out;
+    template for (constexpr auto field : members_of<tokens>) {
+        text::append_all(out, pad_left(reflect::copy_of(heading_of(field)), number_width));
     }
-    out += pad_right("total", 12 + model_width) + pad_left(text::decimal(all.requests), 9) + pad_left(compact(all.used.input), number_width) +
-           pad_left(compact(all.used.output), number_width) + pad_left(compact(all.used.cache_read), number_width) +
-           pad_left(compact(all.used.cache_creation), number_width) + "\n";
     return out;
 }
 
-constexpr std::string report_json(ledger const& book, std::int64_t const first_day, std::int64_t const last_day) {
-    json::array rows;
-    for (auto const& item : rows_between(book, first_day, last_day)) {
-        auto row = totals_object(item.sum);
-        auto& members = std::get<json::object>(row.data);
-        members.insert(members.begin(), {"model", json::make_string(item.model)});
-        members.insert(members.begin(), {"date", json::make_string(iso_date(item.day))});
-        rows.push_back(std::move(row));
+constexpr std::string token_cells(tokens const& values) {
+    std::string out;
+    template for (constexpr auto field : members_of<tokens>) {
+        text::append_all(out, pad_left(compact(values.[:field:]), number_width));
     }
-    return json::write(json::make_object({{"days", json::value{static_cast<std::int64_t>(last_day - first_day + 1)}}, {"rows", json::value{std::move(rows)}}}), 2);
+    return out;
 }
 
-constexpr bool both_observed(std::string_view const start, std::string_view const delta, tokens const expected) {
-    observer seen;
-    seen.on_event("message_start", start);
-    seen.on_event("message_delta", delta);
-    return seen.used() == expected;
+constexpr std::string report(ledger const& book, std::int64_t const first_day, std::int64_t const last_day) {
+    std::string out;
+    text::append_all(out, pad_right("date", date_width), pad_right("model", model_width), pad_left("requests", request_width), token_headings(), "\n");
+    totals all;
+    for (auto const& item : rows_between(book, first_day, last_day)) {
+        text::append_all(out, pad_right(iso_date(item.day), date_width), pad_right(item.model, model_width), pad_left(text::decimal(item.sum.requests), request_width),
+                         token_cells(item.sum.used), "\n");
+        all.used += item.sum.used;
+        all.requests = add_sat(all.requests, item.sum.requests);
+    }
+    text::append_all(out, pad_right("total", date_width + model_width), pad_left(text::decimal(all.requests), request_width), token_cells(all.used), "\n");
+    return out;
 }
 
-static_assert(both_observed(R"({"type":"message_start","message":{"model":"m","usage":{"input_tokens":10,"cache_read_input_tokens":4,"output_tokens":1}}})",
-                            R"({"type":"message_delta","delta":{},"usage":{"output_tokens":7}})",
-                            {.input = 10, .output = 7, .cache_read = 4}));
-static_assert(both_observed(R"({"message":{"usage":{"output_tokens":9}}})", R"({"usage":{"output_tokens":3}})", {.output = 9}));
-static_assert(both_observed("not json", "[]", {}));
-static_assert([] {
-    observer seen;
-    seen.on_body(R"({"model":"claude-x","usage":{"input_tokens":5,"output_tokens":2,"cache_creation_input_tokens":1}})");
-    return seen.model() == "claude-x" && seen.used() == tokens{.input = 5, .output = 2, .cache_creation = 1};
-}());
+struct report_row {
+    std::string date{};
+    std::string model{};
+    [[= json::flatten]] totals sum{};
+};
+
+struct report_body {
+    std::int64_t days = 0;
+    std::vector<report_row> rows{};
+};
+
+constexpr std::string report_json(ledger const& book, std::int64_t const first_day, std::int64_t const last_day) {
+    auto rows = rows_between(book, first_day, last_day) |
+                std::views::transform([](group const& item) { return report_row{.date = iso_date(item.day), .model = item.model, .sum = item.sum}; }) |
+                std::ranges::to<std::vector>();
+    return json::write(json::to_value(report_body{.days = last_day - first_day + 1, .rows = std::move(rows)}), 2);
+}
+
+static_assert(record{} == record{} && totals{} == totals{});
 static_assert(label("claude-x") == "claude-x" && label("a\x1b[31mb") == "a?[31mb" && label("sp ace\n") == "sp?ace?" && label(std::string(100, 'a')).size() == longest_label);
-static_assert(from_line(R"({"time":1,"model":"m\u001b[2Jx","requested":"\u0007r"})")->model == "m?[2Jx" && from_line(R"({"time":1,"session":"bad\u001bid"})")->session.empty());
 static_assert(session_of(R"({"model":"m","metadata":{"user_id":"user_ab_account_cd_session_5f3a-90"}})") == "5f3a-90");
 static_assert(session_of(R"({"metadata":{"user_id":"{\"device_id\":\"d\",\"session_id\":\"s-1\"}"}})") == "s-1");
 static_assert(session_of(R"({"metadata":{"user_id":"no marker"}})").empty() && session_of("[]").empty() && session_of(R"({"metadata":3})").empty());
 static_assert(session_of(R"({"metadata":{"user_id":"x_session_bad id!"}})").empty());
 static_assert(role_of("claude-Sonnet-5-5") == "sonnet" && role_of("claude-haiku-5-5") == "haiku" && role_of("gpt") == "other");
-static_assert(from_line(to_line({.time = 1760000000, .requested = "a", .model = "b", .role = "opus", .session = "s", .used = {1, 2, 3, 4}, .duration_ms = 9, .status = 200, .repairs = 2})) ==
-              record{.time = 1760000000, .requested = "a", .model = "b", .role = "opus", .session = "s", .used = {1, 2, 3, 4}, .duration_ms = 9, .status = 200, .repairs = 2});
-static_assert(!from_line("{}") && !from_line("garbage") && from_line(R"({"time":5})")->time == 5);
 static_assert(day_of(0) == 0 && day_of(86399) == 0 && day_of(86400) == 1 && day_of(-1) == -1 && day_of(-86400) == -1 && day_of(-86401) == -2);
 static_assert(iso_date(0) == "1970-01-01" && iso_date(day_of(1760659200)) == "2025-10-17" && iso_date(day_of(951782400)) == "2000-02-29" && iso_date(-1) == "1969-12-31");
 static_assert(month_of(0) == 1970 * 12 && month_of(31) == 1970 * 12 + 1);
@@ -547,12 +593,7 @@ static_assert([] {
     book.add({.time = 90000, .model = "a", .used = {.output = 1500}});
     book.add({.time = 90100, .model = "a", .used = {.output = 10}});
     auto const text = report(book, 0, 1);
-    auto const json_text = report_json(book, 1, 1);
-    return rows_between(book, 0, 1).size() == 2 && rows_between(book, 5, 6).empty() && text.contains("1970-01-02") && text.contains("1k") &&
-           text.starts_with("date") && json_text.contains("\"date\": \"1970-01-02\"") && json_text.contains("\"requests\": 2") && !json_text.contains("1970-01-01");
+    return rows_between(book, 0, 1).size() == 2 && rows_between(book, 5, 6).empty() && text.contains("1970-01-02") && text.contains("1k") && text.starts_with("date");
 }());
-static_assert(load(to_line({.time = 5, .model = "m"}) + "junk\n\n" + to_line({.time = 6, .model = "m"})).skipped == 1);
-static_assert(headline_from(R"({"usage":{"today":{"input":5,"output":2,"cache_read":99,"cache_creation":1},"budget":{"state":"warning","window":"daily","used":8,"limit":10,"percent":80}}})").today == 8);
-static_assert(headline_from("x").state.empty() && headline_from("{}").limit == 0);
 
 }  // namespace llmgate::usage
