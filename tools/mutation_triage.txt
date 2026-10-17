@@ -1,0 +1,20 @@
+# key | kind | reason
+# key is <file>:<line>:<first 8 hex of the sha1 of the mutated line> as printed by tools/mutate.sh
+# kind is equivalent (no observable behaviour changes) or arid (the mutated code is not product behaviour)
+src/claude/statusline.cppm:14:6cd53ecd | equivalent | both renderers clamp the percentage to 0 before printing, so a default of -1 shows as 0
+src/claude/statusline.cppm:33:3f31637a | equivalent | clamping to 1 instead of 0 fills 1 * 10 / 100 = 0 cells, the same as 0
+src/claude/statusline.cppm:44:dfd8b511 | equivalent | (1==1) is the integer 1, the original bound
+src/claude/statusline.cppm:46:8adf98db | equivalent | continue as the last statement of the loop body does what falling off the end does
+src/claude/statusline.cppm:76:a3129f79 | equivalent | the state is one value, so the two ifs are mutually exclusive whether chained or not
+src/usage/usage.cppm:159:2a651911 | equivalent | a metadata member that is not an object parses and yields no user_id, so the session is empty either way
+src/usage/usage.cppm:167:2d7c123a | equivalent | c % 'A' equals c - 'A' for every c in 'A'..'Z'
+src/usage/usage.cppm:167:10cd6789 | equivalent | a character below 'A' maps to a code below 'a', which never matches the lower-case role words
+src/usage/usage.cppm:247:b36710a6 | equivalent | shifted == 0 gives era 0 on both branches
+src/usage/usage.cppm:375:68991e3f | equivalent | limit is unsigned, so <= 0 is == 0
+src/usage/usage.cppm:468:1bbc514d | equivalent | groups are unique by day and model, so the comparator never sees equal elements
+src/usage/usage.cppm:484:8adf98db | equivalent | continue as the last statement of the loop body does what falling off the end does
+src/usage/usage.cppm:544:f7c35549 | arid | mutates the fixture of a static_assert, not product code
+src/usage/usage.cppm:546:84d7c907 | arid | weakens the assertion of a static_assert fixture, not product code
+src/usage/usage.cppm:550:0463bbe0 | arid | mutates the fixture of a static_assert, not product code
+src/usage/usage.cppm:555:6f55d8dd | arid | mutates the assertion of a static_assert fixture, not product code
+src/usage/usage.cppm:556:6c412fa1 | arid | mutates the assertion of a static_assert fixture, not product code
