@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.30)
 set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD f35a9ac6-8463-4d38-8eec-5d6008153e7d)
 project(llmgate VERSION 0.0.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+set(CMAKE_CXX_SCAN_FOR_MODULES ON)
 set(CMAKE_CXX_MODULE_STD ON)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -11,18 +11,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
 
-FetchContent_Declare(stdexec
-  GIT_REPOSITORY https://github.com/NVIDIA/stdexec.git
-  GIT_TAG nvhpc-26.05
-  GIT_SHALLOW ON
-  EXCLUDE_FROM_ALL)
-set(STDEXEC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(STDEXEC_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(stdexec)
-
-find_package(OpenSSL REQUIRED)
-find_package(simdjson REQUIRED)
-find_package(llhttp REQUIRED)
+find_package(OpenSSL 3.5 REQUIRED)
 
 add_library(llmgate_flags INTERFACE)
 target_compile_options(llmgate_flags INTERFACE
@@ -40,37 +29,34 @@ set(BOOST_UT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(BOOST_UT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(ut)
 
-add_library(llmgate_core STATIC src/core/contract_violation.cpp src/core/kqueue_reactor.cpp)
-target_include_directories(llmgate_core PUBLIC src)
-target_link_libraries(llmgate_core PUBLIC llmgate_flags STDEXEC::stdexec)
-
-add_executable(s0_toolchain spike/s0_toolchain.cpp)
-target_link_libraries(s0_toolchain PRIVATE llmgate_core)
-
-enable_testing()
-add_test(NAME s0_toolchain COMMAND s0_toolchain)
-
-add_library(llmgate_reflect)
-target_sources(llmgate_reflect PUBLIC FILE_SET CXX_MODULES BASE_DIRS src FILES src/reflect/enum.cppm)
-target_link_libraries(llmgate_reflect PUBLIC llmgate_flags)
-set_target_properties(llmgate_reflect PROPERTIES CXX_SCAN_FOR_MODULES ON)
-
-add_library(llmgate_tls)
-target_sources(llmgate_tls PUBLIC FILE_SET CXX_MODULES BASE_DIRS src FILES src/tls/tls.cppm)
-target_link_libraries(llmgate_tls PUBLIC llmgate_flags llmgate_reflect OpenSSL::SSL OpenSSL::Crypto)
-set_target_properties(llmgate_tls PROPERTIES CXX_SCAN_FOR_MODULES ON)
-
-function(llmgate_unit_test name)
-  cmake_parse_arguments(ARG "MODULES" "" "LIBS" ${ARGN})
-  add_executable(${name} tests/unit/${name}.cpp)
-  target_link_libraries(${name} PRIVATE Boost::ut ${ARG_LIBS})
-  if(ARG_MODULES)
-    set_target_properties(${name} PROPERTIES CXX_SCAN_FOR_MODULES ON)
+function(llmgate_module name)
+  cmake_parse_arguments(ARG "" "" "INTERFACE;SOURCES;LIBS" ${ARGN})
+  add_library(${name})
+  target_sources(${name} PUBLIC FILE_SET CXX_MODULES BASE_DIRS src FILES ${ARG_INTERFACE})
+  if(ARG_SOURCES)
+    target_sources(${name} PRIVATE ${ARG_SOURCES})
   endif()
-  add_test(NAME ${name} COMMAND ${name})
-  set_tests_properties(${name} PROPERTIES LABELS unit)
+  target_link_libraries(${name} PUBLIC llmgate_flags ${ARG_LIBS})
 endfunction()
 
-llmgate_unit_test(kqueue_reactor_test LIBS llmgate_core)
-llmgate_unit_test(reflect_enum_test MODULES LIBS llmgate_reflect llmgate_core)
-llmgate_unit_test(tls_test MODULES LIBS llmgate_tls llmgate_core)
+add_library(llmgate_contracts STATIC src/core/contract_violation.cpp)
+target_link_libraries(llmgate_contracts PUBLIC llmgate_flags)
+
+llmgate_module(llmgate_reflect INTERFACE src/reflect/enum.cppm)
+llmgate_module(llmgate_async INTERFACE src/async/async.cppm SOURCES src/async/reactor.cpp)
+llmgate_module(llmgate_tls INTERFACE src/tls/tls.cppm LIBS llmgate_reflect OpenSSL::SSL OpenSSL::Crypto)
+llmgate_module(llmgate_net INTERFACE src/net/net.cppm LIBS llmgate_async llmgate_tls)
+
+enable_testing()
+
+function(llmgate_test name label)
+  add_executable(${name} tests/${label}/${name}.cpp)
+  target_link_libraries(${name} PRIVATE Boost::ut llmgate_contracts ${ARGN})
+  add_test(NAME ${name} COMMAND ${name})
+  set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT 60)
+endfunction()
+
+llmgate_test(reflect_enum_test unit llmgate_reflect)
+llmgate_test(async_test unit llmgate_async)
+llmgate_test(tls_test unit llmgate_tls)
+llmgate_test(tls_network_test network llmgate_net)

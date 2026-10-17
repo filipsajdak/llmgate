@@ -20,11 +20,51 @@
     }
   ],
   "buildPresets": [
-    { "name": "host", "configurePreset": "host" },
-    { "name": "linux", "configurePreset": "linux" }
+    {
+      "name": "host",
+      "configurePreset": "host"
+    },
+    {
+      "name": "linux",
+      "configurePreset": "linux"
+    }
   ],
   "testPresets": [
-    { "name": "host", "configurePreset": "host", "output": { "outputOnFailure": true } },
-    { "name": "linux", "configurePreset": "linux", "output": { "outputOnFailure": true } }
+    {
+      "name": "host",
+      "configurePreset": "host",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "exclude": {
+          "label": "network"
+        }
+      }
+    },
+    {
+      "name": "host-network",
+      "configurePreset": "host",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "label": "network"
+        }
+      }
+    },
+    {
+      "name": "linux",
+      "configurePreset": "linux",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "exclude": {
+          "label": "network"
+        }
+      }
+    }
   ]
 }

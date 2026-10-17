@@ -1,13 +1,15 @@
-#include "core/kqueue_reactor.hpp"
+module;
 
-#include <array>
 #include <cerrno>
-#include <span>
 
 #include <sys/event.h>
 #include <unistd.h>
 
-namespace llmgate::core {
+module llmgate.async;
+
+import std;
+
+namespace llmgate::async {
 
 namespace {
 
@@ -19,15 +21,15 @@ std::error_code last_error() noexcept {
 
 }  // namespace
 
-kqueue_reactor::kqueue_reactor() : kqueue_fd_{::kqueue()} {
+reactor::reactor() : kqueue_fd_{::kqueue()} {
     contract_assert(kqueue_fd_ >= 0);
 }
 
-kqueue_reactor::~kqueue_reactor() {
+reactor::~reactor() {
     ::close(kqueue_fd_);
 }
 
-std::error_code kqueue_reactor::arm(int const fd, interest const what, pending_op* const op) noexcept {
+std::error_code reactor::arm(int const fd, interest const what, detail::pending_op* const op) noexcept {
     struct kevent change;
     auto const filter = what == interest::readable ? EVFILT_READ : EVFILT_WRITE;
     EV_SET(&change, static_cast<uintptr_t>(fd), filter, EV_ADD | EV_ONESHOT, 0, 0, op);
@@ -37,18 +39,20 @@ std::error_code kqueue_reactor::arm(int const fd, interest const what, pending_o
     return {};
 }
 
-std::error_code kqueue_reactor::poll_once() noexcept {
+void reactor::poll_or_terminate() noexcept {
     std::array<struct kevent, events_per_poll> events;
     auto const count = ::kevent(kqueue_fd_, nullptr, 0, events.data(), static_cast<int>(events.size()), nullptr);
     if (count < 0) {
-        return errno == EINTR ? std::error_code{} : last_error();
+        if (errno != EINTR) {
+            std::terminate();
+        }
+        return;
     }
     for (auto const& event : std::span{events.data(), static_cast<std::size_t>(count)}) {
-        auto* const op = static_cast<pending_op*>(event.udata);
+        auto* const op = static_cast<detail::pending_op*>(event.udata);
         auto const failed = (event.flags & EV_ERROR) != 0;
         op->complete(op, failed ? std::error_code{static_cast<int>(event.data), std::system_category()} : std::error_code{});
     }
-    return {};
 }
 
-}  // namespace llmgate::core
+}  // namespace llmgate::async
