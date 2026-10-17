@@ -47,6 +47,13 @@ struct config {
     tls::group_policy tls_groups = tls::group_policy::post_quantum_preferred;
     std::optional<copilot_config> copilot{};
     std::string static_token_env{};
+    std::string client_key_env{};
+    std::vector<std::string> allowed_hosts{};
+};
+
+struct access_policy {
+    std::string client_key{};
+    std::vector<std::string> allowed_hosts{};
 };
 
 class credential {
@@ -78,6 +85,7 @@ struct stats {
     std::uint64_t upstream_failures = 0;
     std::uint64_t upstream_timeouts = 0;
     std::uint64_t client_disconnects = 0;
+    std::uint64_t refused = 0;
     std::uint64_t connections_opened = 0;
     std::uint64_t connections_reused = 0;
     std::map<anthropic::repair_kind, std::uint64_t> repairs;
@@ -123,8 +131,8 @@ std::string stats_json(stats const& counters) {
         std::format_to(std::back_inserter(repairs), "{}\"{}\":{}", repairs.empty() ? "" : ",", reflect::enum_name(kind), count);
     }
     return std::format(
-        R"({{"requests":{},"streamed":{},"upstream_failures":{},"upstream_timeouts":{},"client_disconnects":{},"connections_opened":{},"connections_reused":{},"repairs":{{{}}}}})",
-        counters.requests, counters.streamed, counters.upstream_failures, counters.upstream_timeouts, counters.client_disconnects,
+        R"({{"requests":{},"streamed":{},"upstream_failures":{},"upstream_timeouts":{},"client_disconnects":{},"refused":{},"connections_opened":{},"connections_reused":{},"repairs":{{{}}}}})",
+        counters.requests, counters.streamed, counters.upstream_failures, counters.upstream_timeouts, counters.client_disconnects, counters.refused,
         counters.connections_opened, counters.connections_reused, repairs);
 }
 
@@ -193,8 +201,8 @@ export namespace llmgate::gateway {
 
 class proxy {
 public:
-    proxy(async::reactor& loop, config settings, credential& credentials, tls::client_context const& tls_context)
-        : loop_{&loop}, settings_{std::move(settings)}, credentials_{&credentials}, tls_context_{&tls_context} {
+    proxy(async::reactor& loop, config settings, access_policy access, credential& credentials, tls::client_context const& tls_context)
+        : loop_{&loop}, settings_{std::move(settings)}, access_{std::move(access)}, credentials_{&credentials}, tls_context_{&tls_context} {
         if (auto parsed = routing::parse_url(settings_.upstream.base_url)) {
             upstream_ = std::move(*parsed);
         }
@@ -208,7 +216,12 @@ public:
     template <net::byte_stream Client>
     async::task<net::result_void> operator()(httpio::request const& incoming, httpio::response_writer<Client>& out) {
         ++counters_.requests;
-        switch (routing::route_of(incoming.head.method, incoming.head.target)) {
+        auto const which = routing::route_of(incoming.head.method, incoming.head.target);
+        if (auto refusal = check_access(incoming, which)) {
+            ++counters_.refused;
+            co_return co_await reject(out, std::move(*refusal));
+        }
+        switch (which) {
             case routing::route::messages: co_return co_await forward(incoming, out, false);
             case routing::route::count_tokens: co_return co_await estimate_tokens(incoming, out);
             case routing::route::models: co_return co_await respond(out, 200, detail::models_json(settings_.models));
@@ -221,6 +234,22 @@ public:
     }
 
 private:
+    std::optional<routing::reply_body> check_access(httpio::request const& incoming, routing::route const which) const {
+        auto const host = incoming.head.fields.find("host");
+        if (!host || !routing::host_allowed(*host, access_.allowed_hosts)) {
+            return routing::error_reply(403, "permission_error", "unexpected Host header");
+        }
+        if (access_.client_key.empty() || which == routing::route::health) {
+            return std::nullopt;
+        }
+        auto const header_key = incoming.head.fields.find("x-api-key").value_or("");
+        auto const bearer_key = routing::bearer_value(incoming.head.fields.find("authorization").value_or(""));
+        if (routing::secrets_equal(header_key, access_.client_key) || routing::secrets_equal(bearer_key, access_.client_key)) {
+            return std::nullopt;
+        }
+        return routing::error_reply(401, "authentication_error", "invalid or missing client key");
+    }
+
     template <net::byte_stream Client>
     static async::task<net::result_void> respond(httpio::response_writer<Client>& out, int const status, std::string body) {
         http::header_map fields;
@@ -381,6 +410,7 @@ private:
 
     async::reactor* loop_;
     config settings_;
+    access_policy access_;
     credential* credentials_;
     tls::client_context const* tls_context_;
     std::optional<routing::endpoint_url> upstream_;

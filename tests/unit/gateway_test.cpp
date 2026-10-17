@@ -6,6 +6,7 @@ import llmgate.gateway;
 import llmgate.http;
 import llmgate.httpio;
 import llmgate.net;
+import llmgate.routing;
 import llmgate.sse;
 import llmgate.tls;
 import std;
@@ -175,12 +176,15 @@ async::task<reply> call(async::reactor& loop, std::uint16_t const port, httpio::
     co_return result;
 }
 
-httpio::request_spec messages_request(std::string body, std::string target = "/anthropic/v1/messages") {
+httpio::request_spec messages_request(std::string body, std::string target = "/anthropic/v1/messages",
+                                      std::string client_key = "client-secret") {
     http::header_map fields;
     fields.add("Content-Type", "application/json");
     fields.add("anthropic-version", "2023-06-01");
     fields.add("anthropic-beta", "tools-2024");
-    fields.add("x-api-key", "client-secret");
+    if (!client_key.empty()) {
+        fields.add("x-api-key", std::move(client_key));
+    }
     return {.method = "POST", .target = std::move(target), .host = "localhost", .fields = std::move(fields), .body = std::move(body)};
 }
 
@@ -206,13 +210,15 @@ struct world {
                 .time = {.connect = std::chrono::seconds{2}, .response_head = std::chrono::seconds{2}, .stream_idle = short_idle}};
     }
 
-    explicit world(std::string token = "upstream-token", std::optional<std::uint64_t> const seed = std::nullopt)
+    explicit world(std::string token = "upstream-token", std::string client_key = "", std::optional<std::uint64_t> const seed = std::nullopt)
         : loop{seed},
           upstream_listener{std::move(*net::listener::bind(loop, std::string{loopback}, 0))},
           gateway_listener{std::move(*net::listener::bind(loop, std::string{loopback}, 0))},
           credential{std::move(token)},
           tls_context{std::move(*tls::client_context::make(tls::group_policy::classical_only))},
-          gateway{loop, settings(upstream_listener.port()), credential, tls_context} {
+          gateway{loop, settings(upstream_listener.port()),
+                  {.client_key = std::move(client_key), .allowed_hosts = routing::default_allowed_hosts(loopback, gateway_listener.port())},
+                  credential, tls_context} {
         upstream.loop = &loop;
         loop.spawn(accept_upstream(loop, upstream_listener, upstream));
         loop.spawn(httpio::serve(gateway_listener, gateway, httpio::limits{.max_body_bytes = 4096}));
@@ -220,7 +226,15 @@ struct world {
 
     std::uint16_t port() const noexcept { return gateway_listener.port(); }
 
-    reply ask(httpio::request_spec spec) { return loop.run(call(loop, port(), std::move(spec))); }
+    reply ask(httpio::request_spec spec) {
+        spec.host = std::format("127.0.0.1:{}", port());
+        return loop.run(call(loop, port(), std::move(spec)));
+    }
+
+    reply ask_as(httpio::request_spec spec, std::string host) {
+        spec.host = std::move(host);
+        return loop.run(call(loop, port(), std::move(spec)));
+    }
 };
 
 std::vector<std::string> event_names(std::string_view const wire) {
@@ -352,7 +366,9 @@ const suite gateway_suite = [] {
         auto const stopped = w.loop.run([](world& world) -> async::task<bool> {
             {
                 auto client = co_await net::tcp_stream::connect(world.loop, std::string{loopback}, world.port());
-                auto const wire = httpio::format_request(messages_request(chat("opus", true)));
+                auto spec = messages_request(chat("opus", true));
+                spec.host = std::format("127.0.0.1:{}", world.port());
+                auto const wire = httpio::format_request(spec);
                 (void)co_await client->write_all(std::as_bytes(std::span{*wire}));
                 std::array<std::byte, 64> first{};
                 (void)co_await client->read_some(first, {});
@@ -388,12 +404,14 @@ const suite gateway_suite = [] {
         world w;
         auto const gone = net::listener::bind(w.loop, std::string{loopback}, 0)->port();
         gateway::static_credential credential{"t"};
-        auto settings = world::settings(gone);
-        gateway::proxy broken{w.loop, settings, credential, w.tls_context};
         auto server = net::listener::bind(w.loop, std::string{loopback}, 0);
+        gateway::proxy broken{w.loop, world::settings(gone), {.allowed_hosts = routing::default_allowed_hosts(loopback, server->port())},
+                              credential, w.tls_context};
         w.loop.spawn(httpio::serve(*server, broken, httpio::limits{}));
+        auto request = messages_request(chat("opus", false));
+        request.host = std::format("127.0.0.1:{}", server->port());
 
-        auto const answer = w.loop.run(call(w.loop, server->port(), messages_request(chat("opus", false))));
+        auto const answer = w.loop.run(call(w.loop, server->port(), std::move(request)));
 
         expect(answer.status == 502);
         expect(answer.body.contains("api_error"));
@@ -432,6 +450,42 @@ const suite gateway_suite = [] {
 
         expect(answer.status == 200);
         expect(w.upstream.seen[0].body == R"({"model":"claude-opus-upstream","model":"claude-opus-upstream","max_tokens":1})");
+    };
+
+    "defect_a_host_header_for_another_name_is_refused_so_dns_rebinding_cannot_use_the_credential"_test = [] {
+        world w;
+
+        auto const rebound = w.ask_as(messages_request(chat("opus", false)), std::format("evil.example:{}", w.port()));
+        auto const lowercase = w.ask_as(messages_request(chat("opus", false)), std::format("LOCALHOST:{}", w.port()));
+
+        expect(rebound.status == 403);
+        expect(rebound.body.contains("permission_error"));
+        expect(lowercase.status == 200);
+        expect(w.upstream.seen.size() == 1_u);
+        expect(w.gateway.counters().refused == 1_u);
+    };
+
+    "limit_with_a_client_key_configured_requests_without_it_are_refused"_test = [] {
+        world w{"upstream-token", "local-secret"};
+        auto with_header = messages_request(chat("opus", false), "/anthropic/v1/messages", "local-secret");
+        auto with_bearer = messages_request(chat("opus", false), "/anthropic/v1/messages", "");
+        with_bearer.fields.add("Authorization", "Bearer local-secret");
+        auto wrong = messages_request(chat("opus", false), "/anthropic/v1/messages", "local-secrex");
+
+        expect(w.ask(messages_request(chat("opus", false), "/anthropic/v1/messages", "")).status == 401);
+        expect(w.ask(std::move(wrong)).status == 401);
+        expect(w.ask(std::move(with_header)).status == 200);
+        expect(w.ask(std::move(with_bearer)).status == 200);
+        expect(w.upstream.seen.size() == 2_u);
+    };
+
+    "limit_the_health_check_stays_open_when_a_client_key_is_configured"_test = [] {
+        world w{"upstream-token", "local-secret"};
+        auto health = messages_request("");
+        health.method = "GET";
+        health.target = "/healthz";
+
+        expect(w.ask(std::move(health)).status == 200);
     };
 
     "limit_unknown_paths_and_wrong_methods_are_refused"_test = [] {

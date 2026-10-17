@@ -132,6 +132,45 @@ constexpr std::optional<std::string_view> agreed_value(std::string_view const bo
     return same ? std::optional<std::string_view>{first} : std::nullopt;
 }
 
+constexpr bool secrets_equal(std::string_view const left, std::string_view const right) noexcept {
+    std::size_t difference = left.size() ^ right.size();
+    auto const longest = std::max(left.size(), right.size());
+    for (std::size_t at = 0; at < longest; ++at) {
+        auto const a = at < left.size() ? static_cast<unsigned char>(left[at]) : 0U;
+        auto const b = at < right.size() ? static_cast<unsigned char>(right[at]) : 0U;
+        difference |= a ^ b;
+    }
+    return difference == 0;
+}
+
+constexpr bool is_loopback_host(std::string_view const host) noexcept {
+    return host == "localhost" || host == "::1" || host == "[::1]" || host.starts_with("127.");
+}
+
+constexpr std::string with_port(std::string_view const host, std::uint16_t const port) {
+    std::array<char, 8> digits{};
+    auto const end = std::to_chars(digits.data(), digits.data() + digits.size(), port).ptr;
+    return std::string{host} + ":" + std::string{digits.data(), end};
+}
+
+constexpr std::vector<std::string> default_allowed_hosts(std::string_view const listen_host, std::uint16_t const port) {
+    if (!is_loopback_host(listen_host)) {
+        return {with_port(listen_host, port)};
+    }
+    return {with_port("127.0.0.1", port), with_port("localhost", port), with_port("[::1]", port)};
+}
+
+constexpr bool host_allowed(std::string_view const header, std::span<std::string const> const allowed) {
+    return std::ranges::any_of(allowed, [header](std::string const& candidate) {
+        return std::ranges::equal(candidate, header, [](char const a, char const b) { return lowered(a) == lowered(b); });
+    });
+}
+
+constexpr std::string_view bearer_value(std::string_view const authorization) noexcept {
+    constexpr std::string_view prefix = "Bearer ";
+    return authorization.starts_with(prefix) ? authorization.substr(prefix.size()) : std::string_view{};
+}
+
 template <class Lookup>
 constexpr std::expected<prepared_request, reply_body> prepare(std::string_view const body, Lookup&& lookup) {
     auto const members = jsonscan::top_level_members(body);
@@ -169,6 +208,11 @@ static_assert(route_of("GET", "/nope") == route::unknown_path);
 static_assert(parse_url("https://api.example.com").value().port == https_port);
 static_assert(parse_url("http://127.0.0.1:9090/base").value().base_path == "/base");
 static_assert(!parse_url("ftp://x").has_value());
+static_assert(secrets_equal("abc", "abc") && !secrets_equal("abc", "abd") && !secrets_equal("abc", "abcd") && secrets_equal("", ""));
+static_assert(is_loopback_host("127.0.0.1") && is_loopback_host("localhost") && !is_loopback_host("0.0.0.0") && !is_loopback_host("10.0.0.5"));
+static_assert(default_allowed_hosts("127.0.0.1", 9480).size() == 3 && default_allowed_hosts("10.0.0.5", 80).front() == "10.0.0.5:80");
+static_assert(host_allowed("LocalHost:9480", default_allowed_hosts("127.0.0.1", 9480)) && !host_allowed("evil.example:9480", default_allowed_hosts("127.0.0.1", 9480)));
+static_assert(bearer_value("Bearer k") == "k" && bearer_value("Basic k").empty());
 static_assert(hop_by_hop("Transfer-Encoding") && !hop_by_hop("Content-Type"));
 
 }  // namespace llmgate::routing

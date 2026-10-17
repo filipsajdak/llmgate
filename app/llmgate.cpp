@@ -8,6 +8,7 @@ import llmgate.gateway;
 import llmgate.httpio;
 import llmgate.json;
 import llmgate.net;
+import llmgate.routing;
 import llmgate.tls;
 
 namespace {
@@ -89,6 +90,20 @@ std::unique_ptr<gateway::credential> make_credential(async::reactor& loop, tls::
     return std::make_unique<gateway::static_credential>(token == nullptr ? std::string{} : std::string{token});
 }
 
+std::expected<gateway::access_policy, std::string> make_policy(gateway::config const& settings, std::string const& host,
+                                                               std::uint16_t const port) {
+    auto const* key = settings.client_key_env.empty() ? nullptr : std::getenv(settings.client_key_env.c_str());
+    if (!settings.client_key_env.empty() && (key == nullptr || *key == '\0')) {
+        return std::unexpected{std::format("client_key_env names {}, which is not set", settings.client_key_env)};
+    }
+    if (!routing::is_loopback_host(host) && key == nullptr) {
+        return std::unexpected{std::format("{} is not a loopback address: set client_key_env to require a client key", host)};
+    }
+    auto hosts = routing::default_allowed_hosts(host, port);
+    hosts.insert(hosts.end(), settings.allowed_hosts.begin(), settings.allowed_hosts.end());
+    return gateway::access_policy{.client_key = key == nullptr ? std::string{} : std::string{key}, .allowed_hosts = std::move(hosts)};
+}
+
 int serve(gateway::config settings) {
     auto const address = split_listen(settings.listen);
     if (!address) {
@@ -102,8 +117,13 @@ int serve(gateway::config settings) {
         std::println(stderr, "llmgate: cannot start: {}", !tls_context ? tls_context.error().message() : listening.error().message());
         return exit_runtime;
     }
+    auto policy = make_policy(settings, address->first, listening->port());
+    if (!policy) {
+        std::println(stderr, "llmgate: {}", policy.error());
+        return exit_config;
+    }
     auto credential = make_credential(loop, *tls_context, settings);
-    gateway::proxy proxy{loop, settings, *credential, *tls_context};
+    gateway::proxy proxy{loop, settings, std::move(*policy), *credential, *tls_context};
     if (!proxy.configured()) {
         std::println(stderr, "llmgate: upstream.base_url is not a valid http or https URL");
         return exit_config;

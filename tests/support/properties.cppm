@@ -145,6 +145,16 @@ constexpr bool routing_holds(std::string_view const text) {
         }
     }
     (void)routing::route_of("POST", text);
+    if (!routing::secrets_equal(text, text) || routing::secrets_equal(text, std::string{text} + "x") ||
+        routing::secrets_equal(text, "other") != routing::secrets_equal("other", text)) {
+        return false;
+    }
+    (void)routing::is_loopback_host(text);
+    auto const allowed = routing::default_allowed_hosts(text, 9480);
+    if (routing::host_allowed(text, allowed) != std::ranges::contains(allowed, std::string{text}) &&
+        !std::ranges::any_of(allowed, [&text](std::string const& candidate) { return candidate.size() == text.size(); })) {
+        return false;
+    }
     if (routing::path_of(text).contains('?')) {
         return false;
     }

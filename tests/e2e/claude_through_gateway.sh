@@ -16,17 +16,18 @@ cat > "$work/config.jsonc" <<JSON
   "listen": "127.0.0.1:0",
   "upstream": { "base_url": "http://127.0.0.1:$upstream_port", "messages_path": "/v1/messages" },
   "models": { "sonnet": "fake-sonnet-upstream", "haiku": "fake-haiku-upstream" },
-  "static_token_env": "LLMGATE_TEST_TOKEN"
+  "static_token_env": "LLMGATE_TEST_TOKEN",
+  "client_key_env": "LLMGATE_CLIENT_KEY"
 }
 JSON
 
-LLMGATE_TEST_TOKEN=fake-upstream-token "$binary" --config "$work/config.jsonc" > "$work/gateway.log" 2>&1 &
+LLMGATE_TEST_TOKEN=fake-upstream-token LLMGATE_CLIENT_KEY=local-client-key "$binary" --config "$work/config.jsonc" > "$work/gateway.log" 2>&1 &
 gateway_pid=$!
 while ! grep -q "listening on" "$work/gateway.log"; do sleep 0.1; done
 gateway_port=$(sed -n 's/.*listening on 127.0.0.1:\([0-9]*\).*/\1/p' "$work/gateway.log")
 
 echo "gateway :$gateway_port -> fake upstream :$upstream_port (defect: $defect)"
-ANTHROPIC_BASE_URL="http://127.0.0.1:$gateway_port/anthropic" ANTHROPIC_API_KEY=client-key-not-forwarded \
+ANTHROPIC_BASE_URL="http://127.0.0.1:$gateway_port/anthropic" ANTHROPIC_API_KEY=local-client-key \
   CLAUDE_CONFIG_DIR="$work/claude" DISABLE_TELEMETRY=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1 \
   claude -p "Say hello" --model sonnet --no-session-persistence --output-format text > "$work/claude.out" 2> "$work/claude.err" || true
 
@@ -42,5 +43,9 @@ for line in open(sys.argv[1]):
     h = e["headers"]
     print(f'{e["method"]} {e["path"]} auth={h.get("authorization")} x-api-key={h.get("x-api-key")} beta={h.get("anthropic-beta")} :: {summary}')
 PY
-echo "--- gateway stats:"; curl -s "http://127.0.0.1:$gateway_port/llmgate/stats"; echo
+echo "--- access control:"
+echo "no key:        $(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$gateway_port/anthropic/v1/messages" -d '{}')"
+echo "spoofed Host:  $(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' -H 'x-api-key: local-client-key' "http://127.0.0.1:$gateway_port/anthropic/v1/models")"
+echo "right key:     $(curl -s -o /dev/null -w '%{http_code}' -H 'x-api-key: local-client-key' "http://127.0.0.1:$gateway_port/anthropic/v1/models")"
+echo "--- gateway stats:"; curl -s -H 'x-api-key: local-client-key' "http://127.0.0.1:$gateway_port/llmgate/stats"; echo
 grep -q "Hello from the fake upstream" "$work/claude.out"
