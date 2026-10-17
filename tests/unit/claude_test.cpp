@@ -46,8 +46,8 @@ const suite claude_suite = [] {
     };
 
     "capability_the_client_key_is_used_when_set_and_a_dummy_otherwise"_test = [] {
-        expect(value_of(sample(), "ANTHROPIC_API_KEY") == "none");
-        expect(value_of(sample("local-secret"), "ANTHROPIC_API_KEY") == "local-secret");
+        expect(value_of(sample(), "ANTHROPIC_AUTH_TOKEN") == "none");
+        expect(value_of(sample("local-secret"), "ANTHROPIC_AUTH_TOKEN") == "local-secret");
     };
 
     "limit_shell_exports_quote_values_so_they_cannot_inject_commands"_test = [] {

@@ -30,7 +30,7 @@ llmgate claude         # starts the gateway if it is down, then runs Claude Code
 | `llmgate login` | GitHub Copilot device login |
 | `llmgate --check-config` | Validates the configuration; unknown keys and wrong types are reported with their path |
 
-The first time Claude Code sees the dummy `ANTHROPIC_API_KEY` it asks once whether to use it; answer yes (VS Code skips the question through `claudeCode.disableLoginPrompt`).
+The launcher passes the gateway key (or a placeholder) as `ANTHROPIC_AUTH_TOKEN`, not `ANTHROPIC_API_KEY`: with the latter Claude Code asks once whether to use a custom API key, with the former (checked on `claude` 2.1.302) it does not. The gateway accepts it as a bearer token.
 
 ### What replaces a per-user setup kit
 

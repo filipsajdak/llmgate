@@ -396,6 +396,8 @@ constexpr bool selection_holds(std::string_view const text) {
         return true;
     }
     return std::ranges::all_of(selection::known_roles, [&](std::string_view const role) { return order_is_sound(routes, declared, role); });
+}
+
 constexpr bool printable(std::string_view const text) {
     return std::ranges::all_of(text, [](char const c) { return c == '\n' || (static_cast<unsigned char>(c) >= ' ' && c != '\x7f'); });
 }

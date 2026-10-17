@@ -21,14 +21,14 @@ struct launch_config {
 
 using environment_list = std::vector<std::pair<std::string, std::string>>;
 
-constexpr std::string_view dummy_api_key = "none";
+constexpr std::string_view placeholder_token = "none";
 
 constexpr environment_list environment(launch_config const& settings, std::string_view const gateway_url, std::string_view const client_key,
                                        std::string_view const expanded_profile_dir) {
     environment_list list{
         {"CLAUDE_CONFIG_DIR", std::string{expanded_profile_dir}},
         {"ANTHROPIC_BASE_URL", std::string{gateway_url}},
-        {"ANTHROPIC_API_KEY", std::string{client_key.empty() ? dummy_api_key : client_key}},
+        {"ANTHROPIC_AUTH_TOKEN", std::string{client_key.empty() ? placeholder_token : client_key}},
         {"ANTHROPIC_MODEL", settings.model},
         {"ANTHROPIC_DEFAULT_OPUS_MODEL", settings.opus},
         {"ANTHROPIC_DEFAULT_SONNET_MODEL", settings.sonnet},
