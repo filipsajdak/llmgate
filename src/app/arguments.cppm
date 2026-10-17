@@ -12,6 +12,7 @@ import llmgate.statusline;
 export namespace llmgate::arguments {
 
 enum class command { serve, login, claude, env, setup, statusline, status, stop, usage, doctor, quota };
+static_assert(reflect::unique_values<command>());
 
 constexpr unsigned default_days = 7;
 constexpr unsigned longest_report_days = 3660;

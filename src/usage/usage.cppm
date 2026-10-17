@@ -4,6 +4,7 @@ import std;
 import llmgate.json;
 import llmgate.jsonscan;
 import llmgate.reflect;
+import llmgate.role;
 import llmgate.text;
 
 export namespace llmgate::usage {
@@ -165,18 +166,8 @@ constexpr std::string session_of(std::string_view const body) {
     return parsed ? session_from_user_id(json::text_at(*parsed, {"user_id"})) : std::string{};
 }
 
-constexpr bool contains_word(std::string_view const text, std::string_view const word) {
-    auto const lower = [](char const c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
-    return !std::ranges::search(text, word, {}, lower, {}).empty();
-}
-
 constexpr std::string_view role_of(std::string_view const requested) {
-    for (auto const role : std::to_array<std::string_view>({"opus", "sonnet", "haiku"})) {
-        if (contains_word(requested, role)) {
-            return role;
-        }
-    }
-    return "other";
+    return roles::name_of(roles::of(requested));
 }
 
 constexpr json::value number(std::uint64_t const value) {
@@ -348,6 +339,7 @@ struct budget {
 };
 
 enum class level { ok, warning, exhausted };
+static_assert(reflect::unique_values<level>());
 
 struct verdict {
     level state = level::ok;

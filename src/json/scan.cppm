@@ -7,6 +7,7 @@ import llmgate.require;
 export namespace llmgate::jsonscan {
 
 enum class errc { not_an_object = 1, malformed, too_deep, trailing_bytes, member_missing, member_not_a_string };
+static_assert(reflect::unique_values<errc>() && reflect::starts_at_one<errc>());
 
 }  // namespace llmgate::jsonscan
 

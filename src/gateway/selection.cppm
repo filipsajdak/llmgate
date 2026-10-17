@@ -2,13 +2,13 @@ export module llmgate.selection;
 
 import std;
 import llmgate.reflect;
+import llmgate.role;
 
 export namespace llmgate::selection {
 
 constexpr unsigned default_failure_threshold = 3;
 constexpr std::int64_t default_cooldown_ms = 30000;
-constexpr std::string_view fallback_role = "other";
-constexpr auto known_roles = std::to_array<std::string_view>({"opus", "sonnet", "haiku", "other"});
+constexpr std::string_view fallback_role = roles::name_of(roles::fallback);
 
 struct breaker_settings {
     unsigned failures = default_failure_threshold;
@@ -16,6 +16,7 @@ struct breaker_settings {
 };
 
 enum class circuit { closed, open, half_open };
+static_assert(reflect::unique_values<circuit>());
 
 struct breaker {
     unsigned failures = 0;
@@ -85,8 +86,8 @@ constexpr bool has_duplicate(std::span<std::string const> const names) {
 }
 
 constexpr std::string list_problem(role_route const& item, std::span<std::string const> const declared) {
-    if (!std::ranges::contains(known_roles, std::string_view{item.role})) {
-        return "routes." + item.role + " is not a role (opus, sonnet, haiku or other)";
+    if (!roles::from_name(item.role)) {
+        return "routes." + item.role + " is not a role (" + roles::list_text() + ")";
     }
     if (item.providers.empty()) {
         return "routes." + item.role + " is empty";

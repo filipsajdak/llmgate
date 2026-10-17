@@ -1,7 +1,13 @@
+module;
+
+#include <meta>
+
 export module llmgate.claude;
 
 import std;
 import llmgate.json;
+import llmgate.reflect;
+import llmgate.role;
 import llmgate.text;
 
 export namespace llmgate::claude {
@@ -18,6 +24,14 @@ struct launch_config {
     std::string effort = "medium";
     bool telemetry = false;
 };
+
+consteval bool one_model_slot_per_role() {
+    auto const members = std::define_static_array(std::meta::nonstatic_data_members_of(^^launch_config, std::meta::access_context::unchecked()));
+    return std::ranges::all_of(roles::named_families(), [members](roles::role const family) {
+        return std::ranges::count_if(members, [family](std::meta::info const member) { return std::meta::identifier_of(member) == roles::name_of(family); }) == 1;
+    });
+}
+static_assert(one_model_slot_per_role());
 
 using environment_list = std::vector<std::pair<std::string, std::string>>;
 
