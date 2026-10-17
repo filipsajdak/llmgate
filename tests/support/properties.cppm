@@ -9,6 +9,7 @@ import llmgate.claude;
 import llmgate.json;
 import llmgate.jsonscan;
 import llmgate.routing;
+import llmgate.selection;
 import llmgate.sse;
 
 export namespace llmgate::properties {
@@ -293,6 +294,106 @@ constexpr bool launcher_holds(std::string_view const text) {
         return again.has_value() && again->host == address->host && again->port == address->port;
     }
     return true;
+}
+
+constexpr std::int64_t property_cooldown_ms = 3;
+constexpr unsigned property_failures = 2;
+
+constexpr bool breaker_consistent(selection::breaker const& book, selection::breaker_settings const& limits, std::int64_t const now) {
+    auto const state = selection::state_of(book, limits, now);
+    if (book.probing && !book.tripped) {
+        return false;
+    }
+    if (!book.tripped && book.failures >= std::max(1U, limits.failures)) {
+        return false;
+    }
+    return state != selection::circuit::open || !selection::available(book, limits, now);
+}
+
+constexpr bool acquire_is_honest(selection::breaker& book, selection::breaker_settings const& limits, std::int64_t const now) {
+    auto const state = selection::state_of(book, limits, now);
+    auto const probe_was_free = !book.probing;
+    auto const granted = selection::try_acquire(book, limits, now);
+    switch (state) {
+        case selection::circuit::closed: return granted && !book.probing;
+        case selection::circuit::open: return !granted;
+        case selection::circuit::half_open: return granted == probe_was_free && book.probing;
+    }
+    return false;
+}
+
+constexpr bool breaker_script_holds(std::string_view const text) {
+    selection::breaker_settings const limits{.failures = property_failures, .cooldown_ms = property_cooldown_ms};
+    selection::breaker book;
+    std::int64_t now = 0;
+    for (auto const step : text) {
+        switch (step) {
+            case 'a':
+                if (!acquire_is_honest(book, limits, now)) {
+                    return false;
+                }
+                break;
+            case 'f': selection::on_failure(book, limits, now); break;
+            case 's': selection::on_success(book); break;
+            case 't': ++now; break;
+            default: now += limits.cooldown_ms; break;
+        }
+        if (!breaker_consistent(book, limits, now) || (step == 's' && selection::state_of(book, limits, now) != selection::circuit::closed)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+constexpr std::vector<std::string> split_on(std::string_view text, char const separator) {
+    std::vector<std::string> parts;
+    while (!text.empty()) {
+        auto const end = text.find(separator);
+        if (end != 0) {
+            parts.emplace_back(text.substr(0, end));
+        }
+        text = end == std::string_view::npos ? std::string_view{} : text.substr(end + 1);
+    }
+    return parts;
+}
+
+constexpr selection::role_route route_from_word(std::string_view const word) {
+    auto const colon = word.find(':');
+    return {.role = std::string{word.substr(0, colon)},
+            .providers = colon == std::string_view::npos ? std::vector<std::string>{} : split_on(word.substr(colon + 1), ',')};
+}
+
+constexpr std::vector<std::string> unique_names(std::span<selection::role_route const> const routes) {
+    std::vector<std::string> names{"a"};
+    for (auto const& item : routes) {
+        for (auto const& name : item.providers) {
+            if (!selection::contains_name(names, name)) {
+                names.push_back(name);
+            }
+        }
+    }
+    return names;
+}
+
+constexpr bool order_is_sound(std::span<selection::role_route const> const routes, std::span<std::string const> const declared, std::string_view const role) {
+    auto const order = selection::order_for(routes, role, declared);
+    return !order.empty() && !selection::has_duplicate(order) &&
+           std::ranges::all_of(order, [declared](std::string const& name) { return selection::contains_name(declared, name); });
+}
+
+constexpr bool selection_holds(std::string_view const text) {
+    if (!breaker_script_holds(text)) {
+        return false;
+    }
+    std::vector<selection::role_route> routes;
+    for (auto const& word : split_on(text, ' ')) {
+        routes.push_back(route_from_word(word));
+    }
+    auto const declared = unique_names(routes);
+    if (!selection::route_problem(routes, declared).empty()) {
+        return true;
+    }
+    return std::ranges::all_of(selection::known_roles, [&](std::string_view const role) { return order_is_sound(routes, declared, role); });
 }
 
 constexpr bool guard_holds_for(std::string_view const text) {
