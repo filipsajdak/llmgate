@@ -27,6 +27,7 @@ extern "C" char** environ;
 export namespace llmgate::process {
 
 using std::chrono::milliseconds;
+constexpr std::size_t read_chunk = 4096;
 using header_list = std::vector<std::pair<std::string, std::string>>;
 
 struct http_result {
@@ -48,6 +49,21 @@ inline std::error_code write_all(int const fd, std::string_view const text) {
         }
     }
     return {};
+}
+
+inline std::expected<std::string, std::error_code> read_all(int const fd) {
+    std::string collected;
+    std::array<char, read_chunk> chunk{};
+    for (;;) {
+        auto const got = ::read(fd, chunk.data(), chunk.size());
+        if (got > 0) {
+            collected.append(chunk.data(), static_cast<std::size_t>(got));
+        } else if (got == 0) {
+            return collected;
+        } else if (errno != EINTR) {
+            return std::unexpected{errno_error()};
+        }
+    }
 }
 
 struct argument_vector {

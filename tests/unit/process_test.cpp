@@ -310,6 +310,27 @@ const suite process_suite = [] {
     "limit_an_address_that_is_not_ipv4_is_no_answer"_test = [] {
         expect(!http_get("not an address", 80, "/", {}, generous).has_value());
     };
+
+    "capability_read_all_collects_a_pipe_across_chunks_until_it_closes"_test = [] {
+        int ends[2];
+        expect(::pipe(ends) == 0);
+        std::string const sent(read_chunk * 2 + 1, 'x');
+        std::jthread writer{[&] {
+            write_all(ends[1], sent);
+            ::close(ends[1]);
+        }};
+
+        auto const got = read_all(ends[0]);
+        ::close(ends[0]);
+
+        expect(got.has_value() && *got == sent);
+    };
+
+    "limit_read_all_reports_a_descriptor_that_cannot_be_read"_test = [] {
+        auto const got = read_all(-1);
+
+        expect(!got.has_value() && got.error().value() == EBADF);
+    };
 };
 
 }  // namespace
