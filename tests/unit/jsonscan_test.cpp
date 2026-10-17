@@ -83,6 +83,70 @@ const suite scan_suite = [] {
         expect(decode_string(R"(a\nbé😀)") == "a\nb\xc3\xa9\xf0\x9f\x98\x80");
     };
 
+    "capability_a_unicode_escape_is_encoded_with_the_utf8_length_of_its_code_point"_test = [] {
+        expect(decode_string(R"(A)") == "A");
+        expect(decode_string(R"(\u007f)") == "\x7f");
+        expect(decode_string(R"(\u0080)") == "\xc2\x80");
+        expect(decode_string(R"(߿)") == "\xdf\xbf");
+        expect(decode_string(R"(ࠀ)") == "\xe0\xa0\x80");
+        expect(decode_string(R"(￿)") == "\xef\xbf\xbf");
+        expect(decode_string(R"(𐀀)") == "\xf0\x90\x80\x80");
+        expect(decode_string(R"(􏿿)") == "\xf4\x8f\xbf\xbf");
+    };
+
+    "limit_a_lone_or_mismatched_surrogate_is_encoded_as_it_stands"_test = [] {
+        expect(decode_string(R"(\uD800)") == "\xed\xa0\x80");
+        expect(decode_string(R"(\uDC00)") == "\xed\xb0\x80");
+        expect(decode_string(R"(\uD800x)") == "\xed\xa0\x80x");
+        expect(decode_string(R"(\uD800\n)") == "\xed\xa0\x80\n");
+        expect(decode_string(R"(\uD800A)") == "\xed\xa0\x80" "A");
+        expect(decode_string(R"(\uD800\uZZZZ)") == "\xed\xa0\x80uZZZZ");
+        expect(decode_string(R"(\uD800\u)") == "\xed\xa0\x80u");
+    };
+
+    "limit_an_incomplete_unicode_escape_decodes_to_the_letter_u"_test = [] {
+        expect(decode_string(R"(\u12)") == "u12");
+        expect(decode_string(R"(\uZZZZ)") == "uZZZZ");
+        expect(decode_string(R"(\u123)") == "u123");
+    };
+
+    "limit_a_lone_trailing_backslash_and_unknown_escapes_are_kept_readable"_test = [] {
+        expect(decode_string("a\\") == "a\\");
+        expect(decode_string(R"(\q\/\"\\)") == "q/\"\\");
+        expect(decode_string(R"(\b\f\r\t)") == "\b\f\r\t");
+    };
+
+    "capability_encode_escapes_quotes_control_characters_and_leaves_the_rest"_test = [] {
+        expect(encode_string("a\"b\\c\n\r\t") == R"("a\"b\\c\n\r\t")");
+        expect(encode_string(std::string_view{"\x01\x1f\x7f \xc3\xa9", 6}) == "\"\\u0001\\u001f\x7f \xc3\xa9\"");
+        expect(encode_string("") == "\"\"");
+    };
+
+    "limit_container_values_report_their_kind_and_mismatched_closers_are_refused"_test = [] {
+        auto const members = top_level_members(R"({"a":{"x":[1]},"b":[],"c":-1,"d":null,"e":"s"})");
+
+        expect(members.has_value());
+        expect((*members)[0].kind == value_kind::object);
+        expect((*members)[1].kind == value_kind::array);
+        expect((*members)[2].kind == value_kind::number);
+        expect((*members)[3].kind == value_kind::literal);
+        expect((*members)[4].kind == value_kind::string);
+        for (std::string_view const text : {R"({"a":[}})", R"({"a":{]})", R"({"a":})", R"({"a":[)", R"({"a":["x)"}) {
+            expect(top_level_members(text).error() == errc::malformed) << text;
+        }
+        expect(top_level_members(R"({"a":[1,2]})").has_value());
+        expect(top_level_members(R"({"a":[1 2]})").has_value());
+    };
+
+    "limit_member_syntax_errors_and_trailing_bytes_are_told_apart"_test = [] {
+        expect(top_level_members(R"({"a":1} x)").error() == errc::trailing_bytes);
+        expect(top_level_members("{} x").error() == errc::trailing_bytes);
+        expect(top_level_members(R"([])").error() == errc::not_an_object);
+        expect(top_level_members(R"({a:1})").error() == errc::malformed);
+        expect(top_level_members(R"({"a" 1})").error() == errc::malformed);
+        expect(top_level_members(R"({"a":1 "b":2})").error() == errc::malformed);
+    };
+
     "capability_the_scanner_accepts_whitespace_and_empty_objects"_test = [] {
         expect(top_level_members(" { } ").has_value());
         expect(top_level_members("{ \"a\" : [ 1 , { \"b\" : null } ] }")->size() == 1_u);
