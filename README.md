@@ -42,13 +42,14 @@ The first time Claude Code sees the dummy `ANTHROPIC_API_KEY` it asks once wheth
 | VS Code settings script | `llmgate setup --vscode FILE`, `llmgate env --vscode` |
 | status line script, cost hook | `llmgate statusline` (third line: today's tokens and budget) |
 | usage ledger, budgets | `usage` in the configuration, `llmgate usage` |
-| quota, doctor, fallback and role routing | not built yet; see the planned slices below |
+| fallback and role routing | `providers`, `routes`, `fallback` (see Providers, role routes and fallback) |
+| quota, doctor | not built yet |
 
 `llmgate --version` prints the version.
 
 ## Usage ledger and budgets
 
-Every request that reaches the point of calling the upstream is written as one JSON line to `usage.ledger_file` (default `~/.local/state/llmgate/usage.jsonl`, created `0600` in a `0700` directory; an empty value turns the ledger off). A line holds the time, the model Claude Code asked for and the one the upstream answered with, the role (`opus`, `sonnet`, `haiku` or `other`), the session id Claude Code sends in the request metadata, the four token counts (`input`, `output`, `cache_read`, `cache_creation`), the duration, the HTTP status and how many stream repairs were needed. It never holds prompt or response text.
+Every request that reaches the point of calling the upstream is written as one JSON line to `usage.ledger_file` (default `~/.local/state/llmgate/usage.jsonl`, created `0600` in a `0700` directory; an empty value turns the ledger off). A line holds the time, the model Claude Code asked for and the one the upstream answered with, the role (`opus`, `sonnet`, `haiku` or `other`), the provider that answered, the session id Claude Code sends in the request metadata, the four token counts (`input`, `output`, `cache_read`, `cache_creation`), the duration, the HTTP status and how many stream repairs were needed. It never holds prompt or response text.
 
 The counts are the upstream's own: the usage in the reply, or in `message_start` and the final `message_delta` of a stream, so they are authoritative rather than estimated. A request that fails still gets a line, with its status and zero tokens. At startup the gateway reads the file back; lines it cannot read are skipped and counted.
 
@@ -59,6 +60,43 @@ The counts are the upstream's own: the usage in the reply, or in `message_start`
 A budget counts `input + output + cache_creation` tokens. Cache reads are shown in the report but not counted, because Claude Code re-reads its whole context from the cache on every turn and counting that would use a budget up in a few prompts. Days and months are UTC, so the daily budget resets at 00:00 UTC (01:00 or 02:00 in Poland). Past `warn_percent` the status line turns to `high`; at 100 % the gateway answers new requests with `429 rate_limit_error` ("llmgate budget used up: daily 1.2M of 1.0M tokens; resets at 00:00 UTC"), which Claude Code shows as the error. It is a soft limit: requests already running finish, so a few concurrent requests can overshoot it.
 
 `/llmgate/stats` carries today's and the month's totals and the budget standing, `llmgate usage` prints the report, and the status line reads the same numbers. Appending a line is one small blocking `write` per request on the gateway's thread.
+
+## Providers, role routes and fallback
+
+One gateway can sit in front of several backends. Name each under `providers`, then say per role which providers to try and in what order:
+
+```jsonc
+"providers": {
+  "copilot":   { "base_url": "https://api.githubcopilot.com", "copilot": { "token_file": "~/.config/llmgate/copilot-token.json" },
+                 "headers": { "Editor-Version": "vscode/1.99.0" }, "models": { "claude-opus-5-5": "claude-opus-5.5" } },
+  "anthropic": { "base_url": "https://api.anthropic.com", "static_token_env": "ANTHROPIC_UPSTREAM_KEY" }
+},
+"routes": { "opus": ["anthropic", "copilot"], "sonnet": ["copilot", "anthropic"], "other": ["copilot"] },
+"fallback": { "failures": 3, "cooldown": "30s" }
+```
+
+| Key | Meaning |
+|---|---|
+| `providers.NAME` | `base_url` (required), `messages_path` (default `/v1/messages`), `headers`, a credential (`copilot` with its token file, or `static_token_env` naming an environment variable) and `models` (the name Claude Code sends -> the id this provider expects; unknown names pass through unchanged) |
+| `routes.ROLE` | the providers to try, in order, for `opus`, `sonnet`, `haiku` or `other`; the role is the family named in the requested model (`usage::role_of`). A role without a list uses the `other` list, and without that every provider in alphabetical order |
+| `fallback.failures` | consecutive failures that open a provider's circuit (default 3) |
+| `fallback.cooldown` | how long an open circuit is skipped (default `30s`) |
+| `upstream`, `models`, `copilot`, `static_token_env` | still valid on their own: they act as one provider named `default`, so an existing configuration needs no change |
+
+**What triggers a fallback.** Only a failure before any response byte reached Claude Code: a refused or timed-out connection, a write error, no response head within `time.response_head`, a reply with status 5xx or 429. The next provider of the list is tried once each. A stream that has begun is never retried, and neither is a 4xx other than 429 (it is relayed), so a request is never charged twice. If every provider failed, the last failure is relayed exactly as it came; if every circuit is open the client gets `503` ("every provider for this model is unavailable").
+
+**Circuit breaker.** After `failures` consecutive failures a provider is skipped for `cooldown`. Then exactly one request probes it (half-open): success closes the circuit, failure reopens it for another full cooldown. A failure that is the gateway's own doing, such as a provider whose credential is missing, falls through to the next provider but does not count against the breaker. The breaker is in memory and starts closed on every restart.
+
+**Records.** The ledger line gets a `provider` field (the provider that answered, or the last one tried when all failed; one line per request, however many providers were tried; lines written before the field existed read back with an empty provider). `/llmgate/stats` has a `providers` object with `attempts`, `answered`, `failures`, `skipped` (circuit open) and `circuit` (`closed`, `open`, `half_open`) per provider, and `no_provider` counts the 503s. `/anthropic/v1/models` lists the union of all providers' aliases.
+
+**Limits.**
+- Plan mode (`opusplan`) is not a separate route: Claude Code sends no marker for it, only the model (an opus model while planning, a sonnet model otherwise), so the role routes already cover it.
+- Failure counting is per provider across all roles, and the cooldown clock is the monotonic clock, not the wall clock.
+- Only one health signal exists: an HTTP error before the head. A provider that answers 200 with a bad stream is not failed over (the stream is repaired or ended with an error as before).
+- Retrying a request whose connection was reused from the pool and turns out dead counts as that provider's failure and moves on to the next provider; it does not retry the same one on a fresh connection.
+- `llmgate login` logs in with the top-level `copilot` key, else with the first provider (alphabetically) that has a `copilot.token_file`; two Copilot providers with different token files need a login each, by listing them one at a time.
+
+The selection logic (circuit breaker, role route order) is a constexpr module, `src/gateway/selection.cppm`, with unit tests, a corpus replay, a bounded exhaustive check and an AFL++ harness like the other pure modules.
 
 ## Who may use the gateway
 
@@ -86,7 +124,7 @@ ctest --preset host-network    # real TLS to api.anthropic.com and api.githubcop
 
 ## Compile-time undefined-behaviour checks
 
-Constant evaluation rejects undefined behaviour: an out-of-bounds read, signed overflow, a dangling pointer or an uninitialised read is a compile error instead of a lucky run. The pure text modules (`jsonscan`, `sse`, `anthropic`) are therefore `constexpr`, and `tests/support/properties.cppm` holds each property check once for three consumers:
+Constant evaluation rejects undefined behaviour: an out-of-bounds read, signed overflow, a dangling pointer or an uninitialised read is a compile error instead of a lucky run. The pure text modules (`jsonscan`, `sse`, `anthropic`, `selection`) are therefore `constexpr`, and `tests/support/properties.cppm` holds each property check once for three consumers:
 
 | Consumer | What it does |
 |---|---|

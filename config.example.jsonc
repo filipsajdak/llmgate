@@ -20,6 +20,23 @@
     "claude-haiku-4-5": "claude-haiku-4.5"
   },
 
+  // More than one backend: name each one under "providers" and say, per role (opus, sonnet, haiku, other),
+  // which providers to try in order. The keys above (upstream, models, copilot, static_token_env) stay valid
+  // and act as one provider named "default". A role without a list uses the "other" list, then every provider.
+  //
+  // "providers": {
+  //   "copilot": { "base_url": "https://api.githubcopilot.com", "copilot": { "token_file": "~/.config/llmgate/copilot-token.json" },
+  //                "headers": { "Editor-Version": "vscode/1.99.0", "Copilot-Integration-Id": "vscode-chat" },
+  //                "models": { "claude-opus-5-5": "claude-opus-5.5" } },
+  //   "anthropic": { "base_url": "https://api.anthropic.com", "static_token_env": "ANTHROPIC_UPSTREAM_KEY" }
+  // },
+  // "routes": { "opus": ["anthropic", "copilot"], "sonnet": ["copilot", "anthropic"], "other": ["copilot"] },
+
+  // A provider that fails before any response byte reaches Claude Code (connect error, no response head in time, 5xx, 429)
+  // is retried on the next one of the role's list; after `failures` consecutive failures it is skipped for `cooldown`,
+  // then one request probes it.
+  "fallback": { "failures": 3, "cooldown": "30s" },
+
   "time": { "connect": "10s", "response_head": "2m", "stream_idle": "10m" },
 
   // post_quantum_preferred, post_quantum_required or classical_only
