@@ -218,3 +218,5 @@ add_test(NAME llmgate_refuses_a_client_key_variable_that_is_not_set COMMAND llmg
 set_tests_properties(llmgate_refuses_a_client_key_variable_that_is_not_set PROPERTIES LABELS unit PASS_REGULAR_EXPRESSION "which is not set")
 add_test(NAME llmgate_setup_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/setup_flow.sh $<TARGET_FILE:llmgate>)
 set_tests_properties(llmgate_setup_flow PROPERTIES LABELS e2e TIMEOUT 120)
+add_test(NAME llmgate_shutdown_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/shutdown_flow.sh $<TARGET_FILE:llmgate>)
+set_tests_properties(llmgate_shutdown_flow PROPERTIES LABELS e2e TIMEOUT 120)
