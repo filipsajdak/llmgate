@@ -34,6 +34,36 @@ struct http_result {
     std::string body;
 };
 
+inline std::error_code errno_error() {
+    return {errno, std::system_category()};
+}
+
+inline std::error_code write_all(int const fd, std::string_view const text) {
+    for (auto pending = text; !pending.empty();) {
+        auto const written = ::write(fd, pending.data(), pending.size());
+        if (written > 0) {
+            pending.remove_prefix(static_cast<std::size_t>(written));
+        } else if (written < 0 && errno != EINTR) {
+            return errno_error();
+        }
+    }
+    return {};
+}
+
+struct argument_vector {
+    std::vector<std::string> storage;
+    std::vector<char*> pointers;
+};
+
+inline argument_vector make_argv(std::filesystem::path const& program, std::vector<std::string> const& arguments) {
+    std::vector<std::string> storage;
+    storage.emplace_back(program.string());
+    storage.insert(storage.end(), arguments.begin(), arguments.end());
+    auto pointers = std::ranges::to<std::vector<char*>>(storage | std::views::transform([](std::string& item) { return item.data(); }));
+    pointers.push_back(nullptr);
+    return {.storage = std::move(storage), .pointers = std::move(pointers)};
+}
+
 inline std::string expand_home(std::string_view const path) {
     if (!path.starts_with("~/")) {
         return std::string{path};
@@ -104,6 +134,136 @@ struct descriptor {
     }
 };
 
+constexpr std::size_t status_begin = 9;
+constexpr std::size_t status_end = 12;
+
+std::optional<sockaddr_in> ipv4_address(std::string_view const host, std::uint16_t const port) {
+    sockaddr_in remote{};
+    remote.sin_family = AF_INET;
+    remote.sin_port = htons(port);
+    if (::inet_pton(AF_INET, std::string{host}.c_str(), &remote.sin_addr) != 1) {
+        return std::nullopt;
+    }
+    return remote;
+}
+
+int nonblocking_socket() {
+    int const fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd >= 0) {
+        ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+    }
+    return fd;
+}
+
+bool connect_completed(int const fd, std::chrono::steady_clock::time_point const deadline) {
+    int pending = 0;
+    socklen_t length = sizeof pending;
+    return wait_for(fd, POLLOUT, deadline) && ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &pending, &length) >= 0 && pending == 0;
+}
+
+bool connect_by(int const fd, sockaddr_in const& remote, std::chrono::steady_clock::time_point const deadline) {
+    if (::connect(fd, reinterpret_cast<sockaddr const*>(&remote), sizeof remote) == 0) {
+        return true;
+    }
+    return errno == EINPROGRESS && connect_completed(fd, deadline);
+}
+
+bool would_block() {
+    return errno == EAGAIN || errno == EWOULDBLOCK;
+}
+
+bool retry_after(int const fd, short const events, std::chrono::steady_clock::time_point const deadline) {
+    return errno == EINTR || (would_block() && wait_for(fd, events, deadline));
+}
+
+bool send_all(int const fd, std::string_view pending, std::chrono::steady_clock::time_point const deadline) {
+    while (!pending.empty()) {
+        auto const sent = ::send(fd, pending.data(), pending.size(), 0);
+        if (sent > 0) {
+            pending.remove_prefix(static_cast<std::size_t>(sent));
+        } else if (sent < 0 && retry_after(fd, POLLOUT, deadline)) {
+            continue;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::optional<std::string> receive_all(int const fd, std::chrono::steady_clock::time_point const deadline) {
+    std::string answer;
+    std::array<char, 4096> buffer{};
+    for (;;) {
+        auto const received = ::recv(fd, buffer.data(), buffer.size(), 0);
+        if (received > 0) {
+            answer.append(buffer.data(), static_cast<std::size_t>(received));
+        } else if (received == 0) {
+            return answer;
+        } else if (!retry_after(fd, POLLIN, deadline)) {
+            return std::nullopt;
+        }
+    }
+}
+
+std::string request_text(std::string_view const host, std::uint16_t const port, std::string_view const target, header_list const& headers) {
+    std::string request = std::format("GET {} HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\n", target, host, port);
+    for (auto const& [name, value] : headers) {
+        request += name + ": " + value + "\r\n";
+    }
+    request += "\r\n";
+    return request;
+}
+
+std::optional<int> status_of(std::string_view const answer) {
+    if (!answer.starts_with("HTTP/1.") || answer.size() < status_end || answer[status_begin - 1] != ' ') {
+        return std::nullopt;
+    }
+    int status = 0;
+    auto const read = std::from_chars(answer.data() + status_begin, answer.data() + status_end, status);
+    return read.ec == std::errc{} ? std::optional{status} : std::nullopt;
+}
+
+std::optional<http_result> parse_response(std::string_view const answer) {
+    auto const split = answer.find("\r\n\r\n");
+    auto const status = status_of(answer);
+    if (split == std::string_view::npos || !status) {
+        return std::nullopt;
+    }
+    return http_result{.status = *status, .body = std::string{answer.substr(split + 4)}};
+}
+
+std::expected<void, std::error_code> as_result(std::error_code const error) {
+    return error ? std::expected<void, std::error_code>{std::unexpected{error}} : std::expected<void, std::error_code>{};
+}
+
+void prepare_directory(std::filesystem::path const& directory, bool const private_parent) {
+    std::error_code failure;
+    if (std::filesystem::create_directories(directory, failure) && private_parent) {
+        std::filesystem::permissions(directory, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, failure);
+    }
+}
+
+std::error_code write_synced(int const fd, std::string_view const text) {
+    auto error = write_all(fd, text);
+    if (!error && ::fsync(fd) < 0) {
+        error = errno_error();
+    }
+    ::close(fd);
+    return error;
+}
+
+std::error_code write_and_rename(int const fd, std::string_view const text, std::filesystem::path const& temporary,
+                                 std::filesystem::path const& target) {
+    auto error = write_synced(fd, text);
+    if (!error && ::rename(temporary.c_str(), target.c_str()) < 0) {
+        error = errno_error();
+    }
+    if (error) {
+        ::unlink(temporary.c_str());
+    }
+    return error;
+}
+
 }  // namespace llmgate::process::detail
 
 export namespace llmgate::process {
@@ -111,87 +271,26 @@ export namespace llmgate::process {
 inline std::optional<http_result> http_get(std::string_view const host, std::uint16_t const port, std::string_view const target,
                                            header_list const& headers, milliseconds const limit) {
     auto const deadline = std::chrono::steady_clock::now() + limit;
-    sockaddr_in remote{};
-    remote.sin_family = AF_INET;
-    remote.sin_port = htons(port);
-    if (::inet_pton(AF_INET, std::string{host}.c_str(), &remote.sin_addr) != 1) {
+    auto const remote = detail::ipv4_address(host, port);
+    if (!remote) {
         return std::nullopt;
     }
-    detail::descriptor socket{::socket(AF_INET, SOCK_STREAM, 0)};
-    if (socket.fd < 0) {
+    detail::descriptor socket{detail::nonblocking_socket()};
+    if (socket.fd < 0 || !detail::connect_by(socket.fd, *remote, deadline) ||
+        !detail::send_all(socket.fd, detail::request_text(host, port, target, headers), deadline)) {
         return std::nullopt;
     }
-    ::fcntl(socket.fd, F_SETFL, ::fcntl(socket.fd, F_GETFL, 0) | O_NONBLOCK);
-    if (::connect(socket.fd, reinterpret_cast<sockaddr const*>(&remote), sizeof remote) < 0) {
-        int pending = 0;
-        socklen_t length = sizeof pending;
-        if (errno != EINPROGRESS || !detail::wait_for(socket.fd, POLLOUT, deadline) ||
-            ::getsockopt(socket.fd, SOL_SOCKET, SO_ERROR, &pending, &length) < 0 || pending != 0) {
-            return std::nullopt;
-        }
-    }
-    std::string request = std::format("GET {} HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\n", target, host, port);
-    for (auto const& [name, value] : headers) {
-        request += name + ": " + value + "\r\n";
-    }
-    request += "\r\n";
-    std::string_view pending_bytes = request;
-    while (!pending_bytes.empty()) {
-        auto const sent = ::send(socket.fd, pending_bytes.data(), pending_bytes.size(), 0);
-        if (sent > 0) {
-            pending_bytes.remove_prefix(static_cast<std::size_t>(sent));
-        } else if (sent < 0 && errno == EINTR) {
-            continue;
-        } else if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && detail::wait_for(socket.fd, POLLOUT, deadline)) {
-            continue;
-        } else {
-            return std::nullopt;
-        }
-    }
-    std::string answer;
-    std::array<char, 4096> buffer{};
-    for (;;) {
-        auto const received = ::recv(socket.fd, buffer.data(), buffer.size(), 0);
-        if (received > 0) {
-            answer.append(buffer.data(), static_cast<std::size_t>(received));
-        } else if (received == 0) {
-            break;
-        } else if (errno == EINTR) {
-            continue;
-        } else if ((errno == EAGAIN || errno == EWOULDBLOCK) && detail::wait_for(socket.fd, POLLIN, deadline)) {
-            continue;
-        } else {
-            return std::nullopt;
-        }
-    }
-    auto const split = answer.find("\r\n\r\n");
-    int status = 0;
-    if (split == std::string::npos || !answer.starts_with("HTTP/1.") || answer.size() < 12 || answer[8] != ' ' ||
-        std::from_chars(answer.data() + 9, answer.data() + std::min<std::size_t>(12, answer.size()), status).ec != std::errc{}) {
-        return std::nullopt;
-    }
-    return http_result{.status = status, .body = answer.substr(split + 4)};
+    auto const answer = detail::receive_all(socket.fd, deadline);
+    return answer ? detail::parse_response(*answer) : std::nullopt;
 }
 
 inline bool tcp_connectable(std::string_view const host, std::uint16_t const port, milliseconds const limit) {
-    sockaddr_in remote{};
-    remote.sin_family = AF_INET;
-    remote.sin_port = htons(port);
-    if (::inet_pton(AF_INET, std::string{host}.c_str(), &remote.sin_addr) != 1) {
+    auto const remote = detail::ipv4_address(host, port);
+    if (!remote) {
         return false;
     }
-    detail::descriptor socket{::socket(AF_INET, SOCK_STREAM, 0)};
-    if (socket.fd < 0) {
-        return false;
-    }
-    ::fcntl(socket.fd, F_SETFL, ::fcntl(socket.fd, F_GETFL, 0) | O_NONBLOCK);
-    if (::connect(socket.fd, reinterpret_cast<sockaddr const*>(&remote), sizeof remote) == 0) {
-        return true;
-    }
-    int pending = 0;
-    socklen_t length = sizeof pending;
-    return errno == EINPROGRESS && detail::wait_for(socket.fd, POLLOUT, std::chrono::steady_clock::now() + limit) &&
-           ::getsockopt(socket.fd, SOL_SOCKET, SO_ERROR, &pending, &length) == 0 && pending == 0;
+    detail::descriptor socket{detail::nonblocking_socket()};
+    return socket.fd >= 0 && detail::connect_by(socket.fd, *remote, std::chrono::steady_clock::now() + limit);
 }
 
 inline bool gateway_alive(std::string_view const host, std::uint16_t const port) {
@@ -212,15 +311,9 @@ inline std::expected<pid_t, std::error_code> start_detached(std::filesystem::pat
     posix_spawnattr_t attributes;
     posix_spawnattr_init(&attributes);
     posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID);
-    std::vector<std::string> storage{program.string()};
-    storage.insert(storage.end(), arguments.begin(), arguments.end());
-    std::vector<char*> argv;
-    for (auto& item : storage) {
-        argv.push_back(item.data());
-    }
-    argv.push_back(nullptr);
+    auto argv = make_argv(program, arguments);
     pid_t child = 0;
-    auto const result = ::posix_spawn(&child, program.c_str(), &actions, &attributes, argv.data(), environ);
+    auto const result = ::posix_spawn(&child, program.c_str(), &actions, &attributes, argv.pointers.data(), environ);
     posix_spawn_file_actions_destroy(&actions);
     posix_spawnattr_destroy(&attributes);
     if (result != 0) {
@@ -232,80 +325,41 @@ inline std::expected<pid_t, std::error_code> start_detached(std::filesystem::pat
 inline std::expected<void, std::error_code> write_file_atomic(std::filesystem::path const& target, std::string_view const text,
                                                               mode_t const mode, bool const private_parent) {
     auto const directory = target.parent_path();
-    std::error_code failure;
-    if (std::filesystem::create_directories(directory, failure) && private_parent) {
-        std::filesystem::permissions(directory, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, failure);
-    }
+    detail::prepare_directory(directory, private_parent);
     auto const temporary = directory / std::format(".{}.{}.tmp", target.filename().string(), ::getpid());
     auto const descriptor = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode);
     if (descriptor < 0) {
-        return std::unexpected{std::error_code{errno, std::system_category()}};
+        return std::unexpected{errno_error()};
     }
-    std::error_code error;
-    for (auto pending = text; !pending.empty() && !error;) {
-        auto const written = ::write(descriptor, pending.data(), pending.size());
-        if (written > 0) {
-            pending.remove_prefix(static_cast<std::size_t>(written));
-        } else if (written < 0 && errno != EINTR) {
-            error = {errno, std::system_category()};
-        }
-    }
-    if (!error && ::fsync(descriptor) < 0) {
-        error = {errno, std::system_category()};
-    }
-    ::close(descriptor);
-    if (!error && ::rename(temporary.c_str(), target.c_str()) < 0) {
-        error = {errno, std::system_category()};
-    }
-    if (error) {
-        ::unlink(temporary.c_str());
-        return std::unexpected{error};
-    }
-    return {};
+    return detail::as_result(detail::write_and_rename(descriptor, text, temporary, target));
 }
 
 inline std::expected<void, std::error_code> append_file(std::filesystem::path const& target, std::string_view const text, mode_t const mode,
                                                         bool const private_parent) {
-    std::error_code failure;
-    if (std::filesystem::create_directories(target.parent_path(), failure) && private_parent) {
-        std::filesystem::permissions(target.parent_path(), std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, failure);
-    }
+    detail::prepare_directory(target.parent_path(), private_parent);
     auto const descriptor = ::open(target.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC, mode);
     if (descriptor < 0) {
-        return std::unexpected{std::error_code{errno, std::system_category()}};
+        return std::unexpected{errno_error()};
     }
-    std::error_code error;
-    for (auto pending = text; !pending.empty() && !error;) {
-        auto const written = ::write(descriptor, pending.data(), pending.size());
-        if (written > 0) {
-            pending.remove_prefix(static_cast<std::size_t>(written));
-        } else if (written < 0 && errno != EINTR) {
-            error = {errno, std::system_category()};
-        }
-    }
+    auto const error = write_all(descriptor, text);
     ::close(descriptor);
-    if (error) {
-        return std::unexpected{error};
-    }
-    return {};
+    return detail::as_result(error);
 }
 
-inline int run_and_wait(std::filesystem::path const& program, std::vector<std::string> const& arguments) {
-    std::vector<std::string> storage{program.string()};
-    storage.insert(storage.end(), arguments.begin(), arguments.end());
-    std::vector<char*> argv;
-    for (auto& item : storage) {
-        argv.push_back(item.data());
-    }
-    argv.push_back(nullptr);
-    pid_t child = 0;
-    if (::posix_spawn(&child, program.c_str(), nullptr, nullptr, argv.data(), environ) != 0) {
-        return -1;
-    }
+inline int wait_status(pid_t const child) {
     int status = 0;
     while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {
     }
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+inline int run_and_wait(std::filesystem::path const& program, std::vector<std::string> const& arguments) {
+    auto argv = make_argv(program, arguments);
+    pid_t child = 0;
+    if (::posix_spawn(&child, program.c_str(), nullptr, nullptr, argv.pointers.data(), environ) != 0) {
+        return -1;
+    }
+    return wait_status(child);
 }
 
 inline bool process_running(pid_t const pid) noexcept {
@@ -324,19 +378,17 @@ bool wait_until(Condition&& condition, milliseconds const limit, milliseconds co
     return true;
 }
 
-[[noreturn]] inline void exec_program(std::filesystem::path const& program, std::vector<std::string> const& arguments,
-                                      std::vector<std::pair<std::string, std::string>> const& environment) {
+inline void apply_environment(std::vector<std::pair<std::string, std::string>> const& environment) {
     for (auto const& [name, value] : environment) {
         ::setenv(name.c_str(), value.c_str(), 1);
     }
-    std::vector<std::string> storage{program.string()};
-    storage.insert(storage.end(), arguments.begin(), arguments.end());
-    std::vector<char*> argv;
-    for (auto& item : storage) {
-        argv.push_back(item.data());
-    }
-    argv.push_back(nullptr);
-    ::execv(program.c_str(), argv.data());
+}
+
+[[noreturn]] inline void exec_program(std::filesystem::path const& program, std::vector<std::string> const& arguments,
+                                      std::vector<std::pair<std::string, std::string>> const& environment) {
+    apply_environment(environment);
+    auto argv = make_argv(program, arguments);
+    ::execv(program.c_str(), argv.pointers.data());
     std::println(stderr, "llmgate: cannot run {}: {}", program.string(), std::strerror(errno));
     std::_Exit(127);
 }

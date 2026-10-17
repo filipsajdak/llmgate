@@ -221,6 +221,95 @@ const suite process_suite = [] {
         expect(wait_until([&calls] { return ++calls >= 3; }, generous, milliseconds{1}));
         expect(!wait_until([] { return false; }, milliseconds{30}, milliseconds{5}));
     };
+
+    "capability_run_and_wait_returns_the_exit_status_of_the_program"_test = [] {
+        expect(run_and_wait("/usr/bin/true", {}) == 0_i);
+        expect(run_and_wait("/usr/bin/false", {}) == 1_i);
+        expect(run_and_wait("/bin/sh", {"-c", "exit 7"}) == 7_i);
+    };
+
+    "limit_run_and_wait_reports_minus_one_for_a_missing_program_and_a_killed_one"_test = [] {
+        expect(run_and_wait("/nonexistent/program", {}) == -1_i);
+        expect(run_and_wait("/bin/sh", {"-c", "kill -9 $$"}) == -1_i);
+    };
+
+    "capability_make_argv_puts_the_program_first_and_ends_with_a_null"_test = [] {
+        std::vector<std::string> arguments;
+        arguments.emplace_back("--flag");
+        arguments.emplace_back("value");
+
+        auto const built = make_argv("/bin/tool", arguments);
+
+        expect(built.pointers.size() == 4_u);
+        expect(std::string_view{built.pointers[0]} == "/bin/tool");
+        expect(std::string_view{built.pointers[2]} == "value");
+        expect(built.pointers.back() == nullptr);
+    };
+
+    "capability_the_environment_is_applied_before_an_exec"_test = [] {
+        std::vector<std::pair<std::string, std::string>> environment;
+        environment.emplace_back("LLMGATE_PROCESS_TEST_A", "one");
+        environment.emplace_back("LLMGATE_PROCESS_TEST_B", "two");
+
+        apply_environment(environment);
+
+        expect(std::string_view{std::getenv("LLMGATE_PROCESS_TEST_A")} == "one");
+        expect(std::string_view{std::getenv("LLMGATE_PROCESS_TEST_B")} == "two");
+    };
+
+    "limit_writing_to_a_closed_descriptor_is_an_error"_test = [] {
+        expect(write_all(-1, "x").value() == EBADF);
+        expect(!write_all(-1, "").value());
+    };
+
+    "capability_an_atomic_write_replaces_the_file_and_leaves_no_temporary_behind"_test = [] {
+        auto const directory = std::filesystem::temp_directory_path() / std::format("llmgate-atomic-{}", ::getpid());
+        auto const target = directory / "nested" / "file.txt";
+        std::filesystem::remove_all(directory);
+
+        expect(write_file_atomic(target, "first", 0600, true).has_value());
+        expect(write_file_atomic(target, "second", 0600, true).has_value());
+
+        std::ifstream in{target};
+        std::string text{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+        expect(text == "second");
+        expect(std::ranges::distance(std::filesystem::directory_iterator{target.parent_path()}) == 1_i);
+        std::filesystem::remove_all(directory);
+    };
+
+    "limit_an_atomic_write_that_cannot_rename_cleans_up_its_temporary"_test = [] {
+        auto const directory = std::filesystem::temp_directory_path() / std::format("llmgate-atomic-dir-{}", ::getpid());
+        std::filesystem::remove_all(directory);
+        std::filesystem::create_directories(directory / "occupied");
+
+        expect(!write_file_atomic(directory / "occupied", "x", 0600, false).has_value());
+        expect(std::ranges::distance(std::filesystem::directory_iterator{directory}) == 1_i);
+        std::filesystem::remove_all(directory);
+    };
+
+    "limit_atomic_write_and_append_fail_when_the_parent_is_a_file_or_the_target_a_directory"_test = [] {
+        auto const directory = std::filesystem::temp_directory_path() / std::format("llmgate-blocked-{}", ::getpid());
+        std::filesystem::remove_all(directory);
+        std::filesystem::create_directories(directory / "dir");
+        std::ofstream{directory / "file"} << "x";
+
+        expect(!write_file_atomic(directory / "file" / "child", "x", 0600, false).has_value());
+        expect(!append_file(directory / "dir", "x", 0600, false).has_value());
+        std::filesystem::remove_all(directory);
+    };
+
+    "limit_replies_without_a_proper_status_line_or_header_end_are_not_answers"_test = [] {
+        for (std::string_view const reply : {"HTTP/1.1 abc OK\r\n\r\nbody", "HTTP/1.1 200 OK\r\nno end of headers", "HTTP/2 200 OK\r\n\r\n",
+                                              "HTTP/1.1200 OK\r\n\r\n", "HTTP/1.1 20"}) {
+            canned_server server{std::string{reply}};
+
+            expect(!http_get("127.0.0.1", server.port, "/", {}, generous).has_value()) << reply;
+        }
+    };
+
+    "limit_an_address_that_is_not_ipv4_is_no_answer"_test = [] {
+        expect(!http_get("not an address", 80, "/", {}, generous).has_value());
+    };
 };
 
 }  // namespace
