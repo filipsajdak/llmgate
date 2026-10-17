@@ -471,7 +471,7 @@ constexpr doctor::facts doctor_facts_from(std::string_view const text) {
 
 constexpr bool findings_well_formed(std::span<doctor::finding const> const found) {
     return std::ranges::all_of(found, [](doctor::finding const& item) {
-        return !item.check.empty() && !item.detail.empty() && (item.state == doctor::status::pass || !item.remedy.empty());
+        return !item.check.empty() && !item.detail.empty() && (item.status == doctor::status::pass || !item.remedy.empty());
     });
 }
 
@@ -482,7 +482,7 @@ constexpr bool doctor_holds(std::string_view const text) {
     if (found.empty() || !findings_well_formed(found) || (doctor::exit_code(found) != 0) != failed || !printable(doctor::render_text(found))) {
         return false;
     }
-    if (!seen.config_error.empty() && (found.size() != 3 || found.front().check != "config" || found.front().state != doctor::status::fail)) {
+    if (!seen.config_error.empty() && (found.size() != 3 || found.front().check != "config" || found.front().status != doctor::status::fail)) {
         return false;
     }
     auto const document = json::parse(doctor::render_json(found), {.jsonc = false});

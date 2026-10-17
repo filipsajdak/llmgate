@@ -36,7 +36,7 @@ finding named(std::vector<finding> const& found, std::string_view const check) {
 }
 
 status state_of(facts const& seen, std::string_view const check) {
-    return named(diagnose(seen), check).state;
+    return named(diagnose(seen), check).status;
 }
 
 quota::summary summary_with(int const percent) {
@@ -58,7 +58,7 @@ const suite doctor_suite = [] {
 
         auto const found = diagnose(seen);
 
-        expect(found.front().check == "config" && found.front().state == status::fail);
+        expect(found.front().check == "config" && found.front().status == status::fail);
         expect(exit_code(found) == 1);
         expect(named(found, "listen").check == "missing");
     };
@@ -100,8 +100,8 @@ const suite doctor_suite = [] {
 
         auto const found = diagnose(seen);
 
-        expect(named(found, "identity").state == status::fail && named(found, "identity").remedy == "chmod 600 /s/identity");
-        expect(named(found, "copilot-login").state == status::fail && named(found, "copilot-login").remedy == "chmod 600 /c/token.json");
+        expect(named(found, "identity").status == status::fail && named(found, "identity").remedy == "chmod 600 /s/identity");
+        expect(named(found, "copilot-login").status == status::fail && named(found, "copilot-login").remedy == "chmod 600 /c/token.json");
         expect(named(found, "identity").detail.contains("644"));
     };
 
@@ -190,7 +190,7 @@ const suite doctor_suite = [] {
 
         auto const found = diagnose(seen);
 
-        expect(named(found, "quota").state == status::warn);
+        expect(named(found, "quota").status == status::warn);
         expect(named(found, "quota").detail.contains("chat 2% left") && named(found, "quota").detail.contains("2026-11-01"));
         expect(exit_code(found) == 0);
         seen.quota_summary = summary_with(70);
