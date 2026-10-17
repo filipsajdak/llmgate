@@ -173,6 +173,27 @@ inline std::optional<http_result> http_get(std::string_view const host, std::uin
     return http_result{.status = status, .body = answer.substr(split + 4)};
 }
 
+inline bool tcp_connectable(std::string_view const host, std::uint16_t const port, milliseconds const limit) {
+    sockaddr_in remote{};
+    remote.sin_family = AF_INET;
+    remote.sin_port = htons(port);
+    if (::inet_pton(AF_INET, std::string{host}.c_str(), &remote.sin_addr) != 1) {
+        return false;
+    }
+    detail::descriptor socket{::socket(AF_INET, SOCK_STREAM, 0)};
+    if (socket.fd < 0) {
+        return false;
+    }
+    ::fcntl(socket.fd, F_SETFL, ::fcntl(socket.fd, F_GETFL, 0) | O_NONBLOCK);
+    if (::connect(socket.fd, reinterpret_cast<sockaddr const*>(&remote), sizeof remote) == 0) {
+        return true;
+    }
+    int pending = 0;
+    socklen_t length = sizeof pending;
+    return errno == EINPROGRESS && detail::wait_for(socket.fd, POLLOUT, std::chrono::steady_clock::now() + limit) &&
+           ::getsockopt(socket.fd, SOL_SOCKET, SO_ERROR, &pending, &length) == 0 && pending == 0;
+}
+
 inline bool gateway_alive(std::string_view const host, std::uint16_t const port) {
     constexpr milliseconds probe_limit{800};
     auto const answer = http_get(host, port, "/healthz", {}, probe_limit);
