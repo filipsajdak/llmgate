@@ -30,4 +30,24 @@ constexpr std::optional<E> enum_from_name(std::string_view const name) noexcept 
     return std::nullopt;
 }
 
+template <class E>
+    requires std::is_enum_v<E>
+class enum_category final : public std::error_category {
+public:
+    char const* name() const noexcept override {
+        static constexpr char const* qualified = std::define_static_string(std::meta::display_string_of(^^E));
+        return qualified;
+    }
+    std::string message(int const value) const override {
+        return std::string{enum_name(static_cast<E>(value))};
+    }
+};
+
+template <class E>
+    requires std::is_enum_v<E>
+std::error_code make_code(E const value) noexcept {
+    static enum_category<E> const category;
+    return {static_cast<int>(value), category};
+}
+
 }  // namespace llmgate::reflect

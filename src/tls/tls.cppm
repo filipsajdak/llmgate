@@ -33,14 +33,6 @@ struct io_result {
 
 namespace llmgate::tls::detail {
 
-class category_impl final : public std::error_category {
-public:
-    char const* name() const noexcept override { return "llmgate.tls"; }
-    std::string message(int const value) const override {
-        return std::string{reflect::enum_name(static_cast<errc>(value))};
-    }
-};
-
 constexpr std::string_view post_quantum_groups = "X25519MLKEM768:SecP256r1MLKEM768";
 constexpr std::string_view classical_groups = "X25519:secp256r1:secp384r1";
 constexpr std::string_view post_quantum_marker = "MLKEM";
@@ -89,8 +81,7 @@ struct is_error_code_enum<llmgate::tls::errc> : true_type {};
 export namespace llmgate::tls {
 
 std::error_code make_error_code(errc const value) noexcept {
-    static detail::category_impl const category;
-    return {static_cast<int>(value), category};
+    return reflect::make_code(value);
 }
 
 class client_context {

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.30)
 set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD f35a9ac6-8463-4d38-8eec-5d6008153e7d)
-project(llmgate VERSION 0.0.0 LANGUAGES CXX)
+project(llmgate VERSION 0.0.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_SCAN_FOR_MODULES ON)
 set(CMAKE_CXX_MODULE_STD ON)
@@ -29,6 +29,15 @@ set(BOOST_UT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(BOOST_UT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(ut)
 
+FetchContent_Declare(llhttp
+  URL https://github.com/nodejs/llhttp/archive/refs/tags/release/v9.4.3.tar.gz
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SYSTEM
+  EXCLUDE_FROM_ALL)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(llhttp)
+
 function(llmgate_module name)
   cmake_parse_arguments(ARG "" "" "INTERFACE;SOURCES;LIBS" ${ARGN})
   add_library(${name})
@@ -50,6 +59,7 @@ else()
 endif()
 llmgate_module(llmgate_async INTERFACE src/async/async.cppm SOURCES ${LLMGATE_REACTOR})
 llmgate_module(llmgate_tls INTERFACE src/tls/tls.cppm LIBS llmgate_reflect OpenSSL::SSL OpenSSL::Crypto)
+llmgate_module(llmgate_http INTERFACE src/http/http.cppm LIBS llmgate_reflect llhttp::llhttp)
 llmgate_module(llmgate_net INTERFACE src/net/net.cppm LIBS llmgate_async llmgate_tls)
 
 enable_testing()
@@ -64,4 +74,5 @@ endfunction()
 llmgate_test(reflect_enum_test unit llmgate_reflect)
 llmgate_test(async_test unit llmgate_async)
 llmgate_test(tls_test unit llmgate_tls)
+llmgate_test(http_test unit llmgate_http)
 llmgate_test(tls_network_test network llmgate_net)

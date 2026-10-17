@@ -69,7 +69,7 @@ const suite tls_suite = [] {
 
     "limit_error_codes_carry_their_enumerator_name"_test = [] {
         expect(make_error_code(errc::truncated).message() == "truncated");
-        expect(std::string{make_error_code(errc::peer_closed).category().name()} == "llmgate.tls");
+        expect(std::string{make_error_code(errc::peer_closed).category().name()} == "llmgate::tls::errc");
     };
 
     "limit_nothing_is_negotiated_before_the_handshake"_test = [] {
