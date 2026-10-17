@@ -20,6 +20,9 @@ namespace {
 using namespace llmgate;
 
 constexpr std::string_view version_text = "llmgate " LLMGATE_VERSION;
+constexpr std::string_view usage_text =
+    "usage: llmgate [--config PATH] [serve | login | claude ARGS... | env [--json|--vscode] | setup [--service] [--dry-run] [--vscode FILE] | status | stop | "
+    "usage [--days N] [--json] | doctor [--offline] [--json] | quota [--json] | statusline] | --check-config | --version";
 constexpr int exit_usage = 2;
 constexpr int exit_config = 3;
 constexpr int exit_runtime = 1;
@@ -63,141 +66,177 @@ gateway::credential_map borrowed(credential_store const& store) {
     return all;
 }
 
-std::expected<gateway::access_policy, std::string> make_policy(gateway::config const& settings, std::string const& host,
-                                                               std::uint16_t const port) {
-    auto const* key = settings.client_key_env.empty() ? nullptr : std::getenv(settings.client_key_env.c_str());
-    if (!settings.client_key_env.empty() && (key == nullptr || *key == '\0')) {
-        return std::unexpected{std::format("client_key_env names {}, which is not set", settings.client_key_env)};
-    }
-    if (!routing::is_loopback_host(host) && key == nullptr) {
-        return std::unexpected{std::format("{} is not a loopback address: set client_key_env to require a client key", host)};
-    }
-    auto identity = commands::identity_key();
-    if (!identity) {
-        return std::unexpected{identity.error()};
-    }
-    auto hosts = routing::default_allowed_hosts(host, port);
-    hosts.insert(hosts.end(), settings.allowed_hosts.begin(), settings.allowed_hosts.end());
-    return gateway::access_policy{.client_key = key == nullptr ? std::string{} : std::string{key}, .allowed_hosts = std::move(hosts), .identity_key = std::move(*identity),
-                                  .identity_scope = std::format("{}:{}", host, port)};
+int fail(int const code, std::string_view const message) {
+    std::println(stderr, "llmgate: {}", message);
+    return code;
 }
 
-int serve(gateway::config settings) {
-    auto const address = arguments::split_listen(settings.listen);
-    if (!address) {
-        std::println(stderr, "llmgate: listen must look like 127.0.0.1:9480");
-        return exit_config;
+void attach_ledger(gateway::proxy& proxy, gateway::config const& settings) {
+    auto const sink = commands::ledger_sink(settings.usage.ledger_file);
+    if (!sink) {
+        return;
     }
-    async::reactor loop;
-    auto tls_context = tls::client_context::make(settings.tls_groups);
-    auto listening = net::listener::bind(loop, address->host, address->port);
-    if (!tls_context || !listening) {
-        std::println(stderr, "llmgate: cannot start: {}", !tls_context ? tls_context.error().message() : listening.error().message());
-        return exit_runtime;
+    auto history = commands::read_ledger(settings.usage.ledger_file);
+    if (history.skipped != 0) {
+        std::println(stderr, "llmgate: {} unreadable usage ledger lines were skipped", history.skipped);
     }
-    auto policy = make_policy(settings, address->host, listening->port());
-    if (!policy) {
-        std::println(stderr, "llmgate: {}", policy.error());
-        return exit_config;
-    }
-    if (auto const problem = gateway::config_problem(settings); !problem.empty()) {
-        std::println(stderr, "llmgate: {}", problem);
-        return exit_config;
-    }
-    auto credentials = make_credentials(loop, *tls_context, settings);
-    gateway::proxy proxy{loop, settings, std::move(*policy), borrowed(credentials), *tls_context};
-    if (auto const sink = commands::ledger_sink(settings.usage.ledger_file)) {
-        auto history = commands::read_ledger(settings.usage.ledger_file);
-        if (history.skipped != 0) {
-            std::println(stderr, "llmgate: {} unreadable usage ledger lines were skipped", history.skipped);
-        }
-        proxy.use_ledger(std::move(history.loaded));
-        proxy.persist_usage_with(sink);
-    }
-    auto stop = shutdown::stop_signal::make();
-    if (!stop || stop->install()) {
-        std::println(stderr, "llmgate: cannot install the stop signal handlers");
-        return exit_runtime;
-    }
-    std::println("llmgate listening on {}:{}", address->host, listening->port());
-    std::fflush(stdout);
-    auto const abandoned = loop.run(httpio::serve_until(*listening, proxy, httpio::limits{}, stop->descriptor(), settings.time.drain));
+    proxy.use_ledger(std::move(history.loaded));
+    proxy.persist_usage_with(sink);
+}
+
+void report_abandoned(std::size_t const abandoned, std::chrono::milliseconds const drain) {
     if (abandoned != 0) {
         std::println(stderr, "llmgate: stopped with {} requests still running after the {} s drain", abandoned,
-                     std::chrono::duration_cast<std::chrono::seconds>(settings.time.drain).count());
+                     std::chrono::duration_cast<std::chrono::seconds>(drain).count());
     }
+}
+
+int serve_on(async::reactor& loop, gateway::config const& settings, std::string const& host, tls::client_context const& tls_context,
+             net::listener& listening) {
+    auto policy = commands::make_policy(settings, host, listening.port());
+    if (!policy) {
+        return fail(exit_config, policy.error());
+    }
+    if (auto const problem = gateway::config_problem(settings); !problem.empty()) {
+        return fail(exit_config, problem);
+    }
+    auto credentials = make_credentials(loop, tls_context, settings);
+    gateway::proxy proxy{loop, settings, std::move(*policy), borrowed(credentials), tls_context};
+    attach_ledger(proxy, settings);
+    auto stop = shutdown::stop_signal::make();
+    if (!stop || stop->install()) {
+        return fail(exit_runtime, "cannot install the stop signal handlers");
+    }
+    std::println("llmgate listening on {}:{}", host, listening.port());
+    std::fflush(stdout);
+    report_abandoned(loop.run(httpio::serve_until(listening, proxy, httpio::limits{}, stop->descriptor(), settings.time.drain)), settings.time.drain);
     commands::release_pid_file();
     std::println("llmgate stopped");
     return 0;
 }
 
-std::optional<gateway::copilot_config> copilot_login_target(gateway::config const& settings) {
-    for (auto const& entry : gateway::effective_providers(settings)) {
-        if (entry.second.copilot && !entry.second.copilot->token_file.empty()) {
-            return entry.second.copilot;
-        }
+int serve(gateway::config settings) {
+    auto const address = arguments::split_listen(settings.listen);
+    if (!address) {
+        return fail(exit_config, "listen must look like 127.0.0.1:9480");
     }
-    return std::nullopt;
+    async::reactor loop;
+    auto tls_context = tls::client_context::make(settings.tls_groups);
+    if (!tls_context) {
+        return fail(exit_runtime, std::format("cannot start: {}", tls_context.error().message()));
+    }
+    auto listening = net::listener::bind(loop, address->host, address->port);
+    if (!listening) {
+        return fail(exit_runtime, std::format("cannot start: {}", listening.error().message()));
+    }
+    return serve_on(loop, settings, address->host, *tls_context, *listening);
 }
 
-int login(gateway::config const& settings) {
-    auto const target = copilot_login_target(settings);
-    if (!target) {
-        std::println(stderr, "llmgate: set copilot.token_file (or a provider's copilot.token_file) in the configuration first");
-        return exit_config;
+int save_login(gateway::copilot_config const& target, std::string const& token) {
+    if (auto const saved = copilot::save_oauth_token(target.token_file, token); !saved) {
+        return fail(exit_runtime, std::format("cannot save the token: {}", saved.error().message()));
     }
+    std::println("Logged in. The token is stored in {}", target.token_file);
+    return 0;
+}
+
+int await_login(async::reactor& loop, tls::client_context const& tls_context, gateway::copilot_config const& target, copilot::device_code const& code) {
+    std::println("Open {} and enter the code {}", code.verification_uri, code.user_code);
+    std::println("Waiting for you to authorise...");
+    std::fflush(stdout);
+    auto const token = loop.run(copilot::wait_for_authorisation(loop, tls_context, target, code));
+    if (!token) {
+        return fail(exit_runtime, std::format("login failed: {}", token.error().message()));
+    }
+    return save_login(target, *token);
+}
+
+int request_login(async::reactor& loop, tls::client_context const& tls_context, gateway::copilot_config const& target) {
+    auto const code = loop.run(copilot::request_device_code(loop, tls_context, target));
+    if (!code) {
+        return fail(exit_runtime, std::format("cannot reach GitHub: {}", code.error().message()));
+    }
+    return await_login(loop, tls_context, target, *code);
+}
+
+int login_with(gateway::config const& settings, gateway::copilot_config const& target) {
     async::reactor loop;
     auto tls_context = tls::client_context::make(settings.tls_groups);
     if (!tls_context) {
         return exit_runtime;
     }
-    auto const code = loop.run(copilot::request_device_code(loop, *tls_context, *target));
-    if (!code) {
-        std::println(stderr, "llmgate: cannot reach GitHub: {}", code.error().message());
-        return exit_runtime;
+    return request_login(loop, *tls_context, target);
+}
+
+int login(gateway::config const& settings) {
+    auto const target = commands::copilot_login_target(settings);
+    if (!target) {
+        return fail(exit_config, "set copilot.token_file (or a provider's copilot.token_file) in the configuration first");
     }
-    std::println("Open {} and enter the code {}", code->verification_uri, code->user_code);
-    std::println("Waiting for you to authorise...");
-    std::fflush(stdout);
-    auto const token = loop.run(copilot::wait_for_authorisation(loop, *tls_context, *target, *code));
-    if (!token) {
-        std::println(stderr, "llmgate: login failed: {}", token.error().message());
-        return exit_runtime;
+    return login_with(settings, *target);
+}
+
+int serve_command(commands::context const& where) {
+    return serve(where.settings);
+}
+
+int login_command(commands::context const& where) {
+    return login(where.settings);
+}
+
+int statusline_command(commands::context const& where) {
+    return commands::run_statusline(where, std::string{std::istreambuf_iterator<char>{std::cin}, std::istreambuf_iterator<char>{}});
+}
+
+using command_handler = int (*)(commands::context const&);
+
+constexpr auto handlers = std::to_array<std::pair<arguments::command, command_handler>>({
+    {arguments::command::serve, &serve_command},
+    {arguments::command::login, &login_command},
+    {arguments::command::claude, &commands::run_claude},
+    {arguments::command::env, &commands::run_env},
+    {arguments::command::setup, &commands::run_setup},
+    {arguments::command::status, &commands::run_status},
+    {arguments::command::stop, &commands::run_stop},
+    {arguments::command::usage, &commands::run_usage},
+    {arguments::command::doctor, &commands::run_doctor},
+    {arguments::command::quota, &commands::run_quota},
+    {arguments::command::statusline, &statusline_command},
+});
+
+int dispatch(commands::context const& where) {
+    return std::ranges::find(handlers, where.options.which, &std::pair<arguments::command, command_handler>::first)->second(where);
+}
+
+bool tolerates_missing_config(arguments::command const which) {
+    return which == arguments::command::statusline || which == arguments::command::stop || which == arguments::command::doctor;
+}
+
+int check_config(std::expected<gateway::config, std::string> const& settings) {
+    auto const problem = settings ? gateway::config_problem(*settings) : std::string{};
+    if (!problem.empty()) {
+        return fail(exit_config, problem);
     }
-    if (auto const saved = copilot::save_oauth_token(target->token_file, *token); !saved) {
-        std::println(stderr, "llmgate: cannot save the token: {}", saved.error().message());
-        return exit_runtime;
-    }
-    std::println("Logged in. The token is stored in {}", target->token_file);
+    std::println("configuration is valid");
     return 0;
 }
 
-int dispatch(commands::context const& where) {
-    switch (where.options.which) {
-        case arguments::command::serve:
-            return serve(where.settings);
-        case arguments::command::login:
-            return login(where.settings);
-        case arguments::command::claude:
-            return commands::run_claude(where);
-        case arguments::command::env:
-            return commands::run_env(where);
-        case arguments::command::setup:
-            return commands::run_setup(where);
-        case arguments::command::status:
-            return commands::run_status(where);
-        case arguments::command::stop:
-            return commands::run_stop(where);
-        case arguments::command::usage:
-            return commands::run_usage(where);
-        case arguments::command::doctor:
-            return commands::run_doctor(where);
-        case arguments::command::quota:
-            return commands::run_quota(where);
-        case arguments::command::statusline:
-            break;
+commands::context make_context(arguments::options const& parsed, std::expected<gateway::config, std::string> settings, char const* const program) {
+    return {.options = parsed,
+            .settings = settings ? std::move(*settings) : gateway::config{},
+            .binary = process::current_executable().value_or(std::filesystem::path{program}),
+            .config_error = settings ? std::string{} : settings.error()};
+}
+
+int run(arguments::options const& parsed, char const* const program) {
+    auto settings = load_config(parsed.config_path);
+    if (!settings && !tolerates_missing_config(parsed.which)) {
+        return fail(exit_config, settings.error());
     }
-    return commands::run_statusline(where, std::string{std::istreambuf_iterator<char>{std::cin}, std::istreambuf_iterator<char>{}});
+    if (parsed.check_config) {
+        return check_config(settings);
+    }
+    return dispatch(make_context(parsed, std::move(settings), program));
 }
 
 }  // namespace
@@ -205,30 +244,12 @@ int dispatch(commands::context const& where) {
 int main(int argc, char** argv) {
     auto const parsed = arguments::parse(std::vector<std::string>(argv + 1, argv + argc));
     if (!parsed) {
-        std::println(stderr, "llmgate: {}\nusage: llmgate [--config PATH] [serve | login | claude ARGS... | env [--json|--vscode] | setup [--service] [--dry-run] [--vscode FILE] | status | stop | usage [--days N] [--json] | doctor [--offline] [--json] | quota [--json] | statusline] | --check-config | --version", parsed.error());
+        std::println(stderr, "llmgate: {}\n{}", parsed.error(), usage_text);
         return exit_usage;
     }
     if (parsed->show_version) {
         std::println("{}", version_text);
         return 0;
     }
-    auto settings = load_config(parsed->config_path);
-    auto const tolerant = parsed->which == arguments::command::statusline || parsed->which == arguments::command::stop || parsed->which == arguments::command::doctor;
-    if (!settings && !tolerant) {
-        std::println(stderr, "llmgate: {}", settings.error());
-        return exit_config;
-    }
-    if (parsed->check_config) {
-        if (auto const problem = settings ? gateway::config_problem(*settings) : std::string{}; !problem.empty()) {
-            std::println(stderr, "llmgate: {}", problem);
-            return exit_config;
-        }
-        std::println("configuration is valid");
-        return 0;
-    }
-    commands::context where{.options = *parsed,
-                            .settings = settings ? std::move(*settings) : gateway::config{},
-                            .binary = process::current_executable().value_or(std::filesystem::path{argv[0]}),
-                            .config_error = settings ? std::string{} : settings.error()};
-    return dispatch(where);
+    return run(*parsed, argv[0]);
 }
