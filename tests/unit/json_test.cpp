@@ -189,6 +189,94 @@ const suite json_suite = [] {
         expect(std::get<double>(members[1].second.data) == 150.0);
         expect(std::get<std::string>(members[2].second.data) == "a\nb\xc3\xa9");
     };
+
+    "capability_every_string_escape_decodes_to_its_character"_test = [] {
+        auto const parsed = parse(R"(["\n\t\r\b\f\"\\\/\q","A","é","€"])");
+
+        expect(parsed.has_value());
+        auto const& items = std::get<array>(parsed->data);
+        expect(std::get<std::string>(items[0].data) == "\n\t\r\b\f\"\\/q");
+        expect(std::get<std::string>(items[1].data) == "A");
+        expect(std::get<std::string>(items[2].data) == "\xc3\xa9");
+        expect(std::get<std::string>(items[3].data) == "\xe2\x82\xac");
+    };
+
+    "limit_a_truncated_unicode_escape_decodes_to_nothing_and_a_lone_backslash_is_unterminated"_test = [] {
+        auto const parsed = parse(R"(["\u12"])");
+
+        expect(!parsed.has_value());
+        expect(!parse(R"("\)").has_value());
+        expect(!parse("\"a\x01\"").has_value());
+    };
+
+    "limit_comments_end_at_the_line_or_the_closing_marker_and_a_lone_slash_is_not_one"_test = [] {
+        expect(parse("[1] // trailing, no newline").has_value());
+        expect(parse("/* lead */ [1] /* trail */").has_value());
+        expect(parse("[1] /* never closed").has_value());
+        expect(!parse("[1] / 2").has_value());
+        expect(!parse("[1] /").has_value());
+        expect(parse("[1, // one\n 2]").has_value());
+    };
+
+    "capability_keywords_and_numbers_are_recognised_and_other_tokens_refused"_test = [] {
+        auto const parsed = parse("[false,true,null,-0,2.5]");
+
+        expect(parsed.has_value());
+        auto const& items = std::get<array>(parsed->data);
+        expect(std::get<bool>(items[0].data) == false);
+        expect(std::get<bool>(items[1].data) == true);
+        expect(std::holds_alternative<std::nullptr_t>(items[2].data));
+        expect(std::get<double>(items[4].data) == 2.5);
+        for (std::string_view const text : {"[nul]", "[1x]", "[+]", "[--1]", "[tru e]"}) {
+            expect(!parse(text).has_value()) << text;
+        }
+    };
+
+    "limit_container_syntax_errors_report_where_they_stop"_test = [] {
+        expect(parse("[1 2]").error().message == "expected ',' or ']'");
+        expect(parse(R"({"a":1 "b":2})").error().message == "expected ',' or '}'");
+        expect(parse("{1:2}").error().message == "expected a string key");
+        expect(parse(R"({"a" 2})").error().message == "expected ':'");
+        expect(parse("[").error().message == "unexpected end of input");
+        expect(parse("{").error().message == "expected a string key");
+    };
+
+    "limit_every_read_target_names_its_expected_type_when_the_json_has_another"_test = [] {
+        struct wrong {
+            bool flag = false;
+            std::string text{};
+            std::int32_t count = 0;
+            unsigned small = 0;
+            double real = 0;
+            level mode = level::quiet;
+            milliseconds span{};
+            std::vector<int> list{};
+            std::map<std::string, int> table{};
+            std::optional<int> maybe{};
+        };
+        auto const message_for = [](std::string_view const text) { return read_text<wrong>(text).error().message; };
+
+        expect(message_for(R"({"flag":1})") == "expected true or false");
+        expect(message_for(R"({"text":1})") == "expected a string");
+        expect(message_for(R"({"count":"x"})") == "expected a whole number");
+        expect(message_for(R"({"small":-1})") == "number is out of range");
+        expect(message_for(R"({"real":"x"})") == "expected a number");
+        expect(message_for(R"({"mode":1})") == "not one of the allowed names");
+        expect(message_for(R"({"span":1})") == "expected a duration string");
+        expect(message_for(R"({"list":1})") == "expected an array");
+        expect(message_for(R"({"table":1})") == "expected an object");
+        expect(message_for(R"({"maybe":"x"})") == "expected a whole number");
+        expect(message_for(R"({"list":[1,"x"]})") == "expected a whole number");
+        expect(message_for(R"({"table":{"k":"x"}})") == "expected a whole number");
+        expect(message_for("[]") == "expected an object");
+        expect(read_text<wrong>(R"({"maybe":null,"real":2,"list":[1],"table":{"k":2},"small":3})").has_value());
+    };
+
+    "capability_written_numbers_and_flags_round_trip"_test = [] {
+        auto const parsed = parse("[1.5,false,true,0]");
+
+        expect(write(*parsed) == "[1.5,false,true,0]");
+    };
 };
 
 }  // namespace
