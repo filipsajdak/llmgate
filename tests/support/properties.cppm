@@ -12,9 +12,11 @@ import llmgate.reflect;
 import llmgate.role;
 import llmgate.json;
 import llmgate.jsonscan;
+import llmgate.lenient;
 import llmgate.routing;
 import llmgate.selection;
 import llmgate.sse;
+import llmgate.text;
 
 export namespace llmgate::properties {
 
@@ -644,6 +646,32 @@ constexpr bool wire_sample_matches(wire_sample const& sample, std::expected<wire
     }
     back->scratch = sample.scratch;
     return *back == sample;
+}
+
+constexpr auto lenient_values = std::to_array<std::string_view>({"1", "-1", "\"x\"", "null", "[]", "true", "9223372036854775807"});
+
+constexpr std::string lenient_line_from(std::string_view const seed) {
+    auto const value_at = [&seed](std::size_t const index) { return lenient_values[byte_at(seed, index) % lenient_values.size()]; };
+    std::string line;
+    text::append_all(line, R"({"time":)", value_at(0), R"(,"input":)", value_at(1), R"(,"model":)", value_at(2), R"(,"status":)", value_at(3), R"(,"repairs":)", value_at(4), "}");
+    return line;
+}
+
+constexpr bool lenient_holds(std::string_view const text) {
+    auto const parsed = json::parse(lenient_line_from(text), {.jsonc = false});
+    if (!parsed) {
+        return false;
+    }
+    auto const loose = lenient::read<usage::record>(*parsed);
+    auto const strict = json::read<usage::record>(*parsed);
+    if (strict && (!loose || *loose != *strict)) {
+        return false;
+    }
+    if (!loose) {
+        return json::at(*parsed, {"time"}) == nullptr || !std::holds_alternative<std::int64_t>(json::at(*parsed, {"time"})->data);
+    }
+    auto const again = json::read<usage::record>(json::to_value(*loose));
+    return again && *again == *loose && usage::from_line(usage::to_line(*loose)).has_value();
 }
 
 constexpr bool writer_holds(std::string_view const text) {
