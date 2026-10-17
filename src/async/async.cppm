@@ -154,7 +154,29 @@ struct pending_op {
 
 }  // namespace llmgate::async::detail
 
+namespace llmgate::async::detail {
+
+struct detached {
+    struct promise_type {
+        detached get_return_object() const noexcept { return {}; }
+        std::suspend_never initial_suspend() const noexcept { return {}; }
+        std::suspend_never final_suspend() const noexcept { return {}; }
+        void return_void() const noexcept {}
+        void unhandled_exception() const noexcept { std::terminate(); }
+    };
+};
+
+inline detached run_detached(task<void> work) {
+    co_await std::move(work);
+}
+
+}  // namespace llmgate::async::detail
+
 export namespace llmgate::async {
+
+void spawn(task<void> work) {
+    detail::run_detached(std::move(work));
+}
 
 class reactor {
 public:
