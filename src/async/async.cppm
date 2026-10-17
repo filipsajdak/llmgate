@@ -8,6 +8,10 @@ import std;
 
 export namespace llmgate::async {
 
+enum class interest { readable, writable };
+
+using duration = std::chrono::milliseconds;
+
 template <class T>
 class task;
 
@@ -124,15 +128,33 @@ task<void> drive(task<T> root, std::optional<stored<T>>& out, bool& finished) {
     finished = true;
 }
 
+struct pending_op;
+
+struct event_source {
+    pending_op* owner;
+    bool timer;
+};
+
 struct pending_op {
+    explicit pending_op(void (*on_complete)(pending_op*, std::error_code) noexcept) noexcept
+        : complete{on_complete}, fd_source{.owner = this, .timer = false}, timer_source{.owner = this, .timer = true} {}
+    pending_op(pending_op const&) = delete;
+    pending_op& operator=(pending_op const&) = delete;
+
     void (*complete)(pending_op*, std::error_code) noexcept;
+    event_source fd_source;
+    event_source timer_source;
+    std::error_code outcome{};
+    int fd = -1;
+    int timer_fd = -1;
+    interest what = interest::readable;
+    bool has_timer = false;
+    bool fired = false;
 };
 
 }  // namespace llmgate::async::detail
 
 export namespace llmgate::async {
-
-enum class interest { readable, writable };
 
 class reactor {
 public:
@@ -143,35 +165,41 @@ public:
 
     class readiness final : detail::pending_op {
     public:
-        readiness(reactor& owner, int fd, interest what) noexcept
-            : detail::pending_op{.complete = &readiness::finish}, owner_{&owner}, fd_{fd}, what_{what} {}
-        readiness(readiness const&) = delete;
-        readiness& operator=(readiness const&) = delete;
+        readiness(reactor& owner, int fd, interest what, std::optional<duration> timeout) noexcept
+            : detail::pending_op{&readiness::finish}, owner_{&owner}, what_{what}, timeout_{timeout} {
+            this->fd = fd;
+        }
 
         bool await_ready() const noexcept { return false; }
         bool await_suspend(std::coroutine_handle<> caller) noexcept {
             waiter_ = caller;
-            result_ = owner_->arm(fd_, what_, this);
-            return !result_;
+            outcome = owner_->arm(fd, what_, timeout_, this);
+            return !outcome;
         }
-        std::error_code await_resume() const noexcept { return result_; }
+        std::error_code await_resume() const noexcept { return outcome; }
 
     private:
         static void finish(detail::pending_op* self, std::error_code error) noexcept {
             auto& op = *static_cast<readiness*>(self);
-            op.result_ = error;
+            op.outcome = error;
             op.waiter_.resume();
         }
 
         reactor* owner_;
-        int fd_;
         interest what_;
+        std::optional<duration> timeout_;
         std::coroutine_handle<> waiter_;
-        std::error_code result_;
     };
 
-    readiness readable(int const fd) noexcept { return readiness{*this, fd, interest::readable}; }
-    readiness writable(int const fd) noexcept { return readiness{*this, fd, interest::writable}; }
+    readiness readable(int const fd, std::optional<duration> const timeout = std::nullopt) noexcept {
+        return readiness{*this, fd, interest::readable, timeout};
+    }
+    readiness writable(int const fd, std::optional<duration> const timeout = std::nullopt) noexcept {
+        return readiness{*this, fd, interest::writable, timeout};
+    }
+    task<void> sleep(duration const length) {
+        (void)co_await readiness{*this, -1, interest::readable, length};
+    }
 
     void poll_or_terminate() noexcept;
 
@@ -190,8 +218,9 @@ public:
     }
 
 private:
-    std::error_code arm(int fd, interest what, detail::pending_op* op) noexcept
-        pre(fd >= 0)
+    std::error_code arm(int fd, interest what, std::optional<duration> timeout, detail::pending_op* op) noexcept
+        pre(fd >= -1)
+        pre(fd >= 0 || timeout.has_value())
         pre(op != nullptr);
 
     int poller_fd_;
