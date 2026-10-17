@@ -10,7 +10,3 @@ src/gateway/routing.cppm|route-table|{"POST", "/anthropic/v1/messages", route::m
 src/anthropic/guard.cppm|enum-handler-table|{event_type::error, &grammar_state::on_error},|pending: Tier 3 H annotates the event_type enumerators and static_asserts the table is exhaustive
 app/llmgate.cpp|enum-handler-table|{arguments::command::serve, &serve_command},|pending: Tier 2 F makes the handlers table static_assert-exhaustive
 tests/fuzz/schedule/harness.cpp|enum-modulo|% scenario_count|pending: Tier 3 H replaces scenario_count with reflect::enum_count
-tests/support/properties.cppm|enum-modulo|seen.settings = static_cast<doctor::settings_state>|pending: Tier 1 B generators use reflect::enum_count
-tests/support/properties.cppm|enum-modulo|seen.ledger = static_cast<doctor::ledger_state>|pending: Tier 1 B generators use reflect::enum_count
-tests/support/properties.cppm|enum-modulo|seen.exchange = static_cast<doctor::exchange_state>|pending: Tier 1 B generators use reflect::enum_count
-tests/support/properties.cppm|enum-modulo|seen.quota = static_cast<doctor::quota_state>|pending: Tier 1 B generators use reflect::enum_count

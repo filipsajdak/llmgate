@@ -31,7 +31,7 @@ ROUTE_ROW = re.compile(rf'\{{\s*"[A-Z]+"\s*,\s*{STRING}\s*,\s*{QUALIFIED}\s*\}}'
 WORD_COMPARISON = re.compile(rf"\bif\s*\(\s*(?:[\w.\[\]]+)\s*==\s*{STRING}")
 KEY_FROM_MEMBER = re.compile(r'\{\s*"(\w+)"\s*,.*\.\1\b.*')
 JSON_PLACEHOLDER = re.compile(r'"\w+"\s*:\s*(?:\{\{)*"?\{\}"?')
-ENUM_CAST_MODULO = re.compile(r"static_cast<\s*([\w:]+)\s*>\s*\(((?:[^;()]|\((?:[^;()]|\([^;()]*\))*\))*)%\s*\w+")
+ENUM_CAST_MODULO = re.compile(r"static_cast<\s*([\w:]+)\s*>\s*\(((?:[^;()]|\((?:[^;()]|\([^;()]*\))*\))*)%\s*([\w:]+)")
 STRING_LIST = re.compile(r"std::to_array<\s*std::string_view\s*>\s*\(\s*\{(.*?)\}\s*\)", re.DOTALL)
 ENUM_DEFINITION = re.compile(r"\benum\s+(?:class|struct)\s+(\w+)\s*(?::\s*[\w:\s]+?)?\s*\{([^}]*)\}")
 ATTRIBUTE = re.compile(r"\[\[.*?\]\]", re.DOTALL)
@@ -133,7 +133,8 @@ def scan_text(path, text, enums=None):
         if len(JSON_PLACEHOLDER.findall(body)) >= MIN_JSON_KEYS:
             yield Finding(path, line, "json-format-template", source.line_text(line).strip())
     for match in ENUM_CAST_MODULO.finditer(source.skeleton):
-        if not ARITHMETIC_TYPE.match(match.group(1).split("::")[-1]):
+        counted_by_reflection = "enum_count" in match.group(3)
+        if not ARITHMETIC_TYPE.match(match.group(1).split("::")[-1]) and not counted_by_reflection:
             yield Finding(path, source.line(match.start()), "enum-modulo", source.text_at(match.start()))
     for match in STRING_LIST.finditer(code):
         words = {unquote(word) for word in re.findall(STRING, match.group(1))}
@@ -169,6 +170,7 @@ CLEAN = (
     'auto raw = R"(case E::a: return "a"; case E::b: return "b"; case E::c: return "c";)";\n'
     'auto j = std::format(R"({{"a":{},"b":{}}})", x, y);\n'
     "auto n = static_cast<int>(x % 5);\nauto m = static_cast<std::uint8_t>(x % 5);\nauto u = static_cast<doctor::state>(x);\n"
+    "auto k = static_cast<doctor::state>(x % reflect::enum_count<doctor::state>);\n"
 )
 TWO_LINE_SWITCH = 'switch (s) {\n  case status::pass:\n    return "PASS";\n  case status::warn:\n    return "WARN";\n  case status::fail:\n    return "FAIL";\n}\n'
 ESCAPED_QUOTES = 'switch (s) {\n  case k::a: return "say \\"a\\"";\n  case k::b: return "say \\"b\\"";\n  case k::c: return "say \\"c\\"";\n}\n'
