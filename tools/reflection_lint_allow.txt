@@ -1,6 +1,4 @@
 # path|rule|text fragment of the first matching line|reason. Debt entries start with 'pending:'; anything else is a justified exception.
-src/app/arguments.cppm|name-enum-table|{"serve", command::serve},|pending: crap-app agent derives commands and flags by reflection
-src/app/arguments.cppm|word-chain|} else if (word == "--version") {|pending: crap-app agent derives commands and flags by reflection
 src/gateway/quota.cppm|key-member-block|items.push_back(json::make_object({{"name", json::make_strin|pending: needs a reflection-based json::to_value for aggregates
 src/gateway/quota.cppm|key-member-block|return json::make_object({{"plan", json::make_string(found.p|pending: needs a reflection-based json::to_value for aggregates
 src/usage/usage.cppm|key-member-block|{"time", json::value{entry.time}},|pending: needs a reflection-based json::to_value for aggregates

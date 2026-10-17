@@ -102,6 +102,28 @@ const suite arguments_suite = [] {
         expect(repairs == 3_u);
         expect(counters_from("garbage") == std::pair<std::uint64_t, std::uint64_t>{0, 0});
     };
+
+    "limit_flag_errors_keep_their_exact_texts"_test = [] {
+        expect(parse(words({"usage", "--days", "0"})).error() == "--days needs a number from 1 to 3660");
+        expect(parse(words({"usage", "--days", "3661"})).error() == "--days needs a number from 1 to 3660");
+        expect(parse(words({"usage", "--days"})).error() == "--days needs a number from 1 to 3660");
+        expect(parse(words({"--config"})).error() == "unknown argument: --config");
+        expect(parse(words({"serve", "serve"})).error() == "unknown argument: serve");
+    };
+
+    "capability_the_command_words_come_from_the_enumerators"_test = [] {
+        for (auto const word : {"serve", "login", "claude", "env", "setup", "statusline", "status", "stop", "usage", "doctor", "quota"}) {
+            expect(command_named(word).has_value()) << word;
+        }
+        expect(!command_named("bogus").has_value());
+    };
+
+    "capability_a_vscode_flag_before_a_command_leaves_the_command_alone"_test = [] {
+        auto const parsed = parse(words({"--vscode", "env"}));
+
+        expect(parsed->as_vscode && parsed->vscode_file.empty() && parsed->which == command::env);
+        expect(parse(words({"--check-config", "--version"}))->check_config);
+    };
 };
 
 }  // namespace

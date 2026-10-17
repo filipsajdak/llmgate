@@ -163,7 +163,7 @@ class H(http.server.BaseHTTPRequestHandler):
 http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 PY
 squatter_pid=$!
-sleep 1
+while ! python3 -c "import socket; socket.create_connection(('127.0.0.1',$port),1)" 2>/dev/null; do sleep 0.1; done
 doctor --offline
 kill $squatter_pid 2>/dev/null || true
 label="something else answering on the port fails"

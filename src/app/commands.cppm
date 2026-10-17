@@ -29,11 +29,14 @@ export namespace llmgate::commands {
 
 using outcome = std::expected<void, std::string>;
 
+using program_runner = int (*)(std::filesystem::path const&, std::vector<std::string> const&);
+
 struct context {
     arguments::options options;
     gateway::config settings;
     std::filesystem::path binary;
     std::string config_error{};
+    program_runner run_program = &process::run_and_wait;
 };
 
 constexpr std::string_view state_log_name = "gateway.log";
@@ -133,6 +136,10 @@ std::expected<json::value, std::string> existing_json(std::filesystem::path cons
     return std::move(*parsed);
 }
 
+void announce_write(std::filesystem::path const& path, bool const dry_run) {
+    std::println("{} {}", dry_run ? "would write" : "writing    ", path.string());
+}
+
 outcome write_json(std::filesystem::path const& path, json::value const& document, bool const dry_run, bool const private_parent) {
     constexpr mode_t file_mode = 0600;
     auto const text = json::write(document, 2);
@@ -141,7 +148,7 @@ outcome write_json(std::filesystem::path const& path, json::value const& documen
         std::println("unchanged  {}", path.string());
         return {};
     }
-    std::println("{} {}", dry_run ? "would write" : "writing    ", path.string());
+    announce_write(path, dry_run);
     if (dry_run) {
         return {};
     }
@@ -181,45 +188,71 @@ std::string proof_in(std::string_view const body) {
     return std::string{rest.substr(0, rest.find('"'))};
 }
 
-int run_words(std::filesystem::path const& program, std::initializer_list<std::string_view> const words) {
+int run_words(context const& where, std::filesystem::path const& program, std::initializer_list<std::string_view> const words) {
     std::vector<std::string> arguments;
     for (auto const word : words) {
         arguments.emplace_back(word);
     }
-    return process::run_and_wait(program, arguments);
+    return where.run_program(program, arguments);
+}
+
+struct service_unit {
+    std::filesystem::path path;
+    std::string text;
+};
+
+#if defined(__APPLE__)
+service_unit service_unit_for(context const& where) {
+    auto const log = (state_directory() / std::string{state_log_name}).string();
+    return {.path = std::filesystem::path{process::expand_home("~/Library/LaunchAgents")} / (std::string{service_label} + ".plist"),
+            .text = claude::launchd_plist(service_label, where.binary.string(), process::expand_home(where.options.config_path), log)};
+}
+
+outcome load_service(context const& where, std::filesystem::path const& unit) {
+    auto const domain = std::format("gui/{}", ::getuid());
+    (void)run_words(where, "/bin/launchctl", {"bootout", domain, unit.string()});
+    if (run_words(where, "/bin/launchctl", {"bootstrap", domain, unit.string()}) != 0) {
+        return std::unexpected{"launchctl could not load the service; load it with: launchctl bootstrap " + domain + " " + unit.string()};
+    }
+    return {};
+}
+#else
+service_unit service_unit_for(context const& where) {
+    return {.path = config_directory() / "systemd" / "user" / "llmgate.service",
+            .text = claude::systemd_unit(where.binary.string(), process::expand_home(where.options.config_path))};
+}
+
+outcome load_service(context const& where, std::filesystem::path const&) {
+    auto const systemctl = process::find_in_path("systemctl").value_or("systemctl");
+    bool const started = run_words(where, systemctl, {"--user", "daemon-reload"}) == 0 &&
+                         run_words(where, systemctl, {"--user", "enable", "--now", "llmgate.service"}) == 0;
+    if (!started) {
+        return std::unexpected{"systemctl could not start the service; start it with: systemctl --user enable --now llmgate.service"};
+    }
+    return {};
+}
+#endif
+
+outcome write_unit(service_unit const& unit) {
+    constexpr mode_t unit_mode = 0644;
+    if (auto const written = process::write_file_atomic(unit.path, unit.text, unit_mode, false); !written) {
+        return std::unexpected{unit.path.string() + ": " + written.error().message()};
+    }
+    return {};
 }
 
 outcome install_service(context const& where, bool const dry_run) {
-    auto const config_path = process::expand_home(where.options.config_path);
-    auto const log = (state_directory() / std::string{state_log_name}).string();
-#if defined(__APPLE__)
-    auto const unit = std::filesystem::path{process::expand_home("~/Library/LaunchAgents")} / (std::string{service_label} + ".plist");
-    auto const text = claude::launchd_plist(service_label, where.binary.string(), config_path, log);
-#else
-    auto const unit = config_directory() / "systemd" / "user" / "llmgate.service";
-    auto const text = claude::systemd_unit(where.binary.string(), config_path);
-#endif
-    std::println("{} {}", dry_run ? "would write" : "writing    ", unit.string());
+    auto const unit = service_unit_for(where);
+    announce_write(unit.path, dry_run);
     if (dry_run) {
         return {};
     }
-    constexpr mode_t unit_mode = 0644;
-    if (auto const written = process::write_file_atomic(unit, text, unit_mode, false); !written) {
-        return std::unexpected{unit.string() + ": " + written.error().message()};
+    if (auto const written = write_unit(unit); !written) {
+        return written;
     }
-#if defined(__APPLE__)
-    auto const domain = std::format("gui/{}", ::getuid());
-    (void)run_words("/bin/launchctl", {"bootout", domain, unit.string()});
-    if (run_words("/bin/launchctl", {"bootstrap", domain, unit.string()}) != 0) {
-        return std::unexpected{"launchctl could not load the service; load it with: launchctl bootstrap " + domain + " " + unit.string()};
+    if (auto const loaded = load_service(where, unit.path); !loaded) {
+        return loaded;
     }
-#else
-    auto const systemctl = process::find_in_path("systemctl");
-    if (!systemctl || run_words(*systemctl, {"--user", "daemon-reload"}) != 0 ||
-        run_words(*systemctl, {"--user", "enable", "--now", "llmgate.service"}) != 0) {
-        return std::unexpected{"systemctl could not start the service; start it with: systemctl --user enable --now llmgate.service"};
-    }
-#endif
     std::println("service started");
     return {};
 }
@@ -329,24 +362,50 @@ inline int run_env(context const& where) {
     return 0;
 }
 
+}  // namespace llmgate::commands
+
+namespace llmgate::commands::detail {
+
+outcome write_vscode_settings(context const& where, claude::environment_list const& list) {
+    if (!where.options.as_vscode || where.options.vscode_file.empty()) {
+        return {};
+    }
+    auto const path = std::filesystem::path{process::expand_home(where.options.vscode_file)};
+    auto existing = existing_json(path);
+    if (!existing) {
+        return std::unexpected{existing.error()};
+    }
+    return write_json(path, claude::merge_vscode(std::move(*existing), list), where.options.dry_run, false);
+}
+
+outcome install_requested_service(context const& where) {
+    if (!where.options.service) {
+        return {};
+    }
+    return install_service(where, where.options.dry_run);
+}
+
+outcome run_setup_steps(context const& where, claude::environment_list const& list) {
+    if (auto const profile = ensure_profile(where, where.options.dry_run); !profile) {
+        return profile;
+    }
+    if (auto const vscode = write_vscode_settings(where, list); !vscode) {
+        return vscode;
+    }
+    return install_requested_service(where);
+}
+
+}  // namespace llmgate::commands::detail
+
+export namespace llmgate::commands {
+
 inline int run_setup(context const& where) {
     auto const list = detail::environment_for(where.settings);
     if (!list) {
         std::println(stderr, "llmgate: {}", list.error());
         return exit_failure;
     }
-    auto const dry_run = where.options.dry_run;
-    outcome done = ensure_profile(where, dry_run);
-    if (done && where.options.as_vscode && !where.options.vscode_file.empty()) {
-        auto const path = std::filesystem::path{process::expand_home(where.options.vscode_file)};
-        auto existing = detail::existing_json(path);
-        done = existing ? detail::write_json(path, claude::merge_vscode(std::move(*existing), *list), dry_run, false)
-                        : outcome{std::unexpected{existing.error()}};
-    }
-    if (done && where.options.service) {
-        done = detail::install_service(where, dry_run);
-    }
-    if (!done) {
+    if (auto const done = detail::run_setup_steps(where, *list); !done) {
         std::println(stderr, "llmgate: {}", done.error());
         return exit_failure;
     }
@@ -676,6 +735,70 @@ inline int run_statusline(context const& where, std::string_view const input) {
     }
     std::print("{}", statusline::render(now));
     return 0;
+}
+
+}  // namespace llmgate::commands
+
+namespace llmgate::commands::detail {
+
+std::expected<std::optional<std::string>, std::string> configured_client_key(gateway::config const& settings) {
+    if (settings.client_key_env.empty()) {
+        return std::nullopt;
+    }
+    auto key = variable(settings.client_key_env);
+    if (!key) {
+        return std::unexpected{std::format("client_key_env names {}, which is not set", settings.client_key_env)};
+    }
+    return key;
+}
+
+outcome require_key_off_loopback(std::string const& host, bool const has_key) {
+    if (!routing::is_loopback_host(host) && !has_key) {
+        return std::unexpected{std::format("{} is not a loopback address: set client_key_env to require a client key", host)};
+    }
+    return {};
+}
+
+std::vector<std::string> allowed_hosts_for(gateway::config const& settings, std::string const& host, std::uint16_t const port) {
+    auto hosts = routing::default_allowed_hosts(host, port);
+    hosts.insert(hosts.end(), settings.allowed_hosts.begin(), settings.allowed_hosts.end());
+    return hosts;
+}
+
+bool has_token_file(gateway::provider_config const& provider) {
+    return provider.copilot && !provider.copilot->token_file.empty();
+}
+
+}  // namespace llmgate::commands::detail
+
+export namespace llmgate::commands {
+
+inline std::expected<gateway::access_policy, std::string> make_policy(gateway::config const& settings, std::string const& host,
+                                                                      std::uint16_t const port) {
+    auto const key = detail::configured_client_key(settings);
+    if (!key) {
+        return std::unexpected{key.error()};
+    }
+    if (auto const open = detail::require_key_off_loopback(host, key->has_value()); !open) {
+        return std::unexpected{open.error()};
+    }
+    auto identity = identity_key();
+    if (!identity) {
+        return std::unexpected{identity.error()};
+    }
+    return gateway::access_policy{.client_key = key->value_or(std::string{}),
+                                  .allowed_hosts = detail::allowed_hosts_for(settings, host, port),
+                                  .identity_key = std::move(*identity),
+                                  .identity_scope = std::format("{}:{}", host, port)};
+}
+
+inline std::optional<gateway::copilot_config> copilot_login_target(gateway::config const& settings) {
+    for (auto const& entry : gateway::effective_providers(settings)) {
+        if (detail::has_token_file(entry.second)) {
+            return entry.second.copilot;
+        }
+    }
+    return std::nullopt;
 }
 
 }  // namespace llmgate::commands
