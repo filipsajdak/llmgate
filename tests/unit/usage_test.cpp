@@ -174,6 +174,60 @@ const suite usage_suite = [] {
         expect(headline_from("nope").today == 0_u);
     };
 
+    "limit_a_ledger_line_without_counts_reads_as_zero_not_one"_test = [] {
+        auto const entry = from_line(R"({"time":5})");
+
+        expect(entry.has_value() && entry->used == tokens{} && entry->repairs == 0_u);
+    };
+
+    "limit_dates_stay_right_in_centuries_that_are_not_leap_years_and_before_year_one"_test = [] {
+        constexpr std::int64_t last_day_of_february_2100 = 47540;
+        constexpr std::int64_t first_day_of_march_0 = -719468;
+
+        expect(iso_date(last_day_of_february_2100) == "2100-02-28");
+        expect(iso_date(last_day_of_february_2100 + 1) == "2100-03-01");
+        expect(iso_date(first_day_of_march_0) == "0-03-01");
+        expect(iso_date(first_day_of_march_0 - 1) == "0-02-29");
+    };
+
+    "limit_a_budget_with_nothing_used_still_reports_its_window_and_limit"_test = [] {
+        auto const idle = evaluate({.daily_tokens = 1000}, 0, 0);
+
+        expect(idle.limit == 1000_u && idle.window == "daily" && idle.percent == 0_u && idle.state == level::ok);
+        expect(evaluate({.daily_tokens = 1, .monthly_tokens = 1000}, 0, 0).limit == 1_u);
+    };
+
+    "limit_report_columns_keep_their_widths_in_the_header_the_rows_and_the_total"_test = [] {
+        constexpr std::size_t date_width = 12;
+        constexpr std::size_t model_width = 22;
+        constexpr std::size_t request_width = 9;
+        constexpr std::size_t number_width = 12;
+        constexpr std::size_t counters = 4;
+        constexpr std::size_t line_width = date_width + model_width + request_width + counters * number_width;
+        ledger book;
+        book.add({.time = noon, .model = "m", .used = {.input = 1}});
+
+        auto const text = report(book, day_of(noon), day_of(noon));
+        auto const lines = text | std::views::split('\n') | std::ranges::to<std::vector<std::string>>();
+
+        expect(lines.size() == 4_u);
+        expect(lines[0].size() == line_width && lines[1].size() == line_width && lines[2].size() == line_width);
+        expect(lines[0].starts_with("date" + std::string(date_width - 4, ' ') + "model" + std::string(model_width - 5, ' ') + std::string(request_width - 8, ' ') + "requests"));
+        expect(lines[1].starts_with("2025-10-17  m" + std::string(model_width - 1, ' ') + std::string(request_width - 1, ' ') + "1"));
+        expect(lines[2] == "total" + std::string(date_width + model_width - 5, ' ') + std::string(request_width - 1, ' ') + "1" + std::string(number_width - 1, ' ') + "1" +
+                               std::string(number_width - 1, ' ') + "0" + std::string(number_width - 1, ' ') + "0" + std::string(number_width - 1, ' ') + "0");
+    };
+
+    "limit_the_json_report_is_indented_by_two_spaces"_test = [] {
+        ledger book;
+        book.add({.time = noon, .model = "m"});
+
+        auto const json = report_json(book, day_of(noon), day_of(noon));
+
+        expect(json.contains("\n  \"days\": 1"));
+        expect(!json.contains("\n   \"days\""));
+    };
+
     "capability_the_report_lists_days_models_and_a_total_inside_the_range"_test = [] {
         ledger book;
         book.add({.time = noon, .model = "claude-a", .used = {.input = 1500, .output = 20}});
