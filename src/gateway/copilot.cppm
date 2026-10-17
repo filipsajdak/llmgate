@@ -142,21 +142,7 @@ std::expected<std::string, std::error_code> load_oauth_token(std::string_view co
     return std::move(stored->oauth_token);
 }
 
-std::expected<void, std::error_code> save_oauth_token(std::string_view const path, std::string_view const token) {
-    std::filesystem::path const target{detail::expand_home(path)};
-    std::error_code failure;
-    std::filesystem::create_directories(target.parent_path(), failure);
-    {
-        std::ofstream out{target, std::ios::trunc};
-        if (!out) {
-            return std::unexpected{std::make_error_code(std::errc::permission_denied)};
-        }
-        out << R"({"oauth_token":)" << jsonscan::encode_string(token) << "}\n";
-    }
-    std::filesystem::permissions(target, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
-                                 std::filesystem::perm_options::replace, failure);
-    return failure ? std::unexpected{failure} : std::expected<void, std::error_code>{};
-}
+std::expected<void, std::error_code> save_oauth_token(std::string_view path, std::string_view token);
 
 }  // namespace llmgate::copilot
 

@@ -196,6 +196,50 @@ const suite copilot_suite = [] {
         expect((info.st_mode & 0777) == 0600);
     };
 
+    "limit_saving_over_a_symlink_replaces_the_link_and_leaves_its_target_untouched"_test = [] {
+        world w{std::nullopt};
+        std::filesystem::create_directories(w.directory);
+        auto const victim = w.directory / "victim.txt";
+        {
+            std::ofstream out{victim};
+            out << "precious";
+        }
+        std::filesystem::create_symlink(victim, w.settings.token_file);
+
+        auto const saved = copilot::save_oauth_token(w.settings.token_file, "gho_new");
+        std::ifstream in{victim};
+        std::string const kept{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+
+        expect(saved.has_value());
+        expect(kept == "precious");
+        expect(!std::filesystem::is_symlink(w.settings.token_file));
+        expect(copilot::load_oauth_token(w.settings.token_file).value() == "gho_new");
+    };
+
+    "capability_a_parent_directory_the_save_creates_is_private"_test = [] {
+        world w{std::nullopt};
+        w.settings.token_file = (w.directory / "nested" / "token.json").string();
+
+        auto const saved = copilot::save_oauth_token(w.settings.token_file, "gho_x");
+        struct stat info {};
+        ::stat((w.directory / "nested").c_str(), &info);
+
+        expect(saved.has_value());
+        expect((info.st_mode & 0777) == 0700);
+    };
+
+    "limit_no_temporary_file_is_left_behind_after_a_save"_test = [] {
+        world w{std::nullopt};
+        (void)copilot::save_oauth_token(w.settings.token_file, "gho_x");
+
+        std::vector<std::string> names;
+        for (auto const& entry : std::filesystem::directory_iterator{w.directory}) {
+            names.push_back(entry.path().filename().string());
+        }
+
+        expect(names == std::vector<std::string>{"token.json"});
+    };
+
     "limit_a_missing_or_empty_token_file_means_login_is_required"_test = [] {
         world w{std::nullopt};
 
