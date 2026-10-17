@@ -183,11 +183,13 @@ const suite usage_suite = [] {
     "limit_dates_stay_right_in_centuries_that_are_not_leap_years_and_before_year_one"_test = [] {
         constexpr std::int64_t last_day_of_february_2100 = 47540;
         constexpr std::int64_t first_day_of_march_0 = -719468;
+        constexpr std::int64_t days_in_a_gregorian_era = 146097;
 
         expect(iso_date(last_day_of_february_2100) == "2100-02-28");
         expect(iso_date(last_day_of_february_2100 + 1) == "2100-03-01");
         expect(iso_date(first_day_of_march_0) == "0-03-01");
         expect(iso_date(first_day_of_march_0 - 1) == "0-02-29");
+        expect(iso_date(first_day_of_march_0 - days_in_a_gregorian_era) == "-400-03-01");
     };
 
     "limit_a_budget_with_nothing_used_still_reports_its_window_and_limit"_test = [] {

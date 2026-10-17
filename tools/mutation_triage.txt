@@ -18,3 +18,4 @@ src/usage/usage.cppm:546:84d7c907 | arid | weakens the assertion of a static_ass
 src/usage/usage.cppm:550:0463bbe0 | arid | mutates the fixture of a static_assert, not product code
 src/usage/usage.cppm:555:6f55d8dd | arid | mutates the assertion of a static_assert fixture, not product code
 src/usage/usage.cppm:556:6c412fa1 | arid | mutates the assertion of a static_assert fixture, not product code
+src/claude/statusline.cppm:73:29085f9b | arid | swapped std::clamp arguments violate its precondition (lo <= hi) for any percentage above 999, which is undefined behaviour the optimiser may assume away, so no test can pin it
