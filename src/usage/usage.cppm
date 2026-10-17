@@ -50,6 +50,7 @@ struct record {
     std::string requested{};
     std::string model{};
     std::string role{};
+    std::string provider{};
     std::string session{};
     tokens used{};
     std::int64_t duration_ms = 0;
@@ -187,6 +188,7 @@ constexpr std::string to_line(record const& entry) {
         {"requested", json::make_string(entry.requested)},
         {"model", json::make_string(entry.model)},
         {"role", json::make_string(entry.role)},
+        {"provider", json::make_string(entry.provider)},
         {"session", json::make_string(entry.session)},
         {"input", number(entry.used.input)},
         {"output", number(entry.used.output)},
@@ -220,6 +222,7 @@ constexpr std::optional<record> from_line(std::string_view const line) {
                   .requested = label(json::text_at(*parsed, {"requested"})),
                   .model = label(json::text_at(*parsed, {"model"})),
                   .role = label(json::text_at(*parsed, {"role"})),
+                  .provider = label(json::text_at(*parsed, {"provider"})),
                   .session = checked_session(json::text_at(*parsed, {"session"})),
                   .used = {.input = count("input"), .output = count("output"), .cache_read = count("cache_read"), .cache_creation = count("cache_creation")},
                   .duration_ms = signed_at("duration_ms"),

@@ -80,13 +80,27 @@ const suite usage_suite = [] {
     };
 
     "capability_a_record_survives_the_ledger_line_round_trip"_test = [] {
-        record const entry{.time = noon, .requested = "sonnet", .model = "claude-sonnet-5-5", .role = "sonnet", .session = "s1",
+        record const entry{.time = noon, .requested = "sonnet", .model = "claude-sonnet-5-5", .role = "sonnet", .provider = "copilot", .session = "s1",
                            .used = {.input = 1, .output = 2, .cache_read = 3, .cache_creation = 4}, .duration_ms = 350, .status = 200, .repairs = 1};
 
         auto const line = to_line(entry);
 
         expect(line.ends_with("}\n") && std::ranges::count(line, '\n') == 1);
         expect(from_line(line) == entry);
+    };
+
+    "capability_a_ledger_line_written_before_providers_existed_reads_back_with_no_provider"_test = [] {
+        constexpr std::string_view old_line = R"({"time":1760659200,"requested":"opus","model":"m","role":"opus","session":"","input":1,"output":2,"cache_read":0,"cache_creation":0,"duration_ms":5,"status":200,"repairs":0})";
+
+        auto const entry = from_line(old_line);
+
+        expect(entry.has_value() && entry->provider.empty() && entry->model == "m" && entry->used.input == 1_u);
+    };
+
+    "defect_a_hostile_provider_name_in_a_ledger_line_is_neutralised"_test = [] {
+        auto const entry = from_line(to_line({.time = noon, .provider = "evil\u001bname"}));
+
+        expect(entry.has_value() && entry->provider == "evil?name");
     };
 
     "limit_unreadable_ledger_lines_are_skipped_and_counted_never_fatal"_test = [] {
