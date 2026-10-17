@@ -13,6 +13,7 @@ import llmgate.proof;
 import llmgate.reflect;
 import llmgate.routing;
 import llmgate.selection;
+import llmgate.shutdown;
 import llmgate.sse;
 import llmgate.tls;
 import llmgate.usage;
@@ -25,6 +26,7 @@ struct timeouts {
     milliseconds connect = std::chrono::seconds{10};
     milliseconds response_head = std::chrono::minutes{2};
     milliseconds stream_idle = std::chrono::minutes{10};
+    milliseconds drain = shutdown::default_drain;
 };
 
 struct upstream_config {

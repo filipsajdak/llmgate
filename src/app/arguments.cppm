@@ -6,7 +6,7 @@ import llmgate.statusline;
 
 export namespace llmgate::arguments {
 
-enum class command { serve, login, claude, env, setup, statusline, status, stop, usage };
+enum class command { serve, login, claude, env, setup, statusline, status, stop, usage, doctor, quota };
 
 constexpr unsigned default_days = 7;
 constexpr unsigned longest_report_days = 3660;
@@ -20,6 +20,7 @@ struct options {
     bool as_vscode = false;
     bool service = false;
     bool dry_run = false;
+    bool offline = false;
     std::string vscode_file{};
     unsigned days = default_days;
     std::vector<std::string> passthrough{};
@@ -40,6 +41,8 @@ constexpr auto command_names = std::to_array<std::pair<std::string_view, command
     {"status", command::status},
     {"stop", command::stop},
     {"usage", command::usage},
+    {"doctor", command::doctor},
+    {"quota", command::quota},
 });
 
 constexpr std::optional<command> command_named(std::string_view const word) {
@@ -75,6 +78,8 @@ constexpr std::expected<options, std::string> parse(std::span<std::string const>
             parsed.service = true;
         } else if (word == "--dry-run") {
             parsed.dry_run = true;
+        } else if (word == "--offline") {
+            parsed.offline = true;
         } else if (word == "--vscode") {
             parsed.as_vscode = true;
             if (index + 1 < args.size() && !args[index + 1].starts_with("-") && !command_named(args[index + 1])) {
@@ -174,8 +179,12 @@ static_assert(split_listen("127.0.0.1:9480")->port == 9480 && !split_listen("noc
 static_assert(parse(as_strings({"usage", "--days", "30", "--json"})).value().days == 30 && parse(as_strings({"usage"})).value().days == default_days);
 static_assert(!parse(as_strings({"usage", "--days"})).has_value() && !parse(as_strings({"usage", "--days", "0"})).has_value() &&
               !parse(as_strings({"usage", "--days", "9x"})).has_value() && !parse(as_strings({"usage", "--days", "99999"})).has_value());
+static_assert(parse(as_strings({"doctor", "--offline", "--json"})).value().offline && parse(as_strings({"quota"})).value().which == command::quota);
+static_assert(!parse(as_strings({"doctor"})).value().offline && parse(as_strings({"doctor"})).value().which == command::doctor);
 static_assert(base_url({.host = "127.0.0.1", .port = 9480}) == "http://127.0.0.1:9480/anthropic");
 static_assert(statusline_input(R"({"model":{"display_name":"Opus"},"workspace":{"current_dir":"/w/p"},"context_window":{"used_percentage":41}})").context_percent == 41);
 static_assert(counters_from(R"({"requests":7,"repairs":{"a":2,"b":1}})") == std::pair<std::uint64_t, std::uint64_t>{7, 3});
 
 }  // namespace llmgate::arguments
+
+template class std::optional<llmgate::arguments::gateway_address>;

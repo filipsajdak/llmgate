@@ -164,6 +164,26 @@ const suite process_suite = [] {
         expect(!gateway_alive("127.0.0.1", closed_port));
     };
 
+    "capability_a_listening_port_is_connectable_and_a_closed_one_is_not"_test = [] {
+        std::uint16_t closed_port = 0;
+        {
+            canned_server gone{"x", false};
+            closed_port = gone.port;
+        }
+        canned_server open{"x", false};
+
+        expect(tcp_connectable("127.0.0.1", open.port, generous));
+        expect(!tcp_connectable("127.0.0.1", closed_port, generous));
+        expect(!tcp_connectable("not an address", open.port, generous));
+    };
+
+    "capability_a_running_process_is_seen_and_an_unused_pid_is_not"_test = [] {
+        constexpr pid_t unused_pid = 0x3ffffff0;
+
+        expect(process_running(::getpid()));
+        expect(!process_running(unused_pid));
+    };
+
     "limit_a_garbage_reply_is_not_an_answer"_test = [] {
         canned_server server{"not http at all"};
 

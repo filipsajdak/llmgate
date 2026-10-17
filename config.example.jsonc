@@ -37,7 +37,8 @@
   // then one request probes it.
   "fallback": { "failures": 3, "cooldown": "30s" },
 
-  "time": { "connect": "10s", "response_head": "2m", "stream_idle": "10m" },
+  // drain: how long a stop (SIGINT or SIGTERM) lets running requests finish; a second signal exits at once
+  "time": { "connect": "10s", "response_head": "2m", "stream_idle": "10m", "drain": "10s" },
 
   // post_quantum_preferred, post_quantum_required or classical_only
   "tls_groups": "post_quantum_preferred",

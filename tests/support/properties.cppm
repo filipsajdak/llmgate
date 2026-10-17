@@ -6,6 +6,8 @@ import llmgate.arguments;
 import llmgate.statusline;
 import llmgate.usage;
 import llmgate.claude;
+import llmgate.doctor;
+import llmgate.quota;
 import llmgate.json;
 import llmgate.jsonscan;
 import llmgate.routing;
@@ -394,6 +396,96 @@ constexpr bool selection_holds(std::string_view const text) {
         return true;
     }
     return std::ranges::all_of(selection::known_roles, [&](std::string_view const role) { return order_is_sound(routes, declared, role); });
+constexpr bool printable(std::string_view const text) {
+    return std::ranges::all_of(text, [](char const c) { return c == '\n' || (static_cast<unsigned char>(c) >= ' ' && c != '\x7f'); });
+}
+
+constexpr bool quota_holds(std::string_view const text) {
+    auto const found = quota::parse(text);
+    if (!found) {
+        return true;
+    }
+    auto const within = [](quota::allowance const& item) {
+        return item.percent_remaining >= 0 && item.percent_remaining <= quota::full_percent && item.name.size() <= usage::longest_label;
+    };
+    if (found->allowances.size() > quota::most_allowances || !std::ranges::all_of(found->allowances, within) || !printable(quota::render(*found))) {
+        return false;
+    }
+    auto const again = json::parse(quota::to_json(*found), {.jsonc = false});
+    return again.has_value() && json::text_at(*again, {"plan"}) == found->plan;
+}
+
+constexpr unsigned byte_at(std::string_view const text, std::size_t const index) {
+    return index < text.size() ? static_cast<unsigned char>(text[index]) : 0U;
+}
+
+constexpr bool bit(unsigned const value, unsigned const position) {
+    return ((value >> position) & 1U) != 0;
+}
+
+constexpr unsigned bits(unsigned const value, unsigned const low, unsigned const width) {
+    return (value >> low) & ((1U << width) - 1U);
+}
+
+constexpr auto doctor_listens = std::to_array<std::string_view>({"127.0.0.1:9480", "0.0.0.0:80", "bogus", "127.0.0.1:0", "localhost:1", "[::1]:2", "", ":5"});
+
+constexpr std::size_t doctor_header_bytes = 5;
+
+constexpr doctor::facts doctor_facts_from(std::string_view const text) {
+    auto const [a, b, c, d, e] = std::array{byte_at(text, 0), byte_at(text, 1), byte_at(text, 2), byte_at(text, 3), byte_at(text, 4)};
+    auto const rest = text.size() > doctor_header_bytes ? text.substr(doctor_header_bytes) : std::string_view{};
+    auto const strictness = static_cast<unsigned>(rest.size());
+    doctor::facts seen;
+    seen.config_error = bit(a, 0) ? std::string{rest} : std::string{};
+    seen.client_key_variable = bit(a, 1) ? "KEY" : "";
+    seen.client_key_set = bit(a, 2);
+    seen.claude_found = bit(a, 3);
+    seen.copilot_configured = bit(a, 4);
+    seen.static_token_variable = bit(a, 5) ? "TOKEN" : "";
+    seen.token = {.path = std::string{rest}, .exists = bit(a, 6), .mode = bit(e, 1) ? 0640U : 0600U};
+    seen.token_valid = bit(e, 0);
+    seen.static_token_set = bit(e, 2);
+    seen.listen = std::string{doctor_listens[bits(b, 0, 3)]};
+    seen.port = bits(b, 3, 2) == 0 ? std::nullopt : std::optional{static_cast<doctor::port_state>(bits(b, 3, 2) - 1)};
+    seen.identity = {.path = std::string{rest}, .exists = bit(b, 5), .mode = bit(b, 6) ? 0644U : 0600U};
+    seen.profile_dir = std::string{rest};
+    seen.settings = static_cast<doctor::settings_state>(bits(c, 0, 3) % 5);
+    seen.ledger = static_cast<doctor::ledger_state>(bits(c, 3, 2) % 3);
+    seen.ledger_file = {.path = std::string{rest}, .exists = true, .mode = bit(c, 5) ? 0666U : 0600U};
+    seen.ledger_configured = bit(c, 6);
+    seen.exchange = static_cast<doctor::exchange_state>(bits(d, 0, 3) % 5);
+    seen.quota = static_cast<doctor::quota_state>(bits(d, 3, 2) % 3);
+    if (bit(d, 6)) {
+        seen.quota_summary = quota::summary{.plan = "p", .sku = "s", .reset_date = "2026-11-01",
+                                            .allowances = {{.name = "chat", .has_quota = true, .entitlement = 10, .remaining = 1, .percent_remaining = bit(d, 5) ? 5 : 90}}};
+    }
+    seen.daily_tokens = strictness % 2 == 0 ? 1000 : 50000;
+    seen.monthly_tokens = strictness % 3 == 0 ? 0 : 20000;
+    seen.warn_percent = (strictness % 4) * 40;
+    return seen;
+}
+
+constexpr bool findings_well_formed(std::span<doctor::finding const> const found) {
+    return std::ranges::all_of(found, [](doctor::finding const& item) {
+        return !item.check.empty() && !item.detail.empty() && (item.state == doctor::status::pass || !item.remedy.empty());
+    });
+}
+
+constexpr bool doctor_holds(std::string_view const text) {
+    auto const seen = doctor_facts_from(text);
+    auto const found = doctor::diagnose(seen);
+    auto const failed = doctor::count_of(found, doctor::status::fail) != 0;
+    if (found.empty() || !findings_well_formed(found) || (doctor::exit_code(found) != 0) != failed || !printable(doctor::render_text(found))) {
+        return false;
+    }
+    if (!seen.config_error.empty() && (found.size() != 3 || found.front().check != "config" || found.front().state != doctor::status::fail)) {
+        return false;
+    }
+    auto const document = json::parse(doctor::render_json(found), {.jsonc = false});
+    auto const* ok = document ? json::at(*document, {"ok"}) : nullptr;
+    auto const* listed = document ? json::at(*document, {"findings"}) : nullptr;
+    auto const* items = listed == nullptr ? nullptr : std::get_if<json::array>(&listed->data);
+    return ok != nullptr && std::get_if<bool>(&ok->data) != nullptr && *std::get_if<bool>(&ok->data) == !failed && items != nullptr && items->size() == found.size();
 }
 
 constexpr bool guard_holds_for(std::string_view const text) {

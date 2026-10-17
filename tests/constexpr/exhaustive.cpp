@@ -12,6 +12,8 @@ constexpr std::string_view settings_alphabet = R"({}[]":,pdeffortLvs1 )";
 constexpr std::string_view launcher_alphabet = R"({}":,/.0-9a ref)";
 constexpr std::string_view usage_alphabet = R"({}":,0-9a_ep)";
 constexpr std::string_view selection_alphabet = R"(fsatT :,b)";
+constexpr std::string_view quota_alphabet = R"({}":,1 qstru)";
+constexpr std::string_view doctor_alphabet = "\x01\x02\x04\x08\x10\x20\x40";
 constexpr std::string_view sse_alphabet = "dat: \n\re";
 constexpr std::array<std::size_t, 6> core_tokens{
     static_cast<std::size_t>(token::start),         static_cast<std::size_t>(token::block_start_0),
@@ -35,6 +37,10 @@ static_assert(for_all_texts(launcher_alphabet, LLMGATE_CONFIG_LENGTH, &launcher_
 static_assert(for_all_texts(usage_alphabet, LLMGATE_USAGE_LENGTH, &usage_holds), "a short text breaks the usage ledger helpers");
 #elif LLMGATE_CHECK == 9
 static_assert(for_all_texts(selection_alphabet, LLMGATE_SELECTION_LENGTH, &selection_holds), "a short text breaks the circuit breaker or the route order");
+#elif LLMGATE_CHECK == 10
+static_assert(for_all_texts(quota_alphabet, LLMGATE_QUOTA_LENGTH, &quota_holds), "a short text breaks the quota reader");
+#elif LLMGATE_CHECK == 11
+static_assert(for_all_texts(doctor_alphabet, LLMGATE_DOCTOR_LENGTH, &doctor_holds), "a combination of facts breaks the doctor checks");
 #elif LLMGATE_CHECK == 5
 static_assert(for_all_sequences(token_count, LLMGATE_GUARD_FULL_LENGTH, &guard_holds_for_tokens),
               "an event sequence makes the guard emit an invalid stream");

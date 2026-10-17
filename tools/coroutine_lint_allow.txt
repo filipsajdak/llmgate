@@ -34,3 +34,5 @@ src/gateway/gateway.cppm|relay_buffered|upstream|awaited immediately by conclude
 src/gateway/gateway.cppm|relay_buffered|state|awaited immediately by conclude, whose caller owns the relay state
 src/http/io.cppm|step|on_event|awaited immediately by the caller, which owns the stateful sink for the whole exchange
 src/http/io.cppm|advance|on_event|private helper awaited immediately by read and step, whose callers own the sink
+src/http/io.cppm|operator ( )|incoming|awaited immediately by serve_connection, whose frame owns the request
+src/http/io.cppm|operator ( )|out|awaited immediately by serve_connection, whose frame owns the writer

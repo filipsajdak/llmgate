@@ -22,8 +22,10 @@ llmgate claude         # starts the gateway if it is down, then runs Claude Code
 | `llmgate setup --service` | Also installs a launchd agent (macOS) or systemd user unit (Linux) that keeps the gateway running |
 | `llmgate setup --vscode FILE` | Merges `claudeCode.environmentVariables` and `claudeCode.disableLoginPrompt` into a VS Code settings file (plain JSON only) |
 | `llmgate env [--json\|--vscode]` | Prints the environment as shell exports, JSON or a VS Code settings snippet |
-| `llmgate status` / `llmgate stop` | Shows whether the gateway is up and its counters; stops a gateway that `llmgate claude` started |
+| `llmgate status` / `llmgate stop` | Shows whether the gateway is up and its counters; `stop` sends SIGTERM to a gateway that `llmgate claude` started and waits until it has exited |
 | `llmgate usage [--days N] [--json]` | Per-day, per-model token report from the usage ledger, with the budget standing; works without the gateway running |
+| `llmgate doctor [--offline] [--json]` | Checks the setup and prints PASS, WARN or FAIL per check with a one-line remedy; exits non-zero on any FAIL. No secret is printed. `--offline` skips the GitHub calls |
+| `llmgate quota [--json]` | GitHub Copilot plan and quota: remaining of total per allowance and the reset date |
 | `llmgate statusline` | The status line command: model, folder, git branch, a context bar, gateway health, request and repair counts, and today's tokens against the budget |
 | `llmgate login` | GitHub Copilot device login |
 | `llmgate --check-config` | Validates the configuration; unknown keys and wrong types are reported with their path |
@@ -43,7 +45,7 @@ The first time Claude Code sees the dummy `ANTHROPIC_API_KEY` it asks once wheth
 | status line script, cost hook | `llmgate statusline` (third line: today's tokens and budget) |
 | usage ledger, budgets | `usage` in the configuration, `llmgate usage` |
 | fallback and role routing | `providers`, `routes`, `fallback` (see Providers, role routes and fallback) |
-| quota, doctor | not built yet |
+| quota, doctor | `llmgate quota`, `llmgate doctor` |
 
 `llmgate --version` prints the version.
 
@@ -97,6 +99,27 @@ One gateway can sit in front of several backends. Name each under `providers`, t
 - `llmgate login` logs in with the top-level `copilot` key, else with the first provider (alphabetically) that has a `copilot.token_file`; two Copilot providers with different token files need a login each, by listing them one at a time.
 
 The selection logic (circuit breaker, role route order) is a constexpr module, `src/gateway/selection.cppm`, with unit tests, a corpus replay, a bounded exhaustive check and an AFL++ harness like the other pure modules.
+
+## Stopping, doctor and quota
+
+`SIGINT` or `SIGTERM` makes `llmgate serve` stop accepting and close its listening socket. Requests already running finish for up to `time.drain` (default `10s`); new requests on open keep-alive connections get 503, and idle connections do not hold the drain. Then the gateway removes the pid file it owns (the one `llmgate claude` wrote for it) and exits 0. A second signal exits 130 at once; if the drain times out the gateway says how many requests it abandoned and still exits 0. The signal handler only writes a byte to a self-pipe that the reactor waits on next to the listening socket, so there is no flag polling and no work inside the handler. The usage ledger is appended per request, so there is nothing left to flush.
+
+`llmgate doctor` gathers plain facts (file modes, whether the port answers, whether `settings.json` is merged, the environment) and hands them to a constexpr module that returns the findings, so the verdicts are tested at compile time. Control bytes in any text taken from a file or from GitHub are replaced before printing.
+
+| Check | PASS when | FAIL or WARN |
+|---|---|---|
+| config | the file parses | FAIL, with the parser's message |
+| identity | the identity file is `0600` or not created yet | FAIL when other users can read it |
+| claude | `claude` (or `LLMGATE_CLAUDE`) is found | WARN |
+| listen | valid, loopback or a client key is set, fixed port | FAIL for a bad address, an open address without a key or a key variable that is not set; WARN for port 0 |
+| port | free, or this user's verified gateway | FAIL when something else answers |
+| profile | `settings.json` is what `setup` would write | WARN when `setup` has not run or is out of date; FAIL when the file is not plain JSON |
+| copilot-login, copilot-exchange | token file present and `0600`, GitHub accepts the exchange | FAIL when missing, readable by others or rejected; WARN when GitHub is unreachable |
+| ledger | writable and `0600` | FAIL when it cannot be written; WARN when other users can read it |
+| budget | limits are consistent | WARN for `warn_percent` of 0 or 100 and above, or a daily limit above the monthly one |
+| quota | no allowance at or under 20 % | WARN when low or when the endpoint does not answer |
+
+`llmgate quota` calls `GET /copilot_internal/user` on `copilot.api_url` with the stored login (no token exchange) and reads `copilot_plan`, `access_type_sku`, `quota_reset_date` and `quota_snapshots` (`entitlement`, `remaining`, `percent_remaining`, `unlimited`, `has_quota` for `chat`, `completions` and `premium_interactions`). Unknown keys are ignored; a reply without `quota_snapshots` is reported as unavailable. A free personal plan has no premium requests, so that line says so.
 
 ## Who may use the gateway
 
@@ -196,6 +219,8 @@ Requires GCC 16.2 (`/opt/homebrew/bin/g++-16`), CMake 4.4+, Ninja. Clang cannot 
 | An exported non-template free function that is a coroutine and has its body in a module interface makes importers fail with `failed to read compiled module cluster N: Bad file data` | Declare it in the interface and define it in an implementation unit (`fetch.cpp`, `copilot.cpp`); coroutine class members and templates are fine |
 | GCC 16.2 at `-O2` reports `-Wfree-nonheap-object` for the destructor of a `vector<pair<string,string>>` built from a braced list in the same function (valid code) | Build such lists with `emplace_back` in tests; the library functions are not affected |
 | A constexpr function in one module that is called at run time from another translation unit can leave members of standard-library specialisations it instantiates undefined at link time (`expected<json::value,...>::operator*`, `string operator+`) | The json module explicitly instantiates `expected<value, parse_error>` and builds paths with `append`; if a new link error names a std symbol from a module function, add an explicit instantiation or avoid that operator |
+| A constexpr function in one module that returns `std::optional<T>` of a module type, called at run time from another translation unit, can leave `optional<T>::operator*` and `operator->` undefined at link time (`quota_holds`, `launcher_holds`) | Explicit instantiation at the end of the module that defines `T`: `template class std::optional<T>;` |
+| `sigemptyset` is a macro on macOS, so `::sigemptyset(...)` does not parse | A value-initialised `struct sigaction` already has an empty mask |
 | `std::add_sat` (saturating arithmetic) is not exported by `import std` in GCC 16.2 | `usage::add_sat` is a three-line local version; replace it when `import std` provides it |
 | `import std` through CMake needs the `CxxImportStd` experimental gate | Set before `project()` in `CMakeLists.txt` |
 | `SSL_get0_group_name` before the handshake finishes dereferences a null session | Guarded in `tls::connection::negotiated_group`, covered by a named test |

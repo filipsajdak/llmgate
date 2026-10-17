@@ -69,6 +69,7 @@ constexpr milliseconds github_limit = std::chrono::seconds{15};
 constexpr milliseconds slow_down_step = std::chrono::seconds{5};
 constexpr std::string_view editor_version = "vscode/1.99.0";
 constexpr std::string_view integration_id = "vscode-chat";
+constexpr std::string_view user_target = "/copilot_internal/user";
 constexpr std::string_view device_grant = "urn:ietf:params:oauth:grant-type:device_code";
 
 }  // namespace llmgate::copilot
@@ -153,6 +154,11 @@ async::task<std::expected<device_code, std::error_code>> request_device_code(asy
 
 async::task<std::expected<std::string, std::error_code>> wait_for_authorisation(async::reactor& loop, tls::client_context const& tls_context,
                                                                                 gateway::copilot_config settings, device_code code);
+
+async::task<std::expected<std::string, std::error_code>> fetch_user(async::reactor& loop, tls::client_context const& tls_context,
+                                                                    gateway::copilot_config settings);
+
+async::task<std::error_code> check_login(async::reactor& loop, tls::client_context const& tls_context, gateway::copilot_config settings);
 
 class copilot_credential final : public gateway::credential {
 public:
