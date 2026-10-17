@@ -13,6 +13,20 @@ ctest --preset host            # unit tests
 ctest --preset host-network    # real TLS to api.anthropic.com and api.githubcopilot.com
 ```
 
+## Compile-time undefined-behaviour checks
+
+Constant evaluation rejects undefined behaviour: an out-of-bounds read, signed overflow, a dangling pointer or an uninitialised read is a compile error instead of a lucky run. The pure text modules (`jsonscan`, `sse`, `anthropic`) are therefore `constexpr`, and `tests/support/properties.cppm` holds each property check once for three consumers:
+
+| Consumer | What it does |
+|---|---|
+| AFL++ harnesses (`tests/fuzz`) | run the property on mutated input at run time |
+| `constexpr_*_corpus` targets | `#embed` every seed file and `static_assert` the property on it at compile time |
+| `constexpr_exhaustive` | `static_assert`s the property over every input up to a bounded length; `-DLLMGATE_CONSTEXPR_DEPTH=deep` raises the bounds for CI |
+
+A planted five-byte over-read in the scanner failed both compile-time targets (`array subscript value '51' is outside the bounds of array 'file_0'`) while the ordinary unit tests passed it.
+
+What cannot be evaluated in GCC 16.2: `std::set` and `std::map` (use a sorted vector), `std::as_bytes` and `reinterpret_cast` (take `string_view` for text protocols), `std::format`, and floating-point `from_chars`. `llmgate::require` is the contract-lite check for inline functions: it aborts at run time and is a compile error during constant evaluation.
+
 ## Reentrancy and interleaving checks
 
 TSan and ASan cannot see bugs that need two coroutines to interleave on one thread. These checks do:

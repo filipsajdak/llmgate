@@ -2,6 +2,7 @@ export module llmgate.jsonscan;
 
 import std;
 import llmgate.reflect;
+import llmgate.require;
 
 export namespace llmgate::jsonscan {
 
@@ -47,7 +48,7 @@ constexpr unsigned hex_value(char const c) noexcept {
     return c <= '9' ? static_cast<unsigned>(c - '0') : static_cast<unsigned>((c | 0x20) - 'a' + 10);
 }
 
-void append_utf8(std::string& out, char32_t const code) {
+constexpr void append_utf8(std::string& out, char32_t const code) {
     if (code < 0x80) {
         out.push_back(static_cast<char>(code));
     } else if (code < 0x800) {
@@ -67,20 +68,23 @@ void append_utf8(std::string& out, char32_t const code) {
 
 class cursor {
 public:
-    explicit cursor(std::string_view const text) noexcept : text_{text} {}
+    constexpr explicit cursor(std::string_view const text) noexcept : text_{text} {}
 
-    bool done() const noexcept { return at_ >= text_.size(); }
-    char peek() const noexcept { return text_[at_]; }
-    std::size_t position() const noexcept { return at_; }
-    void advance() noexcept { ++at_; }
+    constexpr bool done() const noexcept { return at_ >= text_.size(); }
+    constexpr char peek() const noexcept {
+        require(at_ < text_.size());
+        return text_[at_];
+    }
+    constexpr std::size_t position() const noexcept { return at_; }
+    constexpr void advance() noexcept { ++at_; }
 
-    void skip_space() noexcept {
+    constexpr void skip_space() noexcept {
         while (!done() && is_space(peek())) {
             advance();
         }
     }
 
-    bool consume(char const expected) noexcept {
+    constexpr bool consume(char const expected) noexcept {
         if (!done() && peek() == expected) {
             advance();
             return true;
@@ -88,7 +92,7 @@ public:
         return false;
     }
 
-    bool skip_string() noexcept {
+    constexpr bool skip_string() noexcept {
         if (!consume('"')) {
             return false;
         }
@@ -108,7 +112,7 @@ public:
         return false;
     }
 
-    bool skip_scalar() noexcept {
+    constexpr bool skip_scalar() noexcept {
         auto const start = at_;
         while (!done() && !is_space(peek()) && peek() != ',' && peek() != '}' && peek() != ']' && peek() != ':') {
             advance();
@@ -117,7 +121,7 @@ public:
     }
 
 private:
-    bool skip_escape() noexcept {
+    constexpr bool skip_escape() noexcept {
         if (done()) {
             return false;
         }
@@ -142,7 +146,7 @@ private:
     std::size_t at_ = 0;
 };
 
-std::expected<value_kind, errc> skip_value(cursor& in, std::size_t const depth_limit) {
+constexpr std::expected<value_kind, errc> skip_value(cursor& in, std::size_t const depth_limit) {
     in.skip_space();
     if (in.done()) {
         return std::unexpected{errc::malformed};
@@ -191,11 +195,24 @@ std::expected<value_kind, errc> skip_value(cursor& in, std::size_t const depth_l
 
 export namespace llmgate::jsonscan {
 
-std::string decode_string(std::string_view const raw) {
+constexpr std::string decode_string(std::string_view const raw) {
     std::string out;
     out.reserve(raw.size());
+    auto const hex4 = [&raw](std::size_t const from) -> std::optional<char32_t> {
+        if (from + 4 > raw.size()) {
+            return std::nullopt;
+        }
+        char32_t code = 0;
+        for (std::size_t digit = 0; digit < 4; ++digit) {
+            if (!detail::is_hex(raw[from + digit])) {
+                return std::nullopt;
+            }
+            code = (code << 4) | detail::hex_value(raw[from + digit]);
+        }
+        return code;
+    };
     for (std::size_t at = 0; at < raw.size(); ++at) {
-        if (raw[at] != '\\') {
+        if (raw[at] != '\\' || at + 1 >= raw.size()) {
             out.push_back(raw[at]);
             continue;
         }
@@ -207,21 +224,20 @@ std::string decode_string(std::string_view const raw) {
             case 'r': out.push_back('\r'); break;
             case 't': out.push_back('\t'); break;
             case 'u': {
-                char32_t code = 0;
-                for (int digit = 0; digit < 4; ++digit) {
-                    code = (code << 4) | detail::hex_value(raw[++at]);
+                auto code = hex4(at + 1);
+                if (!code) {
+                    out.push_back('u');
+                    break;
                 }
-                if (code >= 0xD800 && code <= 0xDBFF && at + 6 < raw.size() && raw[at + 1] == '\\' && raw[at + 2] == 'u') {
-                    char32_t low = 0;
-                    for (int digit = 0; digit < 4; ++digit) {
-                        low = (low << 4) | detail::hex_value(raw[at + 3 + digit]);
-                    }
-                    if (low >= 0xDC00 && low <= 0xDFFF) {
-                        code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                at += 4;
+                if (*code >= 0xD800 && *code <= 0xDBFF && at + 2 < raw.size() && raw[at + 1] == '\\' && raw[at + 2] == 'u') {
+                    auto const low = hex4(at + 3);
+                    if (low && *low >= 0xDC00 && *low <= 0xDFFF) {
+                        code = 0x10000 + ((*code - 0xD800) << 10) + (*low - 0xDC00);
                         at += 6;
                     }
                 }
-                detail::append_utf8(out, code);
+                detail::append_utf8(out, *code);
                 break;
             }
             default: out.push_back(escape); break;
@@ -230,7 +246,7 @@ std::string decode_string(std::string_view const raw) {
     return out;
 }
 
-std::expected<std::vector<member>, errc> top_level_members(std::string_view const text) {
+constexpr std::expected<std::vector<member>, errc> top_level_members(std::string_view const text) {
     detail::cursor in{text};
     in.skip_space();
     if (!in.consume('{')) {
@@ -272,7 +288,7 @@ std::expected<std::vector<member>, errc> top_level_members(std::string_view cons
     }
 }
 
-std::vector<member> members_named(std::span<member const> const members, std::string_view const key) {
+constexpr std::vector<member> members_named(std::span<member const> const members, std::string_view const key) {
     std::vector<member> matches;
     for (auto const& item : members) {
         auto const plain = item.raw_key.find('\\') == std::string_view::npos;
@@ -283,7 +299,7 @@ std::vector<member> members_named(std::span<member const> const members, std::st
     return matches;
 }
 
-std::string encode_string(std::string_view const value) {
+constexpr std::string encode_string(std::string_view const value) {
     std::string out{'"'};
     for (auto const c : value) {
         switch (c) {
@@ -294,7 +310,11 @@ std::string encode_string(std::string_view const value) {
             case '\t': out += "\\t"; break;
             default:
                 if (static_cast<unsigned char>(c) < 0x20) {
-                    std::format_to(std::back_inserter(out), "\\u{:04x}", static_cast<unsigned>(c));
+                    constexpr std::string_view digits = "0123456789abcdef";
+                    auto const code = static_cast<unsigned>(static_cast<unsigned char>(c));
+                    out += "\\u00";
+                    out.push_back(digits[code >> 4]);
+                    out.push_back(digits[code & 0xF]);
                 } else {
                     out.push_back(c);
                 }
@@ -304,7 +324,7 @@ std::string encode_string(std::string_view const value) {
     return out;
 }
 
-std::expected<std::string, errc> replace_string_member(std::string_view const text, std::string_view const key,
+constexpr std::expected<std::string, errc> replace_string_member(std::string_view const text, std::string_view const key,
                                                        std::string_view const replacement) {
     auto const members = top_level_members(text);
     if (!members) {

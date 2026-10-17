@@ -49,22 +49,57 @@ struct parsed {
     bool has_usage = false;
 };
 
-event_type type_from(std::string_view const name) {
-    static constexpr auto known = std::to_array<std::pair<std::string_view, event_type>>({
-        {"message_start", event_type::message_start},
-        {"content_block_start", event_type::content_block_start},
-        {"content_block_delta", event_type::content_block_delta},
-        {"content_block_stop", event_type::content_block_stop},
-        {"message_delta", event_type::message_delta},
-        {"message_stop", event_type::message_stop},
-        {"ping", event_type::ping},
-        {"error", event_type::error},
-    });
-    auto const match = std::ranges::find(known, name, &std::pair<std::string_view, event_type>::first);
-    return match == known.end() ? event_type::other : match->second;
+constexpr auto known_types = std::to_array<std::pair<std::string_view, event_type>>({
+    {"message_start", event_type::message_start},
+    {"content_block_start", event_type::content_block_start},
+    {"content_block_delta", event_type::content_block_delta},
+    {"content_block_stop", event_type::content_block_stop},
+    {"message_delta", event_type::message_delta},
+    {"message_stop", event_type::message_stop},
+    {"ping", event_type::ping},
+    {"error", event_type::error},
+});
+
+constexpr event_type type_from(std::string_view const name) {
+    auto const match = std::ranges::find(known_types, name, &std::pair<std::string_view, event_type>::first);
+    return match == known_types.end() ? event_type::other : match->second;
 }
 
-std::optional<int> index_from(std::string_view const text) {
+constexpr std::string decimal(int const value) {
+    std::array<char, 16> digits{};
+    auto const end = std::to_chars(digits.data(), digits.data() + digits.size(), value).ptr;
+    return std::string{digits.data(), end};
+}
+
+class index_set {
+public:
+    constexpr bool contains(int const index) const { return std::ranges::contains(items_, index); }
+    constexpr bool empty() const noexcept { return items_.empty(); }
+    constexpr int first() const { return items_.front(); }
+
+    constexpr bool insert(int const index) {
+        auto const place = std::ranges::lower_bound(items_, index);
+        if (place != items_.end() && *place == index) {
+            return false;
+        }
+        items_.insert(place, index);
+        return true;
+    }
+
+    constexpr std::size_t erase(int const index) {
+        auto const place = std::ranges::lower_bound(items_, index);
+        if (place == items_.end() || *place != index) {
+            return 0;
+        }
+        items_.erase(place);
+        return 1;
+    }
+
+private:
+    std::vector<int> items_;
+};
+
+constexpr std::optional<int> index_from(std::string_view const text) {
     int value = 0;
     auto const [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
     if (error != std::errc{} || end != text.data() + text.size() || value < 0) {
@@ -73,7 +108,7 @@ std::optional<int> index_from(std::string_view const text) {
     return value;
 }
 
-std::optional<parsed> classify(std::string_view const data) {
+constexpr std::optional<parsed> classify(std::string_view const data) {
     auto const members = jsonscan::top_level_members(data);
     if (!members) {
         return std::nullopt;
@@ -91,7 +126,7 @@ std::optional<parsed> classify(std::string_view const data) {
     return result;
 }
 
-std::string name_of(event_type const type) {
+constexpr std::string name_of(event_type const type) {
     switch (type) {
         case event_type::message_start: return "message_start";
         case event_type::content_block_start: return "content_block_start";
@@ -106,7 +141,7 @@ std::string name_of(event_type const type) {
     return "";
 }
 
-std::string with_usage(std::string_view const data) {
+constexpr std::string with_usage(std::string_view const data) {
     auto const close = data.rfind('}');
     std::string patched{data.substr(0, close)};
     patched += R"(,"usage":{"output_tokens":0}})";
@@ -120,7 +155,7 @@ export namespace llmgate::anthropic {
 class stream_guard {
 public:
     template <std::invocable<output_event const&> Out, std::invocable<repair const&> Report>
-    void on_event(sse::event const& incoming, Out&& out, Report&& report) {
+    constexpr void on_event(sse::event const& incoming, Out&& out, Report&& report) {
         auto const parsed = detail::classify(incoming.data);
         if (!parsed) {
             report(repair{.kind = repair_kind::unparseable_event, .detail = std::string{incoming.name}});
@@ -134,7 +169,7 @@ public:
     }
 
     template <std::invocable<output_event const&> Out, std::invocable<repair const&> Report>
-    void on_end(Out&& out, Report&& report) {
+    constexpr void on_end(Out&& out, Report&& report) {
         if (stopped_) {
             return;
         }
@@ -143,11 +178,11 @@ public:
         out(output_event{.name = "error", .data = std::string{detail::synthesized_error}});
     }
 
-    bool complete() const noexcept { return stopped_; }
+    constexpr bool complete() const noexcept { return stopped_; }
 
 private:
     template <class Out, class Report>
-    void handle(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
+    constexpr void handle(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
         using enum event_type;
         if (parsed.type == ping || parsed.type == other) {
             forward(parsed, incoming, out);
@@ -173,13 +208,13 @@ private:
     }
 
     template <class Out>
-    static void forward(detail::parsed const& parsed, sse::event const& incoming, Out& out) {
+    static constexpr void forward(detail::parsed const& parsed, sse::event const& incoming, Out& out) {
         auto const name = incoming.name.empty() ? detail::name_of(parsed.type) : std::string{incoming.name};
         out(output_event{.name = name, .data = std::string{incoming.data}});
     }
 
     template <class Out, class Report>
-    void start_message(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
+    constexpr void start_message(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
         if (started_) {
             report(repair{.kind = repair_kind::duplicate_message_start, .detail = {}});
             return;
@@ -189,7 +224,7 @@ private:
     }
 
     template <class Out, class Report>
-    void ensure_started(Out& out, Report& report) {
+    constexpr void ensure_started(Out& out, Report& report) {
         if (!std::exchange(started_, true)) {
             report(repair{.kind = repair_kind::missing_message_start, .detail = {}});
             out(output_event{.name = "message_start", .data = std::string{detail::synthesized_message_start}});
@@ -197,7 +232,7 @@ private:
     }
 
     template <class Out, class Report>
-    void open_block(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
+    constexpr void open_block(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
         if (!parsed.index || delta_seen_) {
             report(repair{.kind = repair_kind::orphan_block_event, .detail = "content_block_start outside the content phase"});
             return;
@@ -210,7 +245,7 @@ private:
     }
 
     template <class Out, class Report>
-    void continue_block(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
+    constexpr void continue_block(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
         if (!parsed.index || !open_.contains(*parsed.index)) {
             report(repair{.kind = repair_kind::orphan_block_event, .detail = "content_block_delta"});
             return;
@@ -219,7 +254,7 @@ private:
     }
 
     template <class Out, class Report>
-    void close_block(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
+    constexpr void close_block(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
         if (!parsed.index || open_.erase(*parsed.index) == 0) {
             report(repair{.kind = repair_kind::orphan_block_event, .detail = "content_block_stop"});
             return;
@@ -228,21 +263,21 @@ private:
     }
 
     template <class Out, class Report>
-    void close_index(int const index, Out& out, Report& report) {
+    constexpr void close_index(int const index, Out& out, Report& report) {
         open_.erase(index);
-        report(repair{.kind = repair_kind::unclosed_block, .detail = std::to_string(index)});
-        out(output_event{.name = "content_block_stop", .data = std::format(R"({{"type":"content_block_stop","index":{}}})", index)});
+        report(repair{.kind = repair_kind::unclosed_block, .detail = detail::decimal(index)});
+        out(output_event{.name = "content_block_stop", .data = R"({"type":"content_block_stop","index":)" + detail::decimal(index) + "}"});
     }
 
     template <class Out, class Report>
-    void close_all(Out& out, Report& report) {
+    constexpr void close_all(Out& out, Report& report) {
         while (!open_.empty()) {
-            close_index(*open_.begin(), out, report);
+            close_index(open_.first(), out, report);
         }
     }
 
     template <class Out, class Report>
-    void finish_delta(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
+    constexpr void finish_delta(detail::parsed const& parsed, sse::event const& incoming, Out& out, Report& report) {
         if (delta_seen_) {
             report(repair{.kind = repair_kind::duplicate_message_delta, .detail = {}});
             return;
@@ -258,7 +293,7 @@ private:
     }
 
     template <class Out, class Report>
-    void finish_message(sse::event const& incoming, Out& out, Report& report) {
+    constexpr void finish_message(sse::event const& incoming, Out& out, Report& report) {
         close_all(out, report);
         if (!std::exchange(delta_seen_, true)) {
             report(repair{.kind = repair_kind::missing_message_delta, .detail = {}});
@@ -268,14 +303,14 @@ private:
         out(output_event{.name = "message_stop", .data = std::string{incoming.data}});
     }
 
-    std::set<int> open_;
+    detail::index_set open_;
     bool started_ = false;
     bool delta_seen_ = false;
     bool stopped_ = false;
 };
 
-std::expected<void, std::string> validate_grammar(std::span<output_event const> events) {
-    std::set<int> open;
+constexpr std::expected<void, std::string> validate_grammar(std::span<output_event const> events) {
+    detail::index_set open;
     bool started = false;
     bool delta = false;
     bool stopped = false;
@@ -295,7 +330,7 @@ std::expected<void, std::string> validate_grammar(std::span<output_event const> 
                 if (std::exchange(started, true)) return std::unexpected{"second message_start"};
                 break;
             case content_block_start:
-                if (!started || !parsed->index || !open.insert(*parsed->index).second || delta) return std::unexpected{"bad content_block_start"};
+                if (!started || !parsed->index || !open.insert(*parsed->index) || delta) return std::unexpected{"bad content_block_start"};
                 break;
             case content_block_delta:
                 if (!parsed->index || !open.contains(*parsed->index)) return std::unexpected{"delta outside an open block"};

@@ -13,14 +13,19 @@ struct event {
 class parser {
 public:
     template <std::invocable<event const&> Sink>
-    void feed(std::span<std::byte const> bytes, Sink&& on_event) {
-        for (auto const byte : bytes) {
-            consume(static_cast<char>(byte), on_event);
+    constexpr void feed(std::string_view const text, Sink&& on_event) {
+        for (auto const c : text) {
+            consume(c, on_event);
         }
     }
 
     template <std::invocable<event const&> Sink>
-    void finish(Sink&& on_event) {
+    void feed(std::span<std::byte const> const bytes, Sink&& on_event) {
+        feed(std::string_view{reinterpret_cast<char const*>(bytes.data()), bytes.size()}, on_event);
+    }
+
+    template <std::invocable<event const&> Sink>
+    constexpr void finish(Sink&& on_event) {
         if (!line_.empty()) {
             process_line(on_event);
         }
@@ -29,7 +34,7 @@ public:
 
 private:
     template <class Sink>
-    void consume(char const c, Sink& on_event) {
+    constexpr void consume(char const c, Sink& on_event) {
         if (c == '\n' && after_carriage_return_) {
             after_carriage_return_ = false;
             return;
@@ -43,7 +48,7 @@ private:
     }
 
     template <class Sink>
-    void process_line(Sink& on_event) {
+    constexpr void process_line(Sink& on_event) {
         std::string_view const line{line_};
         if (line.empty()) {
             dispatch(on_event);
@@ -53,7 +58,7 @@ private:
         line_.clear();
     }
 
-    void assign_field(std::string_view const line) {
+    constexpr void assign_field(std::string_view const line) {
         auto const colon = line.find(':');
         auto const name = line.substr(0, colon);
         auto value = colon == std::string_view::npos ? std::string_view{} : line.substr(colon + 1);
@@ -72,7 +77,7 @@ private:
     }
 
     template <class Sink>
-    void dispatch(Sink& on_event) {
+    constexpr void dispatch(Sink& on_event) {
         if (has_data_) {
             data_.pop_back();
             on_event(event{.name = name_, .data = data_, .id = id_});
@@ -90,14 +95,18 @@ private:
     bool after_carriage_return_ = false;
 };
 
-void write_event(std::string& out, std::string_view const name, std::string_view const data) {
+constexpr void write_event(std::string& out, std::string_view const name, std::string_view const data) {
     if (!name.empty()) {
-        std::format_to(std::back_inserter(out), "event: {}\n", name);
+        out += "event: ";
+        out += name;
+        out.push_back('\n');
     }
     std::string_view rest = data;
     for (;;) {
         auto const newline = rest.find('\n');
-        std::format_to(std::back_inserter(out), "data: {}\n", rest.substr(0, newline));
+        out += "data: ";
+        out += rest.substr(0, newline);
+        out.push_back('\n');
         if (newline == std::string_view::npos) {
             break;
         }
