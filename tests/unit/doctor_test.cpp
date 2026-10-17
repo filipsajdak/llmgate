@@ -242,6 +242,38 @@ const suite doctor_suite = [] {
         auto const* listed = json::at(*document, {"findings"});
         expect(listed != nullptr && std::get<json::array>(listed->data).size() == found.size());
     };
+
+    "capability_the_json_report_keeps_its_bytes_and_key_order"_test = [] {
+        constexpr std::string_view golden = R"json({
+  "ok": false,
+  "findings": [
+    {
+      "check": "config",
+      "status": "fail",
+      "detail": "bad?",
+      "remedy": "fix the file, then check it with llmgate --check-config"
+    },
+    {
+      "check": "identity",
+      "status": "pass",
+      "detail": "the identity file is private (0600)",
+      "remedy": ""
+    },
+    {
+      "check": "claude",
+      "status": "pass",
+      "detail": "the claude command is on PATH",
+      "remedy": ""
+    }
+  ]
+}
+)json";
+        auto seen = healthy();
+        seen.config_error = "bad\x01";
+
+        expect(render_json(diagnose(seen)) == golden);
+        expect(render_json({}) == "{\n  \"ok\": true,\n  \"findings\": []\n}\n");
+    };
 };
 
 }  // namespace
