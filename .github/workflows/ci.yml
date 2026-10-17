@@ -4,10 +4,28 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FUZZ_SECONDS_CHANGE: 60
+  FUZZ_SECONDS_NIGHTLY: 900
+  MUTANTS_PER_FILE: 150
 
 jobs:
   linux:
+    if: github.event_name != 'schedule'
+    timeout-minutes: 90
     strategy:
+      fail-fast: false
       matrix:
         include:
           - {runner: ubuntu-24.04, preset: linux}
@@ -21,18 +39,41 @@ jobs:
       - run: PRESET=${{ matrix.preset }} ops/ci/linux.sh
 
   macos:
+    if: github.event_name != 'schedule'
+    timeout-minutes: 90
     strategy:
+      fail-fast: false
       matrix:
         preset: [host, asan]
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - run: brew install gcc ninja cmake openssl@3
+      - run: test -x /opt/homebrew/bin/g++-16
       - run: cmake --preset ${{ matrix.preset }}
       - run: cmake --build --preset ${{ matrix.preset }}
       - run: ctest --preset ${{ matrix.preset }}
 
+  e2e:
+    if: github.event_name != 'schedule'
+    timeout-minutes: 60
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: PRESET=linux ops/ci/linux.sh -L e2e
+
+  lint:
+    if: github.event_name != 'schedule'
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install lizard
+      - run: python3 tools/coroutine_lint.py --strict src
+
   crap:
+    if: github.event_name != 'schedule'
+    timeout-minutes: 60
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -41,10 +82,39 @@ jobs:
       - run: tools/coverage.sh
 
   fuzz:
-    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     strategy:
+      fail-fast: false
       matrix:
-        target: [http_parser, sse_parser]
+        target: [http_parser, sse_parser, jsonscan, guard, json, routing, settings, launcher, usage, schedule]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: ops/fuzz/run.sh ${{ matrix.target }} 60
+      - run: ops/fuzz/run.sh ${{ matrix.target }} ${{ github.event_name == 'schedule' && env.FUZZ_SECONDS_NIGHTLY || env.FUZZ_SECONDS_CHANGE }}
+
+  constexpr-deep:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 240
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: CMAKE_ARGS=-DLLMGATE_CONSTEXPR_DEPTH=deep PRESET=linux ops/ci/linux.sh -L constexpr
+
+  mutation:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 240
+    runs-on: macos-15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install gcc ninja cmake openssl@3
+      - run: |
+          for module in usage statusline; do
+            tools/mutate.sh "$module" --sample "$MUTANTS_PER_FILE" | tee -a mutation.log
+          done
+          grep '^Mutation:' mutation.log >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-log
+          path: mutation.log

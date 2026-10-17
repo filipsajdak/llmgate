@@ -178,7 +178,7 @@ The tests were validated by reintroducing the defects they target: an epoll mask
 
 ## CRAP gate
 
-`tools/coverage.sh` builds with coverage, runs the unit tests and fails when any function has CRAP above 8 (CRAP = CC^2 * (1 - coverage)^3 + CC, complexity from lizard, line coverage from gcovr, a line counts as covered when any template instantiation ran it). Last run: 215 functions, 0 above 8. The epoll backend is not instrumented by the macOS run, so it is held to complexity 8 alone.
+`tools/coverage.sh` builds with coverage, runs the unit tests and fails when any function has CRAP above 8 (CRAP = CC^2 * (1 - coverage)^3 + CC, complexity from lizard, line coverage from gcovr, a line counts as covered when any template instantiation ran it). The gate scores `src/` and `app/`. Last run (2026-10-17, macOS): 542 functions, 44 above 8, so the gate fails until they are split or covered; the coverage preset passes `-Wno-error=coverage-invalid-line-number` because GCC 16.2 emits a bogus line-table warning for defaulted members in module interfaces. The epoll backend is not instrumented by the macOS run, so it is held to complexity 8 alone.
 
 ## Sanitizers and checks
 
@@ -230,3 +230,44 @@ Requires GCC 16.2 (`/opt/homebrew/bin/g++-16`), CMake 4.4+, Ninja. Clang cannot 
 ## TLS and post-quantum
 
 OpenSSL 3.5 or newer is required. The default policy offers `X25519MLKEM768` and `SecP256r1MLKEM768` first, then classical groups. Measured 2026-10-17: api.anthropic.com negotiates `X25519MLKEM768`; api.githubcopilot.com negotiates `x25519` and rejects a handshake that offers only post-quantum groups.
+
+## Mutation testing
+
+`tools/mutate.sh <file-or-module> [--changed-lines BASE_REF]` mutates one source with [universalmutator](https://github.com/agroce/universalmutator) (C++ rules; Mull needs clang, which cannot compile `<meta>`), builds and runs the unit tests that link that module for each mutant in `build/mutate`, and prints the line an MR's Verification section needs: `Mutation: universalmutator, changed lines: K killed, S survived (n new tests, e equivalent, a arid)`. `usage` finds `src/*/usage.cppm`; `--tests a,b` overrides the tests; `--sample N` (default 200, `0` for all) takes a seeded random sample because a module has thousands of mutants and each costs a rebuild of about ten seconds; `--new-tests N` fills the summary.
+
+The source is mutated in place and restored after every mutant and on exit or signal, so do not edit it while a run is going. A mutant is `killed` (a test failed), `killed_compile_time` (a `static_assert` in the module failed), `timeout`, `uncompilable` (including warnings, because the build uses `-Werror`) or `survived`. Each survivor is printed with its line, the original and the mutated text, and its key. Record a survivor that no test can or should kill in `tools/mutation_triage.txt` as `equivalent` (no observable change) or `arid` (not product behaviour) with the reason; the summary counts them from there. `tools/mutation_ignore.txt` lists lines that are never mutated. Mutation is advice, never a merge gate; the nightly CI run publishes the summary.
+
+Measured 2026-10-17 on a seeded sample of 250 mutants per file (the compiled ones are scored):
+
+| File | Before | After |
+|---|---|---|
+| `src/claude/statusline.cppm` | 122 of 138 killed, 16 survived (88 %) | 132 of 138 killed, 6 survived: 5 equivalent, 1 arid (100 % of the killable) |
+| `src/usage/usage.cppm` | 90 of 110 killed, 20 survived (82 %) | 98 of 110 killed, 12 survived: 7 equivalent, 5 arid (100 % of the killable) |
+
+Most kills come from the `static_assert`s in the modules; the new tests in `tests/unit` raised the kills by the tests themselves from 8 to 18 (statusline) and from 6 to 14 (usage).
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request and push to `main`:
+
+| Job | What it runs |
+|---|---|
+| `linux` | `ops/ci/linux.sh` in the `gcc:16.2` container: presets `linux` (x86-64 and arm64), `linux-asan`, `linux-tsan` build and run every unit, constexpr and e2e test |
+| `macos` | presets `host` and `asan` with Homebrew GCC 16 |
+| `e2e` | `ctest -L e2e` in the container (`tests/e2e/setup_flow.sh` needs python3 and curl, which the image installs) |
+| `lint` | `tools/coroutine_lint.py --strict src` |
+| `crap` | `tools/coverage.sh`: CRAP above 8 fails |
+| `fuzz` | AFL++ with ASan and UBSan for 60 seconds on each of the ten harnesses |
+
+A nightly schedule (02:17 UTC) and manual dispatch add `constexpr-deep` (`-DLLMGATE_CONSTEXPR_DEPTH=deep` through `CMAKE_ARGS`), the mutation run on `usage` and `statusline` (advisory, summary on the job page), and fuzzing for 15 minutes per harness. `tests/e2e/claude_through_gateway.sh` needs the real `claude` CLI and a built `build/host/llmgate`, so it stays a manual check.
+
+## Publishing
+
+There is no remote yet. Nothing below needs a secret: the workflow uses only the automatic `GITHUB_TOKEN` (read-only `contents`), fetches ut and llhttp from public URLs, and never calls Copilot or Anthropic.
+
+```bash
+gh repo create filipsajdak/llmgate --private --description "Claude Code gateway, C++26" --source . --remote origin   # or an organisation instead of filipsajdak
+git push -u origin main
+```
+
+Then check the first run: the macOS jobs need `/opt/homebrew/bin/g++-16`, which the `gcc` formula provides only while it is GCC 16, and `ubuntu-24.04-arm` runners are free for public repositories only. Make the repository public only after reading `config.example.jsonc` and the history for anything private. Add branch protection requiring `linux`, `macos`, `e2e`, `lint` and `crap` once `crap` is green.
