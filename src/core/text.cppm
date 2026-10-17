@@ -10,6 +10,12 @@ constexpr std::string decimal(T const value) {
     return std::string{digits.data(), std::to_chars(digits.data(), digits.data() + digits.size(), value).ptr};
 }
 
+template <class... Parts>
+    requires(std::convertible_to<Parts const&, std::string_view> && ...)
+constexpr void append_all(std::string& out, Parts const&... parts) {
+    (out.append(std::string_view{parts}), ...);
+}
+
 constexpr std::uint64_t thousand = 1000;
 constexpr std::uint64_t mega = 1000000;
 constexpr std::uint64_t mega_tenth = 100000;
@@ -25,6 +31,12 @@ constexpr std::string compact(std::uint64_t const value) {
 }
 
 static_assert(compact(999) == "999" && compact(1000) == "1k" && compact(412345) == "412k" && compact(1250000) == "1.2M");
+static_assert([] {
+    std::string out = "a";
+    append_all(out, "b", std::string_view{"c"}, std::string{"d"});
+    append_all(out);
+    return out == "abcd";
+}());
 static_assert(decimal(0) == "0" && decimal(-5) == "-5" && decimal(std::uint64_t{18446744073709551615ULL}) == "18446744073709551615");
 
 }  // namespace llmgate::text

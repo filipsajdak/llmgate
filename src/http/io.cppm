@@ -150,7 +150,7 @@ public:
     }
 
 private:
-    template <class Sink>
+    template <std::invocable<http::event const&> Sink>
     async::task<std::expected<bool, std::error_code>> advance(Sink& on_event, net::read_options const options) {
         bool done = false;
         auto track = [&done, &on_event](http::event const& item) {
@@ -181,7 +181,7 @@ private:
         co_return done;
     }
 
-    template <class Sink>
+    template <std::invocable<http::event const&> Sink>
     async::task<result_void> end_of_stream(Sink& track, bool& done) {
         if (fresh_) {
             co_return std::unexpected{http::make_error_code(http::errc::connection_closed)};
@@ -292,7 +292,17 @@ std::optional<int> status_for_unreadable(std::error_code const error) noexcept {
     return std::nullopt;
 }
 
-template <net::byte_stream Stream, class Handler>
+template <class Handler, class Stream>
+concept request_handler = net::byte_stream<Stream> && requires(Handler& handler, request const& incoming, response_writer<Stream>& out) {
+    { handler(incoming, out) } -> std::same_as<async::task<result_void>>;
+};
+
+template <class Writer>
+concept error_responder = requires(Writer& out) {
+    { out.send(0, http::header_map{}, std::string_view{}) } -> std::same_as<async::task<result_void>>;
+};
+
+template <net::byte_stream Stream, request_handler<Stream> Handler>
 async::task<bool> dispatch(Handler& handler, request const& incoming, response_writer<Stream>& writer) {
     auto const handled = co_await handler(incoming, writer);
     if (handled) {
@@ -304,7 +314,7 @@ async::task<bool> dispatch(Handler& handler, request const& incoming, response_w
     co_return false;
 }
 
-template <net::byte_stream Stream, class Handler>
+template <net::byte_stream Stream, request_handler<Stream> Handler>
 async::task<void> serve_connection(Stream stream, Handler& handler, limits bounds) {
     message_reader<Stream> reader{stream, http::kind::request, bounds};
     response_writer<Stream> writer{stream};
@@ -329,7 +339,7 @@ async::task<void> serve_connection(Stream stream, Handler& handler, limits bound
     }
 }
 
-template <class Handler>
+template <request_handler<net::tcp_stream> Handler>
 async::task<void> serve(net::listener& listening, Handler& handler, limits bounds = {}) {
     for (;;) {
         auto accepted = co_await listening.accept();
@@ -347,7 +357,7 @@ class counted_handler {
 public:
     counted_handler(Handler& inner, std::shared_ptr<shutdown::drain_gate> gate) noexcept : inner_{&inner}, gate_{std::move(gate)} {}
 
-    template <class Writer>
+    template <error_responder Writer>
     async::task<result_void> operator()(request const& incoming, Writer& out) {
         if (gate_->closed()) {
             (void)co_await out.send(status_unavailable, {}, "");
@@ -362,12 +372,12 @@ private:
     std::shared_ptr<shutdown::drain_gate> gate_;
 };
 
-template <class Handler>
+template <request_handler<net::tcp_stream> Handler>
 async::task<void> serve_owned(net::tcp_stream stream, std::shared_ptr<counted_handler<Handler>> counted, limits bounds) {
     co_await serve_connection(std::move(stream), *counted, bounds);
 }
 
-template <class Handler>
+template <request_handler<net::tcp_stream> Handler>
 async::task<std::size_t> serve_until(net::listener& listening, Handler& handler, limits bounds, int const stop_descriptor,
                                      async::duration const drain) {
     auto const gate = std::make_shared<shutdown::drain_gate>(listening.reactor());
@@ -389,5 +399,12 @@ async::task<std::size_t> serve_until(net::listener& listening, Handler& handler,
     }
     co_return gate->active();
 }
+
+struct plain_function_object {
+    void operator()(request const&, response_writer<net::tcp_stream>&) const;
+};
+
+static_assert(!request_handler<int, net::tcp_stream> && !request_handler<plain_function_object, net::tcp_stream>);
+static_assert(!error_responder<int>);
 
 }  // namespace llmgate::httpio

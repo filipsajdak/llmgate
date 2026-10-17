@@ -1,6 +1,7 @@
 export module llmgate.sse;
 
 import std;
+import llmgate.text;
 
 export namespace llmgate::sse {
 
@@ -10,21 +11,24 @@ struct event {
     std::string_view id;
 };
 
+template <class Sink>
+concept event_sink = std::invocable<Sink&, event const&>;
+
 class parser {
 public:
-    template <std::invocable<event const&> Sink>
+    template <event_sink Sink>
     constexpr void feed(std::string_view const text, Sink&& on_event) {
         for (auto const c : text) {
             consume(c, on_event);
         }
     }
 
-    template <std::invocable<event const&> Sink>
+    template <event_sink Sink>
     void feed(std::span<std::byte const> const bytes, Sink&& on_event) {
         feed(std::string_view{reinterpret_cast<char const*>(bytes.data()), bytes.size()}, on_event);
     }
 
-    template <std::invocable<event const&> Sink>
+    template <event_sink Sink>
     constexpr void finish(Sink&& on_event) {
         if (!line_.empty()) {
             process_line(on_event);
@@ -33,7 +37,7 @@ public:
     }
 
 private:
-    template <class Sink>
+    template <event_sink Sink>
     constexpr void consume(char const c, Sink& on_event) {
         if (c == '\n' && after_carriage_return_) {
             after_carriage_return_ = false;
@@ -47,7 +51,7 @@ private:
         line_.push_back(c);
     }
 
-    template <class Sink>
+    template <event_sink Sink>
     constexpr void process_line(Sink& on_event) {
         std::string_view const line{line_};
         if (line.empty()) {
@@ -76,7 +80,7 @@ private:
         }
     }
 
-    template <class Sink>
+    template <event_sink Sink>
     constexpr void dispatch(Sink& on_event) {
         if (has_data_) {
             data_.pop_back();
@@ -97,22 +101,29 @@ private:
 
 constexpr void write_event(std::string& out, std::string_view const name, std::string_view const data) {
     if (!name.empty()) {
-        out += "event: ";
-        out += name;
-        out.push_back('\n');
+        text::append_all(out, "event: ", name, "\n");
     }
     std::string_view rest = data;
     for (;;) {
         auto const newline = rest.find('\n');
-        out += "data: ";
-        out += rest.substr(0, newline);
-        out.push_back('\n');
+        text::append_all(out, "data: ", rest.substr(0, newline), "\n");
         if (newline == std::string_view::npos) {
             break;
         }
         rest.remove_prefix(newline + 1);
     }
-    out.push_back('\n');
+    text::append_all(out, "\n");
 }
+
+struct wrong_sink {
+    void operator()(int) const;
+};
+
+static_assert(event_sink<decltype([](event const&) {})> && !event_sink<int> && !event_sink<wrong_sink>);
+static_assert([] {
+    std::string wire;
+    write_event(wire, "ping", "a\nb");
+    return wire == "event: ping\ndata: a\ndata: b\n\n";
+}());
 
 }  // namespace llmgate::sse

@@ -3,6 +3,7 @@ export module llmgate.usage;
 import std;
 import llmgate.json;
 import llmgate.jsonscan;
+import llmgate.reflect;
 import llmgate.text;
 
 export namespace llmgate::usage {
@@ -302,7 +303,7 @@ public:
     constexpr std::span<group const> groups() const noexcept { return groups_; }
 
 private:
-    template <class Pick>
+    template <std::predicate<group const&> Pick>
     constexpr totals sum_where(Pick&& pick) const {
         totals all;
         for (auto const& item : groups_) {
@@ -390,7 +391,7 @@ constexpr verdict evaluate(budget const& limits, std::uint64_t const today, std:
 }
 
 constexpr std::string_view level_name(level const state) noexcept {
-    return state == level::exhausted ? "exhausted" : state == level::warning ? "warning" : "ok";
+    return reflect::enum_name(state);
 }
 
 constexpr std::string refusal_message(verdict const& now) {
