@@ -1,3 +1,7 @@
+module;
+
+#include <meta>
+
 export module llmgate.gateway;
 
 import std;
@@ -7,10 +11,8 @@ import llmgate.claude;
 import llmgate.http;
 import llmgate.httpio;
 import llmgate.json;
-import llmgate.jsonscan;
 import llmgate.net;
 import llmgate.proof;
-import llmgate.reflect;
 import llmgate.routing;
 import llmgate.selection;
 import llmgate.shutdown;
@@ -174,7 +176,7 @@ struct stats {
     std::uint64_t connections_opened = 0;
     std::uint64_t connections_reused = 0;
     std::map<anthropic::repair_kind, std::uint64_t> repairs;
-    std::map<std::string, provider_stats> providers;
+    [[= json::skip]] std::map<std::string, provider_stats> providers;
 };
 
 using credential_map = std::map<std::string, credential*>;
@@ -201,32 +203,43 @@ http::header_map upstream_headers(httpio::request const& incoming, std::map<std:
     return fields;
 }
 
+constexpr std::string_view model_epoch = "1970-01-01T00:00:00Z";
+
+struct model_entry {
+    std::string type = "model";
+    std::string id{};
+    std::string display_name{};
+    std::string created_at = std::string{model_epoch};
+};
+
+struct model_list {
+    std::vector<model_entry> data{};
+    bool has_more = false;
+};
+
+struct provider_report {
+    [[= json::flatten]] provider_stats counts{};
+    selection::circuit circuit = selection::circuit::closed;
+};
+
 std::string models_json(std::set<std::string> const& aliases) {
-    std::string items;
+    model_list listing;
     for (auto const& alias : aliases) {
-        if (!items.empty()) {
-            items += ",";
-        }
-        std::format_to(std::back_inserter(items), R"({{"type":"model","id":{},"display_name":{},"created_at":"1970-01-01T00:00:00Z"}})",
-                       jsonscan::encode_string(alias), jsonscan::encode_string(alias));
+        listing.data.push_back({.id = alias, .display_name = alias});
     }
-    return std::format(R"({{"data":[{}],"has_more":false}})", items);
+    return json::write(json::to_value(listing));
 }
 
-std::string provider_json(std::string_view const name, provider_stats const& counts, selection::circuit const state) {
-    return std::format(R"({}:{{"attempts":{},"answered":{},"failures":{},"skipped":{},"circuit":"{}"}})", jsonscan::encode_string(name), counts.attempts,
-                       counts.answered, counts.failures, counts.skipped, selection::circuit_name(state));
+std::pair<std::string, json::value> provider_member(std::string_view const name, provider_stats const& counts, selection::circuit const state) {
+    return {std::string{name}, json::to_value(provider_report{.counts = counts, .circuit = state})};
 }
 
-std::string stats_json(stats const& counters, std::string_view const usage_json, std::string_view const providers_json) {
-    std::string repairs;
-    for (auto const& [kind, count] : counters.repairs) {
-        std::format_to(std::back_inserter(repairs), "{}\"{}\":{}", repairs.empty() ? "" : ",", reflect::enum_name(kind), count);
-    }
-    return std::format(
-        R"({{"requests":{},"streamed":{},"upstream_failures":{},"upstream_timeouts":{},"client_disconnects":{},"refused":{},"connections_opened":{},"connections_reused":{},"budget_refused":{},"no_provider":{},"repairs":{{{}}},"providers":{{{}}},"usage":{}}})",
-        counters.requests, counters.streamed, counters.upstream_failures, counters.upstream_timeouts, counters.client_disconnects, counters.refused,
-        counters.connections_opened, counters.connections_reused, counters.budget_refused, counters.no_provider, repairs, providers_json, usage_json);
+std::string stats_json(stats const& counters, std::string_view const usage_json, json::object providers) {
+    auto document = json::to_value(counters);
+    auto& members = std::get<json::object>(document.data);
+    members.emplace_back("providers", json::value{std::move(providers)});
+    members.emplace_back("usage", json::parse(usage_json).value_or(json::value{}));
+    return json::write(document);
 }
 
 std::optional<std::string> alias_of(std::map<std::string, std::string> const& models, std::string const& requested) {
@@ -434,7 +447,7 @@ private:
         switch (which) {
             case routing::route::models: return detail::models_json(alias_names());
             case routing::route::health: return health_body(target);
-            case routing::route::statistics: return detail::stats_json(counters_, usage::summary_json(ledger_, settings_.usage.budget, clock_()), providers_json());
+            case routing::route::statistics: return detail::stats_json(counters_, usage::summary_json(ledger_, settings_.usage.budget, clock_()), providers_object());
             default: return std::nullopt;
         }
     }
@@ -460,11 +473,10 @@ private:
         return aliases;
     }
 
-    std::string providers_json() const {
-        std::string items;
+    json::object providers_object() const {
+        json::object items;
         for (auto const& item : providers_) {
-            std::format_to(std::back_inserter(items), "{}{}", items.empty() ? "" : ",",
-                           detail::provider_json(item.name, counters_.providers.at(item.name), selection::state_of(item.circuit, breaker_, breaker_clock_())));
+            items.push_back(detail::provider_member(item.name, counters_.providers.at(item.name), selection::state_of(item.circuit, breaker_, breaker_clock_())));
         }
         return items;
     }
