@@ -2,6 +2,7 @@ export module llmgate.properties;
 
 import std;
 import llmgate.anthropic;
+import llmgate.json;
 import llmgate.jsonscan;
 import llmgate.sse;
 
@@ -70,6 +71,55 @@ constexpr bool jsonscan_holds(std::string_view const text) {
            std::ranges::all_of(targets, [&replaced](jsonscan::member const& item) {
                return std::string_view{*replaced}.substr(item.value_begin, item.value_end - item.value_begin) == "\"REPLACED\"";
            });
+}
+
+constexpr bool same(json::value const& left, json::value const& right);
+
+constexpr bool same_members(json::object const& left, json::object const& right) {
+    return std::ranges::equal(left, right, [](auto const& a, auto const& b) { return a.first == b.first && same(a.second, b.second); });
+}
+
+constexpr bool same(json::value const& left, json::value const& right) {
+    if (left.data.index() != right.data.index()) {
+        return false;
+    }
+    if (auto const* a = std::get_if<json::array>(&left.data)) {
+        auto const& b = std::get<json::array>(right.data);
+        return std::ranges::equal(*a, b, [](auto const& x, auto const& y) { return same(x, y); });
+    }
+    if (auto const* a = std::get_if<json::object>(&left.data)) {
+        return same_members(*a, std::get<json::object>(right.data));
+    }
+    return std::visit(
+        [&right](auto const& scalar) -> bool {
+            using type = std::decay_t<decltype(scalar)>;
+            if constexpr (std::is_same_v<type, json::array> || std::is_same_v<type, json::object>) {
+                return false;
+            } else {
+                return scalar == std::get<type>(right.data);
+            }
+        },
+        left.data);
+}
+
+struct sample_config {
+    std::string name{};
+    std::int32_t count = 0;
+    bool flag = false;
+    std::vector<std::string> tags{};
+    std::optional<std::int64_t> limit{};
+};
+
+constexpr bool json_holds(std::string_view const text) {
+    auto const lenient = json::parse(text);
+    auto const strict = json::parse(text, {.jsonc = false});
+    if (strict && (!lenient || !same(*strict, *lenient))) {
+        return false;
+    }
+    if (lenient) {
+        (void)json::read<sample_config>(*lenient);
+    }
+    return true;
 }
 
 constexpr bool guard_holds_for(std::string_view const text) {
