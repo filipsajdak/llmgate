@@ -33,7 +33,7 @@
       "binaryDir": "${sourceDir}/build/coverage",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_CXX_FLAGS": "--coverage -O0",
+        "CMAKE_CXX_FLAGS": "--coverage -O0 -Wno-error=coverage-invalid-line-number",
         "CMAKE_EXE_LINKER_FLAGS": "--coverage"
       }
     },
