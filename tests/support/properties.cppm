@@ -581,4 +581,68 @@ constexpr bool for_all_texts(std::string_view const alphabet, std::size_t const 
     });
 }
 
+enum class wire_level { quiet, loud };
+
+struct wire_part {
+    [[= json::key{"in"}]] std::optional<std::string> label{};
+    std::chrono::milliseconds span{};
+    constexpr bool operator==(wire_part const&) const = default;
+};
+
+struct wire_sample {
+    std::string name{};
+    std::int32_t count = 0;
+    bool flag = false;
+    wire_level mode = wire_level::quiet;
+    std::optional<wire_level> maybe{};
+    std::vector<std::string> tags{};
+    std::optional<std::int64_t> limit{};
+    std::vector<wire_part> parts{};
+    [[= json::flatten]] wire_part merged{};
+    [[= json::skip]] std::size_t scratch = 0;
+    constexpr bool operator==(wire_sample const&) const = default;
+};
+
+constexpr std::int64_t span_scale = 37;
+constexpr std::int64_t merged_scale = 1000;
+
+constexpr wire_sample wire_sample_from(std::string_view const text) {
+    wire_sample sample{.name = std::string{text},
+                       .count = static_cast<std::int32_t>(text.size()),
+                       .flag = text.size() % 2 != 0,
+                       .mode = text.empty() || text.front() % 2 == 0 ? wire_level::quiet : wire_level::loud,
+                       .scratch = text.size()};
+    if (text.size() > 2) {
+        sample.maybe = wire_level::loud;
+    }
+    if (text.size() % 3 == 0) {
+        sample.limit = static_cast<std::int64_t>(text.size()) * span_scale;
+    }
+    for (auto const piece : std::views::split(text, ',')) {
+        std::string_view const tag{piece.begin(), piece.end()};
+        sample.tags.emplace_back(tag);
+        sample.parts.push_back({.label = tag.empty() ? std::nullopt : std::optional<std::string>{std::string{tag}},
+                                .span = std::chrono::milliseconds{static_cast<std::int64_t>(tag.size()) * span_scale}});
+    }
+    sample.merged = {.label = text.size() % 2 != 0 ? std::optional<std::string>{std::string{text}} : std::nullopt,
+                     .span = std::chrono::milliseconds{static_cast<std::int64_t>(text.size()) * merged_scale}};
+    return sample;
+}
+
+constexpr bool wire_sample_matches(wire_sample const& sample, std::expected<wire_sample, json::read_error> back) {
+    if (!back) {
+        return false;
+    }
+    back->scratch = sample.scratch;
+    return *back == sample;
+}
+
+constexpr bool writer_holds(std::string_view const text) {
+    auto const sample = wire_sample_from(text);
+    auto const written = json::to_value(sample);
+    return json::at(written, {"scratch"}) == nullptr && wire_sample_matches(sample, json::read<wire_sample>(written)) &&
+           wire_sample_matches(sample, json::read_text<wire_sample>(json::write(written), {.jsonc = false})) &&
+           same(json::to_value(sample), written);
+}
+
 }  // namespace llmgate::properties
