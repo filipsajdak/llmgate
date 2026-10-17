@@ -4,9 +4,6 @@ src/gateway/quota.cppm|key-member-block|return json::make_object({{"plan", json:
 src/usage/usage.cppm|key-member-block|{"time", json::value{entry.time}},|pending: Tier 2 D1 replaces it with json::flatten on the ledger line aggregate
 src/usage/usage.cppm|key-member-block|return json::make_object({{"input", number(sum.used.input)},|pending: Tier 2 D1 replaces it with totals_object by member walk
 src/usage/usage.cppm|key-member-block|return json::make_object({{"state", json::make_string(std::s|pending: Tier 2 D1 replaces it with verdict_object by member walk
-src/gateway/gateway.cppm|json-format-template|return std::format(R"({}:{{"attempts"|pending: Tier 2 D2 replaces provider_json with json::to_value
-src/gateway/gateway.cppm|json-format-template|R"({{"requests":{},"streamed":{}|pending: Tier 2 D2 replaces stats_json with json::to_value
-src/gateway/routing.cppm|route-table|{"POST", "/anthropic/v1/messages", route::messages},|pending: Tier 2 D2 annotates the route enumerators with the endpoint
 src/anthropic/guard.cppm|enum-handler-table|{event_type::error, &grammar_state::on_error},|pending: Tier 3 H annotates the event_type enumerators and static_asserts the table is exhaustive
 app/llmgate.cpp|enum-handler-table|{arguments::command::serve, &serve_command},|pending: Tier 2 F makes the handlers table static_assert-exhaustive
 tests/fuzz/schedule/harness.cpp|enum-modulo|% scenario_count|pending: Tier 3 H replaces scenario_count with reflect::enum_count
