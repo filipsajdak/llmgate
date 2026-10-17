@@ -9,7 +9,7 @@ import llmgate.reflect;
 
 export namespace llmgate::http {
 
-enum class errc { malformed_message = 1, head_too_large, truncated_message };
+enum class errc { malformed_message = 1, head_too_large, truncated_message, connection_closed, invalid_header };
 
 }  // namespace llmgate::http
 
@@ -102,12 +102,21 @@ public:
     parser& operator=(parser const&) = delete;
 
     template <std::invocable<event const&> Sink>
-    std::expected<void, std::error_code> feed(std::span<std::byte const> data, Sink&& on_event) {
+    std::expected<std::size_t, std::error_code> feed(std::span<std::byte const> data, Sink&& on_event) {
         event_sink const borrowed{on_event};
         sink_ = &borrowed;
-        auto const outcome = llhttp_execute(&state_, reinterpret_cast<char const*>(data.data()), data.size());
+        auto const begin = reinterpret_cast<char const*>(data.data());
+        auto const outcome = llhttp_execute(&state_, begin, data.size());
         sink_ = nullptr;
-        return outcome == HPE_OK ? std::expected<void, std::error_code>{} : failure(outcome);
+        if (outcome == HPE_OK) {
+            return data.size();
+        }
+        if (outcome == HPE_PAUSED) {
+            auto const consumed = static_cast<std::size_t>(llhttp_get_error_pos(&state_) - begin);
+            llhttp_resume(&state_);
+            return consumed;
+        }
+        return failure(outcome);
     }
 
     template <std::invocable<event const&> Sink>
@@ -116,7 +125,8 @@ public:
         sink_ = &borrowed;
         auto const outcome = llhttp_finish(&state_);
         sink_ = nullptr;
-        if (outcome == HPE_OK) {
+        if (outcome == HPE_OK || outcome == HPE_PAUSED) {
+            llhttp_resume(&state_);
             return {};
         }
         diagnostic_ = llhttp_get_error_reason(&state_) ? llhttp_get_error_reason(&state_) : "";
@@ -195,7 +205,7 @@ private:
 
     static int complete(llhttp_t* const state) noexcept {
         (*from(state).sink_)(event{message_complete{}});
-        return 0;
+        return HPE_PAUSED;
     }
 
     void flush_pair() {

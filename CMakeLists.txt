@@ -62,6 +62,7 @@ llmgate_module(llmgate_tls INTERFACE src/tls/tls.cppm LIBS llmgate_reflect OpenS
 llmgate_module(llmgate_http INTERFACE src/http/http.cppm LIBS llmgate_reflect llhttp::llhttp)
 llmgate_module(llmgate_sse INTERFACE src/sse/sse.cppm)
 llmgate_module(llmgate_net INTERFACE src/net/net.cppm LIBS llmgate_async llmgate_tls)
+llmgate_module(llmgate_httpio INTERFACE src/http/io.cppm LIBS llmgate_async llmgate_http llmgate_net)
 
 enable_testing()
 
@@ -78,4 +79,5 @@ llmgate_test(tls_test unit llmgate_tls)
 llmgate_test(http_test unit llmgate_http)
 llmgate_test(sse_test unit llmgate_sse)
 llmgate_test(net_test unit llmgate_net)
+llmgate_test(httpio_test unit llmgate_httpio)
 llmgate_test(tls_network_test network llmgate_net)

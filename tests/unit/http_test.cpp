@@ -30,6 +30,18 @@ std::span<std::byte const> bytes_of(std::string_view const text) {
     return std::as_bytes(std::span{text});
 }
 
+template <class Sink>
+std::expected<void, std::error_code> feed_all(parser& reader, std::span<std::byte const> data, Sink&& sink) {
+    while (!data.empty()) {
+        auto const consumed = reader.feed(data, sink);
+        if (!consumed) {
+            return std::unexpected{consumed.error()};
+        }
+        data = data.subspan(*consumed);
+    }
+    return {};
+}
+
 constexpr std::string_view simple_request =
     "POST /anthropic/v1/messages HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\nX-Api-Key: secret\r\n\r\nhello";
 
@@ -90,10 +102,23 @@ const suite http_suite = [] {
         auto callback = seen.callback();
         std::string const both = std::string{simple_request} + std::string{simple_request};
 
-        expect(reader.feed(bytes_of(both), callback).has_value());
+        expect(feed_all(reader, bytes_of(both), callback).has_value());
 
         expect(seen.completed == 2);
         expect(seen.body == "hellohello");
+    };
+
+    "capability_feed_stops_at_the_end_of_each_message"_test = [] {
+        parser reader{kind::request};
+        captured seen;
+        auto callback = seen.callback();
+        std::string const both = std::string{simple_request} + std::string{simple_request};
+
+        auto const consumed = reader.feed(bytes_of(both), callback);
+
+        expect(consumed.has_value());
+        expect(*consumed == simple_request.size());
+        expect(seen.completed == 1);
     };
 
     "capability_response_without_length_ends_at_finish"_test = [] {
