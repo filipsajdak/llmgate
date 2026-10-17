@@ -2,6 +2,9 @@ export module llmgate.properties;
 
 import std;
 import llmgate.anthropic;
+import llmgate.arguments;
+import llmgate.statusline;
+import llmgate.claude;
 import llmgate.json;
 import llmgate.jsonscan;
 import llmgate.routing;
@@ -119,6 +122,13 @@ constexpr bool json_holds(std::string_view const text) {
     }
     if (lenient) {
         (void)json::read<sample_config>(*lenient);
+        auto const compact = json::write(*lenient);
+        auto const pretty = json::write(*lenient, 2);
+        auto const again = json::parse(compact, {.jsonc = false});
+        auto const again_pretty = json::parse(pretty, {.jsonc = false});
+        if (!again || !again_pretty || !same(*lenient, *again) || !same(*lenient, *again_pretty) || json::write(*again) != compact) {
+            return false;
+        }
     }
     return true;
 }
@@ -172,6 +182,59 @@ constexpr bool routing_holds(std::string_view const text) {
         if (jsonscan::decode_string(raw) == alias_name) {
             return false;
         }
+    }
+    return true;
+}
+
+constexpr bool settings_holds(std::string_view const text) {
+    auto const parsed = json::parse(text, {.jsonc = false});
+    if (!parsed) {
+        return true;
+    }
+    auto const once = claude::merge_settings(*parsed, "medium", "s");
+    auto const twice = claude::merge_settings(once, "medium", "s");
+    if (json::write(once) != json::write(twice)) {
+        return false;
+    }
+    auto const* original = std::get_if<json::object>(&parsed->data);
+    auto const* merged = std::get_if<json::object>(&once.data);
+    if (merged == nullptr) {
+        return false;
+    }
+    if (original != nullptr) {
+        for (auto const& [key, ignored] : *original) {
+            auto const kept = std::ranges::any_of(*merged, [&key](auto const& entry) { return entry.first == key; });
+            if (!kept) {
+                return false;
+            }
+        }
+    }
+    if (!json::write(once).contains("Read(**/.env)")) {
+        return false;
+    }
+    auto const env = claude::environment({}, "u", "k", "/p");
+    auto const vscode_once = claude::merge_vscode(*parsed, env);
+    return json::write(vscode_once) == json::write(claude::merge_vscode(vscode_once, env));
+}
+
+constexpr bool launcher_holds(std::string_view const text) {
+    auto const snapshot = arguments::statusline_input(text);
+    if (snapshot.context_percent < 0 || snapshot.context_percent > 1000) {
+        return false;
+    }
+    auto const drawn = statusline::render(snapshot);
+    if (!drawn.starts_with("[llmgate] ") || std::ranges::count(drawn, '\n') != 2) {
+        return false;
+    }
+    auto const counters = arguments::counters_from(text);
+    (void)counters;
+    (void)statusline::branch_from_head(text);
+    (void)statusline::base_name(text);
+    if (auto const address = arguments::split_listen(text)) {
+        auto const url = arguments::base_url(*address);
+        auto const again = arguments::split_listen(address->host + ":" + claude::decimal(address->port));
+        (void)url;
+        return again.has_value() && again->host == address->host && again->port == address->port;
     }
     return true;
 }

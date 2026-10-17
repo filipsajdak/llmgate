@@ -8,6 +8,8 @@ using namespace llmgate::properties;
 constexpr std::string_view json_alphabet = R"({}[]":,\a1 u)";
 constexpr std::string_view config_alphabet = R"({}[]":,/*a1 -t)";
 constexpr std::string_view routing_alphabet = R"({}":/?h1 )";
+constexpr std::string_view settings_alphabet = R"({}[]":,pdeffortLvs1 )";
+constexpr std::string_view launcher_alphabet = R"({}":,/.0-9a ref)";
 constexpr std::string_view sse_alphabet = "dat: \n\re";
 constexpr std::array<std::size_t, 6> core_tokens{
     static_cast<std::size_t>(token::start),         static_cast<std::size_t>(token::block_start_0),
@@ -23,6 +25,10 @@ static_assert(for_all_texts(config_alphabet, LLMGATE_CONFIG_LENGTH, &json_holds)
 static_assert(for_all_texts(routing_alphabet, LLMGATE_ROUTING_LENGTH, &routing_holds), "a short text breaks routing, access checks or request preparation");
 #elif LLMGATE_CHECK == 4
 static_assert(for_all_texts(sse_alphabet, LLMGATE_SSE_LENGTH, &sse_holds), "a short SSE-like text breaks the parser");
+#elif LLMGATE_CHECK == 6
+static_assert(for_all_texts(settings_alphabet, LLMGATE_CONFIG_LENGTH, &settings_holds), "a short text breaks the settings merge");
+#elif LLMGATE_CHECK == 7
+static_assert(for_all_texts(launcher_alphabet, LLMGATE_CONFIG_LENGTH, &launcher_holds), "a short text breaks the launcher helpers");
 #elif LLMGATE_CHECK == 5
 static_assert(for_all_sequences(token_count, LLMGATE_GUARD_FULL_LENGTH, &guard_holds_for_tokens),
               "an event sequence makes the guard emit an invalid stream");

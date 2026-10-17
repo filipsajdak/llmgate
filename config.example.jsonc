@@ -14,14 +14,27 @@
   // Claude Code expands aliases such as "sonnet" to full model names before it calls the gateway,
   // so map full names: client model name -> upstream model name. Unknown names go through unchanged.
   "models": {
-    "claude-sonnet-5-5": "claude-sonnet-4.5",
-    "claude-opus-5-5": "claude-opus-4.5"
+    "claude-opus-5-5": "claude-opus-5.5",
+    "claude-sonnet-5-5": "claude-sonnet-5.5",
+    "claude-haiku-5-5": "claude-haiku-5.5",
+    "claude-haiku-4-5": "claude-haiku-4.5"
   },
 
   "time": { "connect": "10s", "response_head": "2m", "stream_idle": "10m" },
 
   // post_quantum_preferred, post_quantum_required or classical_only
   "tls_groups": "post_quantum_preferred",
+
+  // what `llmgate claude` and `llmgate env` give Claude Code (role names, context window, profile)
+  "claude": {
+    "opus": "claude-opus-5-5",
+    "sonnet": "claude-sonnet-5-5",
+    "haiku": "claude-haiku-5-5",
+    "model": "opusplan",
+    "context_tokens": 180000,
+    "profile_dir": "~/.claude-llmgate",
+    "effort": "medium"
+  },
 
   // GitHub Copilot device login: run `llmgate login` once
   "copilot": { "token_file": "~/.config/llmgate/copilot-token.json" }

@@ -140,6 +140,32 @@ const suite json_suite = [] {
         expect(!parse(deep).has_value());
     };
 
+    "capability_written_json_parses_back_to_the_same_document"_test = [] {
+        auto const parsed = parse(R"({"a":[1,{"b":null,"c":"x\ny"}],"d":true,"e":-3,"f":[],"g":{}})");
+
+        auto const compact = write(*parsed);
+
+        expect(compact == R"({"a":[1,{"b":null,"c":"x\ny"}],"d":true,"e":-3,"f":[],"g":{}})");
+        expect(write(*parse(compact)) == compact);
+    };
+
+    "capability_pretty_output_indents_nested_values_and_ends_with_a_newline"_test = [] {
+        auto const parsed = parse(R"({"a":[1,2],"b":{"c":true},"d":[]})");
+
+        auto const text = write(*parsed, 2);
+
+        expect(text == "{\n  \"a\": [\n    1,\n    2\n  ],\n  \"b\": {\n    \"c\": true\n  },\n  \"d\": []\n}\n");
+    };
+
+    "limit_control_characters_and_quotes_in_strings_are_escaped_on_write"_test = [] {
+        auto const value = make_object({{"k\"", make_string("a\"b\\c\x01")}});
+
+        auto const text = write(value);
+
+        expect(text == R"({"k\"":"a\"b\\c\u0001"})");
+        expect(std::get<std::string>(std::get<object>(parse(text)->data)[0].second.data) == "a\"b\\c\x01");
+    };
+
     "capability_scalars_and_escapes_round_trip_through_the_dom"_test = [] {
         auto const parsed = parse(R"({"n":-12,"f":1.5e2,"s":"a\nbé","t":true,"z":null})");
 

@@ -2,12 +2,15 @@
 #include <cstdlib>
 
 import std;
+import llmgate.arguments;
 import llmgate.async;
+import llmgate.commands;
 import llmgate.copilot;
 import llmgate.gateway;
 import llmgate.httpio;
 import llmgate.json;
 import llmgate.net;
+import llmgate.process;
 import llmgate.routing;
 import llmgate.tls;
 
@@ -16,47 +19,12 @@ namespace {
 using namespace llmgate;
 
 constexpr std::string_view version_text = "llmgate " LLMGATE_VERSION;
-constexpr std::string_view default_config = "~/.config/llmgate/config.jsonc";
 constexpr int exit_usage = 2;
 constexpr int exit_config = 3;
 constexpr int exit_runtime = 1;
 
-struct arguments {
-    std::string command = "serve";
-    std::string config_path = std::string{default_config};
-    bool check_only = false;
-    bool show_version = false;
-};
-
-std::optional<arguments> parse_arguments(std::span<char* const> const args) {
-    arguments parsed;
-    for (std::size_t index = 1; index < args.size(); ++index) {
-        std::string_view const item{args[index]};
-        if (item == "--version") {
-            parsed.show_version = true;
-        } else if (item == "--check-config") {
-            parsed.check_only = true;
-        } else if (item == "--config" && index + 1 < args.size()) {
-            parsed.config_path = args[++index];
-        } else if (item == "serve" || item == "login") {
-            parsed.command = item;
-        } else {
-            return std::nullopt;
-        }
-    }
-    return parsed;
-}
-
-std::string expand_home(std::string_view const path) {
-    if (!path.starts_with("~/")) {
-        return std::string{path};
-    }
-    auto const* home = std::getenv("HOME");
-    return (home == nullptr ? std::string{} : std::string{home}) + std::string{path.substr(1)};
-}
-
 std::expected<gateway::config, std::string> load_config(std::string_view const path) {
-    std::ifstream in{expand_home(path)};
+    std::ifstream in{process::expand_home(path)};
     if (!in) {
         return std::unexpected{std::format("cannot read {}", path)};
     }
@@ -66,19 +34,6 @@ std::expected<gateway::config, std::string> load_config(std::string_view const p
         return std::unexpected{std::format("{}: {} ({})", path, loaded.error().message, loaded.error().path)};
     }
     return std::move(*loaded);
-}
-
-std::optional<std::pair<std::string, std::uint16_t>> split_listen(std::string_view const listen) {
-    auto const colon = listen.rfind(':');
-    std::uint16_t port = 0;
-    if (colon == std::string_view::npos) {
-        return std::nullopt;
-    }
-    auto const digits = listen.substr(colon + 1);
-    if (std::from_chars(digits.data(), digits.data() + digits.size(), port).ec != std::errc{}) {
-        return std::nullopt;
-    }
-    return std::pair{std::string{listen.substr(0, colon)}, port};
 }
 
 std::unique_ptr<gateway::credential> make_credential(async::reactor& loop, tls::client_context const& tls_context,
@@ -105,19 +60,19 @@ std::expected<gateway::access_policy, std::string> make_policy(gateway::config c
 }
 
 int serve(gateway::config settings) {
-    auto const address = split_listen(settings.listen);
+    auto const address = arguments::split_listen(settings.listen);
     if (!address) {
         std::println(stderr, "llmgate: listen must look like 127.0.0.1:9480");
         return exit_config;
     }
     async::reactor loop;
     auto tls_context = tls::client_context::make(settings.tls_groups);
-    auto listening = net::listener::bind(loop, address->first, address->second);
+    auto listening = net::listener::bind(loop, address->host, address->port);
     if (!tls_context || !listening) {
         std::println(stderr, "llmgate: cannot start: {}", !tls_context ? tls_context.error().message() : listening.error().message());
         return exit_runtime;
     }
-    auto policy = make_policy(settings, address->first, listening->port());
+    auto policy = make_policy(settings, address->host, listening->port());
     if (!policy) {
         std::println(stderr, "llmgate: {}", policy.error());
         return exit_config;
@@ -128,7 +83,7 @@ int serve(gateway::config settings) {
         std::println(stderr, "llmgate: upstream.base_url is not a valid http or https URL");
         return exit_config;
     }
-    std::println("llmgate listening on {}:{}", address->first, listening->port());
+    std::println("llmgate listening on {}:{}", address->host, listening->port());
     std::fflush(stdout);
     loop.run(httpio::serve(*listening, proxy, httpio::limits{}));
     return exit_runtime;
@@ -165,12 +120,34 @@ int login(gateway::config const& settings) {
     return 0;
 }
 
+int dispatch(commands::context const& where) {
+    switch (where.options.which) {
+        case arguments::command::serve:
+            return serve(where.settings);
+        case arguments::command::login:
+            return login(where.settings);
+        case arguments::command::claude:
+            return commands::run_claude(where);
+        case arguments::command::env:
+            return commands::run_env(where);
+        case arguments::command::setup:
+            return commands::run_setup(where);
+        case arguments::command::status:
+            return commands::run_status(where);
+        case arguments::command::stop:
+            return commands::run_stop(where);
+        case arguments::command::statusline:
+            break;
+    }
+    return commands::run_statusline(where, std::string{std::istreambuf_iterator<char>{std::cin}, std::istreambuf_iterator<char>{}});
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-    auto const parsed = parse_arguments(std::span<char* const>{argv, static_cast<std::size_t>(argc)});
+    auto const parsed = arguments::parse(std::vector<std::string>(argv + 1, argv + argc));
     if (!parsed) {
-        std::println(stderr, "usage: llmgate [--config PATH] [serve | login] | --check-config | --version");
+        std::println(stderr, "llmgate: {}\nusage: llmgate [--config PATH] [serve | login | claude ARGS... | env [--json|--vscode] | setup [--service] [--dry-run] [--vscode FILE] | status | stop | statusline] | --check-config | --version", parsed.error());
         return exit_usage;
     }
     if (parsed->show_version) {
@@ -178,13 +155,17 @@ int main(int argc, char** argv) {
         return 0;
     }
     auto settings = load_config(parsed->config_path);
-    if (!settings) {
+    auto const tolerant = parsed->which == arguments::command::statusline || parsed->which == arguments::command::stop;
+    if (!settings && !tolerant) {
         std::println(stderr, "llmgate: {}", settings.error());
         return exit_config;
     }
-    if (parsed->check_only) {
+    if (parsed->check_config) {
         std::println("configuration is valid");
         return 0;
     }
-    return parsed->command == "login" ? login(*settings) : serve(std::move(*settings));
+    commands::context where{.options = *parsed,
+                            .settings = settings ? std::move(*settings) : gateway::config{},
+                            .binary = process::current_executable().value_or(std::filesystem::path{argv[0]})};
+    return dispatch(where);
 }

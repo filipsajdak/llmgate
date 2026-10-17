@@ -7,11 +7,42 @@ Status: walking-skeleton phase (BET-1, decision on 2026-11-06). The Anthropic pa
 ## Quick start
 
 ```bash
-cp config.example.jsonc ~/.config/llmgate/config.jsonc
-build/host/llmgate login            # prints a code; authorise it at github.com/login/device
-build/host/llmgate                  # serves on 127.0.0.1:9480
-ANTHROPIC_BASE_URL=http://127.0.0.1:9480/anthropic ANTHROPIC_API_KEY=any claude
+mkdir -p ~/.config/llmgate && cp config.example.jsonc ~/.config/llmgate/config.jsonc
+llmgate login          # prints a code; authorise it at github.com/login/device (GitHub Copilot)
+llmgate setup          # creates the dedicated Claude profile ~/.claude-llmgate
+llmgate claude         # starts the gateway if it is down, then runs Claude Code through it
 ```
+
+`llmgate claude ARGS...` passes every argument to `claude` unchanged, so `llmgate claude -p "hello" --model sonnet` works. Your normal `claude` and `~/.claude` are never touched: the launcher points Claude Code at its own profile directory through `CLAUDE_CONFIG_DIR`.
+
+| Command | What it does |
+|---|---|
+| `llmgate claude [args]` | Sets the environment Claude Code needs, starts the gateway on demand (detached, logging to `~/.local/state/llmgate/gateway.log`, never killing anything) and runs `claude` |
+| `llmgate setup [--dry-run]` | Creates or updates the profile: private deny rules for `.env` files, secrets, the gateway config directory and `~/.claude`, `effortLevel` if unset, and the status line. Existing settings are merged, never overwritten; a `settings.json` that is not plain JSON is refused untouched |
+| `llmgate setup --service` | Also installs a launchd agent (macOS) or systemd user unit (Linux) that keeps the gateway running |
+| `llmgate setup --vscode FILE` | Merges `claudeCode.environmentVariables` and `claudeCode.disableLoginPrompt` into a VS Code settings file (plain JSON only) |
+| `llmgate env [--json\|--vscode]` | Prints the environment as shell exports, JSON or a VS Code settings snippet |
+| `llmgate status` / `llmgate stop` | Shows whether the gateway is up and its counters; stops a gateway that `llmgate claude` started |
+| `llmgate statusline` | The status line command: model, folder, git branch, a context bar, gateway health, request and repair counts |
+| `llmgate login` | GitHub Copilot device login |
+| `llmgate --check-config` | Validates the configuration; unknown keys and wrong types are reported with their path |
+
+The first time Claude Code sees the dummy `ANTHROPIC_API_KEY` it asks once whether to use it; answer yes (VS Code skips the question through `claudeCode.disableLoginPrompt`).
+
+### What replaces a per-user setup kit
+
+| Kit | llmgate |
+|---|---|
+| `install.sh`, profile directory, `settings.json` | `llmgate setup` |
+| wrapper scripts and their environment variables | `llmgate claude`, `llmgate env` |
+| a script that starts the gateway if it is down | `llmgate claude` starts it; `setup --service` keeps it running |
+| a login helper, log scraping for the device code | `llmgate login` |
+| plan-mode hooks, write-size rules, attribution-header and stream-cut workarounds | the gateway keeps system reminders, repairs streams and sets the environment itself |
+| VS Code settings script | `llmgate setup --vscode FILE`, `llmgate env --vscode` |
+| status line script | `llmgate statusline` (cost and budget lines arrive with the usage slice) |
+| usage ledger, budgets, quota, doctor, fallback and role routing | not built yet; see the planned slices below |
+
+`llmgate --version` prints the version.
 
 ## Who may use the gateway
 
@@ -26,7 +57,7 @@ The gateway attaches your upstream credential to every request, so it checks who
 
 The client key is never forwarded upstream.
 
-`llmgate --check-config` validates a configuration (unknown keys and wrong types are reported with their path), `llmgate --version` prints the version.
+
 
 ## Build
 
@@ -109,6 +140,8 @@ Requires GCC 16.2 (`/opt/homebrew/bin/g++-16`), CMake 4.4+, Ninja. Clang cannot 
 | libstdc++ 16.2 has no default `handle_contract_violation` | `src/core/contract_violation.cpp` defines it |
 | boost-ext/ut uses `constructor(101)`, unsupported on Mach-O | `cmake/patch_ut.cmake` disables that block on Apple |
 | An exported non-template free function that is a coroutine and has its body in a module interface makes importers fail with `failed to read compiled module cluster N: Bad file data` | Declare it in the interface and define it in an implementation unit (`fetch.cpp`, `copilot.cpp`); coroutine class members and templates are fine |
+| GCC 16.2 at `-O2` reports `-Wfree-nonheap-object` for the destructor of a `vector<pair<string,string>>` built from a braced list in the same function (valid code) | Build such lists with `emplace_back` in tests; the library functions are not affected |
+| A constexpr function in one module that is called at run time from another translation unit can leave members of standard-library specialisations it instantiates undefined at link time (`expected<json::value,...>::operator*`, `string operator+`) | The json module explicitly instantiates `expected<value, parse_error>` and builds paths with `append`; if a new link error names a std symbol from a module function, add an explicit instantiation or avoid that operator |
 | `import std` through CMake needs the `CxxImportStd` experimental gate | Set before `project()` in `CMakeLists.txt` |
 | `SSL_get0_group_name` before the handshake finishes dereferences a null session | Guarded in `tls::connection::negotiated_group`, covered by a named test |
 | LeakSanitizer found spawned server loops still suspended when a reactor was destroyed | `reactor::spawn` registers each task and the reactor destroys unfinished ones |

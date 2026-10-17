@@ -3,6 +3,7 @@ export module llmgate.gateway;
 import std;
 import llmgate.anthropic;
 import llmgate.async;
+import llmgate.claude;
 import llmgate.http;
 import llmgate.httpio;
 import llmgate.json;
@@ -49,6 +50,7 @@ struct config {
     std::string static_token_env{};
     std::string client_key_env{};
     std::vector<std::string> allowed_hosts{};
+    claude::launch_config claude{};
 };
 
 struct access_policy {

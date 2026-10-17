@@ -5,6 +5,7 @@ module;
 export module llmgate.json;
 
 import std;
+import llmgate.jsonscan;
 import llmgate.reflect;
 
 export namespace llmgate::json {
@@ -300,7 +301,20 @@ consteval bool member_is_required(std::meta::info const member) {
 constexpr std::string element_path(std::string const& path, std::size_t const index) {
     std::array<char, 24> digits{};
     auto const end = std::to_chars(digits.data(), digits.data() + digits.size(), index).ptr;
-    return path + "[" + std::string{digits.data(), end} + "]";
+    std::string joined = path;
+    joined += '[';
+    joined.append(digits.data(), end);
+    joined += ']';
+    return joined;
+}
+
+constexpr std::string member_path(std::string const& path, std::string_view const key) {
+    std::string joined = path;
+    if (!joined.empty()) {
+        joined += '.';
+    }
+    joined += key;
+    return joined;
 }
 
 template <class T>
@@ -318,7 +332,7 @@ constexpr result<T> read_aggregate(value const& source, std::string const& path,
         fields | std::views::transform([](std::meta::info const field) { return std::define_static_string(std::meta::identifier_of(field)); }));
     for (auto const& [key, ignored] : *members) {
         if (!options.allow_unknown_keys && !std::ranges::any_of(names, [&key](char const* const name) { return std::string_view{name} == key; })) {
-            return std::unexpected{read_error{path.empty() ? key : path + "." + key, "unknown key"}};
+            return std::unexpected{read_error{member_path(path, key), "unknown key"}};
         }
     }
     T result{};
@@ -326,7 +340,7 @@ constexpr result<T> read_aggregate(value const& source, std::string const& path,
     template for (constexpr auto field : fields) {
         constexpr auto key = std::meta::identifier_of(field);
         auto const found = std::ranges::find_if(*members, [](auto const& entry) { return entry.first == key; });
-        auto const child_path = path.empty() ? std::string{key} : path + "." + std::string{key};
+        auto const child_path = member_path(path, key);
         if (!failure) {
             if (found == members->end()) {
                 if constexpr (member_is_required<T>(field)) {
@@ -428,7 +442,7 @@ constexpr result<T> read_value(value const& source, std::string const& path, rea
         }
         T out;
         for (auto const& [key, item] : *members) {
-            auto element = read_value<typename T::mapped_type>(item, path.empty() ? key : path + "." + key, options);
+            auto element = read_value<typename T::mapped_type>(item, member_path(path, key), options);
             if (!element) {
                 return std::unexpected{std::move(element.error())};
             }
@@ -465,3 +479,100 @@ constexpr std::expected<T, read_error> read_text(std::string_view const text, pa
 }
 
 }  // namespace llmgate::json
+
+namespace llmgate::json::detail {
+
+constexpr void write_into(std::string& out, value const& source, std::size_t const indent, std::size_t const depth);
+
+constexpr void break_line(std::string& out, std::size_t const indent, std::size_t const depth) {
+    if (indent == 0) {
+        return;
+    }
+    out.push_back('\n');
+    out.append(indent * depth, ' ');
+}
+
+constexpr void write_number(std::string& out, double const number) {
+    if (!std::is_constant_evaluated()) {
+        std::array<char, 32> digits{};
+        out.append(digits.data(), std::to_chars(digits.data(), digits.data() + digits.size(), number).ptr);
+    } else {
+        out += "0";
+    }
+}
+
+constexpr void write_array(std::string& out, array const& items, std::size_t const indent, std::size_t const depth) {
+    if (items.empty()) {
+        out += "[]";
+        return;
+    }
+    out.push_back('[');
+    for (std::size_t at = 0; at < items.size(); ++at) {
+        out += at == 0 ? "" : ",";
+        break_line(out, indent, depth + 1);
+        write_into(out, items[at], indent, depth + 1);
+    }
+    break_line(out, indent, depth);
+    out.push_back(']');
+}
+
+constexpr void write_object(std::string& out, object const& members, std::size_t const indent, std::size_t const depth) {
+    if (members.empty()) {
+        out += "{}";
+        return;
+    }
+    out.push_back('{');
+    for (std::size_t at = 0; at < members.size(); ++at) {
+        out += at == 0 ? "" : ",";
+        break_line(out, indent, depth + 1);
+        out += jsonscan::encode_string(members[at].first);
+        out += indent == 0 ? ":" : ": ";
+        write_into(out, members[at].second, indent, depth + 1);
+    }
+    break_line(out, indent, depth);
+    out.push_back('}');
+}
+
+constexpr void write_into(std::string& out, value const& source, std::size_t const indent, std::size_t const depth) {
+    if (auto const* items = std::get_if<array>(&source.data)) {
+        write_array(out, *items, indent, depth);
+    } else if (auto const* members = std::get_if<object>(&source.data)) {
+        write_object(out, *members, indent, depth);
+    } else if (auto const* text = std::get_if<std::string>(&source.data)) {
+        out += jsonscan::encode_string(*text);
+    } else if (auto const* whole = std::get_if<std::int64_t>(&source.data)) {
+        std::array<char, 24> digits{};
+        out.append(digits.data(), std::to_chars(digits.data(), digits.data() + digits.size(), *whole).ptr);
+    } else if (auto const* real = std::get_if<double>(&source.data)) {
+        write_number(out, *real);
+    } else if (auto const* flag = std::get_if<bool>(&source.data)) {
+        out += *flag ? "true" : "false";
+    } else {
+        out += "null";
+    }
+}
+
+}  // namespace llmgate::json::detail
+
+export namespace llmgate::json {
+
+constexpr std::string write(value const& source, std::size_t const indent = 0) {
+    std::string out;
+    detail::write_into(out, source, indent, 0);
+    if (indent != 0) {
+        out.push_back('\n');
+    }
+    return out;
+}
+
+constexpr value make_object(std::initializer_list<std::pair<std::string, value>> const members) {
+    return value{object{members}};
+}
+
+constexpr value make_string(std::string text) {
+    return value{std::move(text)};
+}
+
+}  // namespace llmgate::json
+
+template class std::expected<llmgate::json::value, llmgate::json::parse_error>;
