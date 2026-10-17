@@ -1,7 +1,12 @@
+module;
+
+#include <meta>
+
 export module llmgate.arguments;
 
 import std;
 import llmgate.json;
+import llmgate.reflect;
 import llmgate.statusline;
 
 export namespace llmgate::arguments {
@@ -11,18 +16,29 @@ enum class command { serve, login, claude, env, setup, statusline, status, stop,
 constexpr unsigned default_days = 7;
 constexpr unsigned longest_report_days = 3660;
 
+constexpr std::size_t flag_capacity = 16;
+
+struct flag {
+    char word[flag_capacity];
+};
+
+struct limits {
+    unsigned lowest = 0;
+    unsigned highest = 0;
+};
+
 struct options {
     command which = command::serve;
-    std::string config_path = "~/.config/llmgate/config.jsonc";
-    bool check_config = false;
-    bool show_version = false;
-    bool as_json = false;
+    [[= flag{"--config"}]] std::string config_path = "~/.config/llmgate/config.jsonc";
+    [[= flag{"--check-config"}]] bool check_config = false;
+    [[= flag{"--version"}]] bool show_version = false;
+    [[= flag{"--json"}]] bool as_json = false;
     bool as_vscode = false;
-    bool service = false;
-    bool dry_run = false;
-    bool offline = false;
+    [[= flag{"--service"}]] bool service = false;
+    [[= flag{"--dry-run"}]] bool dry_run = false;
+    [[= flag{"--offline"}]] bool offline = false;
     std::string vscode_file{};
-    unsigned days = default_days;
+    [[= flag{"--days"}]] [[= limits{1, longest_report_days}]] unsigned days = default_days;
     std::vector<std::string> passthrough{};
 };
 
@@ -31,68 +47,155 @@ struct gateway_address {
     std::uint16_t port;
 };
 
-constexpr auto command_names = std::to_array<std::pair<std::string_view, command>>({
-    {"serve", command::serve},
-    {"login", command::login},
-    {"claude", command::claude},
-    {"env", command::env},
-    {"setup", command::setup},
-    {"statusline", command::statusline},
-    {"status", command::status},
-    {"stop", command::stop},
-    {"usage", command::usage},
-    {"doctor", command::doctor},
-    {"quota", command::quota},
-});
-
 constexpr std::optional<command> command_named(std::string_view const word) {
-    auto const found = std::ranges::find(command_names, word, &std::pair<std::string_view, command>::first);
-    return found == command_names.end() ? std::nullopt : std::optional{found->second};
+    return reflect::enum_from_name<command>(word);
 }
 
-constexpr std::expected<options, std::string> parse(std::span<std::string const> const args) {
-    options parsed;
+}  // namespace llmgate::arguments
+
+namespace llmgate::arguments::detail {
+
+using step = std::expected<void, std::string>;
+
+struct parse_state {
+    std::span<std::string const> args;
+    std::size_t index = 0;
+    options parsed{};
     bool chosen = false;
-    for (std::size_t index = 0; index < args.size(); ++index) {
-        std::string_view const word = args[index];
-        if (chosen && parsed.which == command::claude) {
-            parsed.passthrough.emplace_back(word);
-        } else if (word == "--version") {
-            parsed.show_version = true;
-        } else if (word == "--check-config") {
-            parsed.check_config = true;
-        } else if (word == "--config" && index + 1 < args.size()) {
-            parsed.config_path = args[++index];
-        } else if (word == "--days") {
-            unsigned days = 0;
-            auto const given = index + 1 < args.size() ? std::string_view{args[index + 1]} : std::string_view{};
-            auto const read = std::from_chars(given.data(), given.data() + given.size(), days);
-            if (given.empty() || read.ec != std::errc{} || read.ptr != given.data() + given.size() || days == 0 || days > longest_report_days) {
-                return std::unexpected{std::string{"--days needs a number from 1 to 3660"}};
-            }
-            parsed.days = days;
-            ++index;
-        } else if (word == "--json") {
-            parsed.as_json = true;
-        } else if (word == "--service") {
-            parsed.service = true;
-        } else if (word == "--dry-run") {
-            parsed.dry_run = true;
-        } else if (word == "--offline") {
-            parsed.offline = true;
-        } else if (word == "--vscode") {
-            parsed.as_vscode = true;
-            if (index + 1 < args.size() && !args[index + 1].starts_with("-") && !command_named(args[index + 1])) {
-                parsed.vscode_file = args[++index];
-            }
-        } else if (auto const named = command_named(word); named && !chosen) {
-            parsed.which = *named;
-            chosen = true;
-        } else {
-            return std::unexpected{std::string{"unknown argument: "} + std::string{word}};
+};
+
+constexpr std::unexpected<std::string> unknown_argument(std::string_view const word) {
+    return std::unexpected{std::string{"unknown argument: "} + std::string{word}};
+}
+
+constexpr std::optional<std::string_view> following_word(parse_state const& state) {
+    if (state.index + 1 >= state.args.size()) {
+        return std::nullopt;
+    }
+    return std::string_view{state.args[state.index + 1]};
+}
+
+constexpr std::optional<unsigned> whole_number(std::string_view const given) {
+    unsigned number = 0;
+    auto const read = std::from_chars(given.data(), given.data() + given.size(), number);
+    if (read.ec != std::errc{} || read.ptr != given.data() + given.size()) {
+        return std::nullopt;
+    }
+    return number;
+}
+
+constexpr std::string_view vscode_word = "--vscode";
+
+constexpr step vscode_flag(parse_state& state) {
+    state.parsed.as_vscode = true;
+    auto const given = following_word(state);
+    if (given && !given->starts_with("-") && !command_named(*given)) {
+        state.parsed.vscode_file = *given;
+        ++state.index;
+    }
+    return {};
+}
+
+consteval flag flag_of(std::meta::info const member) {
+    for (auto const annotation : std::meta::annotations_of(member)) {
+        if (std::meta::remove_cvref(std::meta::type_of(annotation)) == ^^flag) {
+            return std::meta::extract<flag>(annotation);
         }
     }
-    return parsed;
+    return {};
+}
+
+consteval limits limits_of(std::meta::info const member) {
+    for (auto const annotation : std::meta::annotations_of(member)) {
+        if (std::meta::remove_cvref(std::meta::type_of(annotation)) == ^^limits) {
+            return std::meta::extract<limits>(annotation);
+        }
+    }
+    return {};
+}
+
+constexpr std::string number_text(unsigned const number) {
+    std::array<char, 12> digits{};
+    auto const end = std::to_chars(digits.data(), digits.data() + digits.size(), number).ptr;
+    return std::string{digits.data(), end};
+}
+
+constexpr step read_operand(bool& slot, parse_state&, std::string_view, limits) {
+    slot = true;
+    return {};
+}
+
+constexpr step read_operand(std::string& slot, parse_state& state, std::string_view const word, limits) {
+    auto const given = following_word(state);
+    if (!given) {
+        return unknown_argument(word);
+    }
+    slot = *given;
+    ++state.index;
+    return {};
+}
+
+constexpr step read_operand(unsigned& slot, parse_state& state, std::string_view const word, limits const range) {
+    auto const number = whole_number(following_word(state).value_or(std::string_view{}));
+    if (!number || *number < range.lowest || *number > range.highest) {
+        return std::unexpected{std::string{word} + " needs a number from " + number_text(range.lowest) + " to " + number_text(range.highest)};
+    }
+    slot = *number;
+    ++state.index;
+    return {};
+}
+
+constexpr std::optional<step> apply_flag(parse_state& state, std::string_view const word) {
+    static constexpr auto members = std::define_static_array(std::meta::nonstatic_data_members_of(^^options, std::meta::access_context::current()));
+    std::optional<step> outcome;
+    template for (constexpr auto member : members) {
+        constexpr auto marker = flag_of(member);
+        if constexpr (marker.word[0] != '\0') {
+            if (word == std::string_view{marker.word}) {
+                outcome = read_operand(state.parsed.[:member:], state, word, limits_of(member));
+            }
+        }
+    }
+    return outcome;
+}
+
+constexpr step choose_command(parse_state& state, std::string_view const word) {
+    auto const named = command_named(word);
+    if (!named || state.chosen) {
+        return unknown_argument(word);
+    }
+    state.parsed.which = *named;
+    state.chosen = true;
+    return {};
+}
+
+constexpr step consume(parse_state& state) {
+    std::string_view const word = state.args[state.index];
+    if (state.chosen && state.parsed.which == command::claude) {
+        state.parsed.passthrough.emplace_back(word);
+        return {};
+    }
+    if (word == vscode_word) {
+        return vscode_flag(state);
+    }
+    if (auto const applied = apply_flag(state, word)) {
+        return *applied;
+    }
+    return choose_command(state, word);
+}
+
+}  // namespace llmgate::arguments::detail
+
+export namespace llmgate::arguments {
+
+constexpr std::expected<options, std::string> parse(std::span<std::string const> const args) {
+    detail::parse_state state{.args = args};
+    for (; state.index < args.size(); ++state.index) {
+        if (auto const done = detail::consume(state); !done) {
+            return std::unexpected{done.error()};
+        }
+    }
+    return std::move(state.parsed);
 }
 
 constexpr std::optional<gateway_address> split_listen(std::string_view const listen) {
