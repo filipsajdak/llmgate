@@ -172,7 +172,9 @@ TSan and ASan cannot see bugs that need two coroutines to interleave on one thre
 | `chaos::stream` | Random short reads and random yields around every I/O call | `tests/support/chaos.cppm` |
 | Seed-sweep scenarios | Concurrent writers, concurrent HTTP clients and a full-duplex TLS echo run under 136 seeds; a failure prints the seed | `tests/unit/schedule_test.cpp` |
 | AFL++ schedule harness | Coverage-guided search over seeds and scenarios | `tests/fuzz/schedule` |
-| `tools/reflection_lint.py --strict src app` | Hand-written copies of a definition: enum-to-string switches, `{"word", Type::member}` tables, `if (word == ...)` chains and `{"key", x.key}` blocks; use `reflect::enum_name`, `reflect::enum_from_name` and annotated members instead. A hook runs it on each edited `src/` or `app/` file and the `reflect-dont-hand-write` skill (`.claude/skills`) explains the patterns; `tools/reflection_lint_allow.txt` holds justified exceptions and `pending:` debt, and a stale line fails the gate |
+| `tools/reflection_lint.py --strict src app tests` | Hand-written copies of a definition: enum-to-string switches (also a `case` and its `return` on separate lines), `{"word", Type::member}` tables, `if (word == ...)` chains, `{"key", x.key}` blocks, raw-string `std::format` templates with three or more `"key":{}` pairs, `{Enum::x, &fn}` and `{"GET", "/p", route::x}` tables, `static_cast<Enum>(n % N)` and `std::to_array<std::string_view>` lists that match an enum's enumerators; use `reflect::enum_name`, `reflect::enum_from_name` and annotated members instead. It reads strings, raw strings and comments with a small tokenizer (`tools/cpp_source.py`). A PreToolUse hook (`tools/cpp26_precheck.py`) scans the new text of each edit before it is written and a PostToolUse hook (`tools/reflection_hook.py`) the whole file afterwards; the `reflect-dont-hand-write` skill (`.claude/skills`) explains the patterns. `tools/reflection_lint_allow.txt` holds justified exceptions and `pending:` debt (each line names the tier that removes it), and a stale line fails the gate | `tools/` |
+| `tools/cpp26_lint.py --strict` | Unconstrained templates whose parameter is called, awaited or used as a sink; standard `#include`s beside `import std`; iostream and `printf`; runs of three `+=` or `push_back` statements in non-constexpr code; and every comment except a line starting `// Exception: <reason>` and a `}  // namespace x` closer. The `cpp26-idioms` skill and the project `CLAUDE.md` carry the replacements; allowances live in `tools/cpp26_lint_allow.txt` with the same `pending:` convention | `tools/` |
+| `python3 -m unittest discover -s tests/lint` | The tokenizer and both hooks, driven with piped tool payloads (ctest label `lint`) | `tests/lint` |
 | `tools/coroutine_lint.py --strict src` | Coroutines that take references or views (clang-tidy CP.53 cannot parse this code); every allowed case carries its reason in `tools/coroutine_lint_allow.txt` | `tools/` |
 
 The tests were validated by reintroducing the defects they target: an epoll mask that ignores writers hangs `async_test`, and a reactor without the duplicate-wait refusal fails its test.
@@ -258,7 +260,7 @@ Most kills come from the `static_assert`s in the modules; the new tests in `test
 | `linux` | `ops/ci/linux.sh` in the `gcc:16.2` container: presets `linux` (x86-64 and arm64), `linux-asan`, `linux-tsan` build and run every unit, constexpr and e2e test |
 | `macos` | presets `host` and `asan` with Homebrew GCC 16 |
 | `e2e` | `ctest -L e2e` in the container (`tests/e2e/setup_flow.sh` needs python3 and curl, which the image installs) |
-| `lint` | `tools/coroutine_lint.py --strict src` |
+| `lint` | `tools/coroutine_lint.py --strict src`, both reflection and cpp26 lints with their self-tests, and `python3 -m unittest discover -s tests/lint` |
 | `crap` | `tools/coverage.sh`: CRAP above 8 fails |
 | `fuzz` | AFL++ with ASan and UBSan for 60 seconds on each of the ten harnesses |
 

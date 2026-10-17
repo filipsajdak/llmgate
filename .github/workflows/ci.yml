@@ -71,7 +71,10 @@ jobs:
       - run: pip install lizard
       - run: python3 tools/coroutine_lint.py --strict src
       - run: python3 tools/reflection_lint.py --self-test
-      - run: python3 tools/reflection_lint.py --strict src app
+      - run: python3 tools/reflection_lint.py --strict src app tests
+      - run: python3 tools/cpp26_lint.py --self-test
+      - run: python3 tools/cpp26_lint.py --strict
+      - run: python3 -m unittest discover -s tests/lint
 
   crap:
     if: github.event_name != 'schedule'
