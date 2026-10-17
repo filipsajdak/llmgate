@@ -33,9 +33,9 @@ struct header {
 
 class header_map {
 public:
-    void add(std::string name, std::string value) { items_.push_back({.name = std::move(name), .value = std::move(value)}); }
+    constexpr void add(std::string name, std::string value) { items_.push_back({.name = std::move(name), .value = std::move(value)}); }
 
-    std::optional<std::string_view> find(std::string_view const name) const noexcept {
+    constexpr std::optional<std::string_view> find(std::string_view const name) const noexcept {
         auto const match = std::ranges::find_if(items_, [name](header const& item) { return same_name(item.name, name); });
         if (match == items_.end()) {
             return std::nullopt;
@@ -43,10 +43,10 @@ public:
         return std::string_view{match->value};
     }
 
-    std::span<header const> all() const noexcept { return items_; }
+    constexpr std::span<header const> all() const noexcept { return items_; }
 
 private:
-    static bool same_name(std::string_view const left, std::string_view const right) noexcept {
+    static constexpr bool same_name(std::string_view const left, std::string_view const right) noexcept {
         return std::ranges::equal(left, right, [](char const a, char const b) { return lower(a) == lower(b); });
     }
 

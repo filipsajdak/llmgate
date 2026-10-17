@@ -128,35 +128,58 @@ public:
             co_return std::unexpected{std::make_error_code(std::errc::operation_in_progress)};
         }
         async::exclusive_scope const exclusive{reading_};
+        for (;;) {
+            auto const finished = co_await advance(on_event, options);
+            if (!finished) {
+                co_return std::unexpected{finished.error()};
+            }
+            if (*finished) {
+                co_return result_void{};
+            }
+        }
+    }
+
+    template <std::invocable<http::event const&> Sink>
+    async::task<std::expected<bool, std::error_code>> step(Sink& on_event, net::read_options const options) {
+        if (reading_) {
+            co_return std::unexpected{std::make_error_code(std::errc::operation_in_progress)};
+        }
+        async::exclusive_scope const exclusive{reading_};
+        co_return co_await advance(on_event, options);
+    }
+
+private:
+    template <class Sink>
+    async::task<std::expected<bool, std::error_code>> advance(Sink& on_event, net::read_options const options) {
         bool done = false;
         auto track = [&done, &on_event](http::event const& item) {
             done = done || std::holds_alternative<http::message_complete>(item);
             on_event(item);
         };
-        while (!done) {
-            if (begin_ == end_) {
-                auto const received = co_await stream_->read_some(buffer_, options);
-                if (!received) {
-                    co_return std::unexpected{received.error()};
-                }
-                if (*received == 0) {
-                    co_return co_await end_of_stream(track, done);
-                }
-                begin_ = 0;
-                end_ = *received;
+        if (begin_ == end_) {
+            auto const received = co_await stream_->read_some(buffer_, options);
+            if (!received) {
+                co_return std::unexpected{received.error()};
             }
-            auto const consumed = parser_.feed(std::span<std::byte const>{buffer_}.subspan(begin_, end_ - begin_), track);
-            if (!consumed) {
-                co_return std::unexpected{consumed.error()};
+            if (*received == 0) {
+                auto const closed = co_await end_of_stream(track, done);
+                if (!closed) {
+                    co_return std::unexpected{closed.error()};
+                }
+                co_return true;
             }
-            fresh_ = false;
-            begin_ += *consumed;
+            begin_ = 0;
+            end_ = *received;
         }
-        fresh_ = true;
-        co_return result_void{};
+        auto const consumed = parser_.feed(std::span<std::byte const>{buffer_}.subspan(begin_, end_ - begin_), track);
+        if (!consumed) {
+            co_return std::unexpected{consumed.error()};
+        }
+        begin_ += *consumed;
+        fresh_ = done;
+        co_return done;
     }
 
-private:
     template <class Sink>
     async::task<result_void> end_of_stream(Sink& track, bool& done) {
         if (fresh_) {
@@ -200,6 +223,7 @@ public:
     explicit response_writer(Stream& stream) noexcept : stream_{&stream} {}
 
     bool started() const noexcept { return started_; }
+    int descriptor() const noexcept { return stream_->descriptor(); }
 
     async::task<result_void> send(int const status, http::header_map const& fields, std::string_view const body) {
         auto head = format_response_head(status, fields, body.size());

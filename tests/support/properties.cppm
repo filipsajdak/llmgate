@@ -4,6 +4,7 @@ import std;
 import llmgate.anthropic;
 import llmgate.json;
 import llmgate.jsonscan;
+import llmgate.routing;
 import llmgate.sse;
 
 export namespace llmgate::properties {
@@ -118,6 +119,49 @@ constexpr bool json_holds(std::string_view const text) {
     }
     if (lenient) {
         (void)json::read<sample_config>(*lenient);
+    }
+    return true;
+}
+
+constexpr std::string_view alias_name = "opus";
+constexpr std::string_view mapped_name = "mapped";
+
+constexpr std::optional<std::string> sample_lookup(std::string const& requested) {
+    return requested == alias_name ? std::optional<std::string>{std::string{mapped_name}} : std::nullopt;
+}
+
+constexpr bool routing_holds(std::string_view const text) {
+    if (auto const url = routing::parse_url(text)) {
+        std::string again = url->secure ? "https://" : "http://";
+        again += url->host;
+        again += ':';
+        std::array<char, 8> digits{};
+        again.append(digits.data(), std::to_chars(digits.data(), digits.data() + digits.size(), url->port).ptr);
+        again += url->base_path;
+        auto const reparsed = routing::parse_url(again);
+        if (!reparsed || reparsed->host != url->host || reparsed->port != url->port || reparsed->secure != url->secure ||
+            reparsed->base_path != url->base_path) {
+            return false;
+        }
+    }
+    (void)routing::route_of("POST", text);
+    if (routing::path_of(text).contains('?')) {
+        return false;
+    }
+    auto const prepared = routing::prepare(text, &sample_lookup);
+    if (!prepared) {
+        return true;
+    }
+    auto const members = jsonscan::top_level_members(prepared->body);
+    if (!members) {
+        return false;
+    }
+    auto const models = jsonscan::members_named(*members, "model");
+    for (auto const& item : models) {
+        auto const raw = std::string_view{prepared->body}.substr(item.value_begin + 1, item.value_end - item.value_begin - 2);
+        if (jsonscan::decode_string(raw) == alias_name) {
+            return false;
+        }
     }
     return true;
 }

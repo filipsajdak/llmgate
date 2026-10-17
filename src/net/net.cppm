@@ -184,7 +184,8 @@ async::task<result_void> send_all(async::reactor& reactor, int const fd, std::sp
 }
 
 async::task<std::expected<unique_fd, std::error_code>> connect_candidate(async::reactor& reactor,
-                                                                         addrinfo const& candidate) {
+                                                                         addrinfo const& candidate,
+                                                                         idle_limit const timeout) {
     auto socket = adopt(::socket(candidate.ai_family, candidate.ai_socktype, candidate.ai_protocol));
     if (!socket) {
         co_return std::unexpected{last_error()};
@@ -198,7 +199,7 @@ async::task<std::expected<unique_fd, std::error_code>> connect_candidate(async::
     if (errno != EINPROGRESS) {
         co_return std::unexpected{last_error()};
     }
-    if (auto const error = co_await reactor.writable(raw(socket))) {
+    if (auto const error = co_await reactor.writable(raw(socket), timeout)) {
         co_return std::unexpected{error};
     }
     int pending = 0;
@@ -211,7 +212,7 @@ async::task<std::expected<unique_fd, std::error_code>> connect_candidate(async::
 }
 
 async::task<std::expected<unique_fd, std::error_code>> tcp_connect(async::reactor& reactor, std::string host,
-                                                                   std::uint16_t const port) {
+                                                                   std::uint16_t const port, idle_limit const timeout) {
     auto const hints = stream_hints();
     addrinfo* found = nullptr;
     // Exception: getaddrinfo blocks the reactor thread until an async resolver replaces it.
@@ -221,7 +222,7 @@ async::task<std::expected<unique_fd, std::error_code>> tcp_connect(async::reacto
     std::unique_ptr<addrinfo, addrinfo_deleter> const candidates{found};
     std::error_code failure = std::make_error_code(std::errc::host_unreachable);
     for (auto const* candidate = candidates.get(); candidate != nullptr; candidate = candidate->ai_next) {
-        auto socket = co_await connect_candidate(reactor, *candidate);
+        auto socket = co_await connect_candidate(reactor, *candidate, timeout);
         if (socket) {
             co_return socket;
         }
@@ -247,8 +248,9 @@ public:
     }
 
     static async::task<std::expected<tcp_stream, std::error_code>> connect(async::reactor& reactor, std::string host,
-                                                                           std::uint16_t const port) {
-        auto socket = co_await detail::tcp_connect(reactor, host, port);
+                                                                           std::uint16_t const port,
+                                                                           idle_limit const timeout = std::nullopt) {
+        auto socket = co_await detail::tcp_connect(reactor, host, port, timeout);
         if (!socket) {
             co_return std::unexpected{socket.error()};
         }
@@ -344,8 +346,9 @@ class tls_stream {
 public:
     static async::task<std::expected<tls_stream, std::error_code>> connect(async::reactor& reactor,
                                                                            tls::client_context const& context,
-                                                                           std::string host, std::uint16_t const port) {
-        auto socket = co_await detail::tcp_connect(reactor, host, port);
+                                                                           std::string host, std::uint16_t const port,
+                                                                           idle_limit const timeout = std::nullopt) {
+        auto socket = co_await detail::tcp_connect(reactor, host, port, timeout);
         if (!socket) {
             co_return std::unexpected{socket.error()};
         }
@@ -486,6 +489,29 @@ private:
 
 static_assert(byte_stream<tcp_stream>);
 static_assert(byte_stream<tls_stream>);
+
+class any_stream {
+public:
+    explicit any_stream(tcp_stream stream) : implementation_{std::move(stream)} {}
+    explicit any_stream(tls_stream stream) : implementation_{std::move(stream)} {}
+
+    async::task<result_size> read_some(std::span<std::byte> into, read_options const options) {
+        co_return co_await std::visit([&](auto& stream) { return stream.read_some(into, options); }, implementation_);
+    }
+
+    async::task<result_void> write_all(std::span<std::byte const> data) {
+        co_return co_await std::visit([&](auto& stream) { return stream.write_all(data); }, implementation_);
+    }
+
+    int descriptor() const noexcept {
+        return std::visit([](auto const& stream) { return stream.descriptor(); }, implementation_);
+    }
+
+private:
+    std::variant<tcp_stream, tls_stream> implementation_;
+};
+
+static_assert(byte_stream<any_stream>);
 
 struct endpoint {
     std::string host;
