@@ -70,6 +70,28 @@ constexpr route route_of(std::string_view const method, std::string_view const t
     return exact == route_table.end() ? route::wrong_method : exact->which;
 }
 
+struct host_port {
+    std::string_view host;
+    std::uint16_t port;
+};
+
+constexpr std::expected<host_port, std::string> split_authority(std::string_view const authority, bool const secure) {
+    auto const colon = authority.rfind(':');
+    host_port result{.host = authority, .port = secure ? https_port : http_port};
+    if (colon != std::string_view::npos) {
+        result.host = authority.substr(0, colon);
+        auto const digits = authority.substr(colon + 1);
+        auto const parsed = std::from_chars(digits.data(), digits.data() + digits.size(), result.port);
+        if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size()) {
+            return std::unexpected{std::string{"base_url has an invalid port"}};
+        }
+    }
+    if (result.host.empty()) {
+        return std::unexpected{std::string{"base_url has no host"}};
+    }
+    return result;
+}
+
 constexpr std::expected<endpoint_url, std::string> parse_url(std::string_view const url) {
     constexpr std::string_view https = "https://";
     constexpr std::string_view http = "http://";
@@ -78,24 +100,12 @@ constexpr std::expected<endpoint_url, std::string> parse_url(std::string_view co
         return std::unexpected{std::string{"base_url must start with http:// or https://"}};
     }
     auto const rest = url.substr(secure ? https.size() : http.size());
-    auto const slash = rest.find('/');
-    auto const authority = rest.substr(0, slash);
-    auto const base_path = slash == std::string_view::npos ? std::string{} : std::string{rest.substr(slash)};
-    auto const colon = authority.rfind(':');
-    std::uint16_t port = secure ? https_port : http_port;
-    auto host = authority;
-    if (colon != std::string_view::npos) {
-        host = authority.substr(0, colon);
-        auto const digits = authority.substr(colon + 1);
-        auto const parsed = std::from_chars(digits.data(), digits.data() + digits.size(), port);
-        if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size()) {
-            return std::unexpected{std::string{"base_url has an invalid port"}};
-        }
+    auto const slash = std::min(rest.find('/'), rest.size());
+    auto const where = split_authority(rest.substr(0, slash), secure);
+    if (!where) {
+        return std::unexpected{where.error()};
     }
-    if (host.empty()) {
-        return std::unexpected{std::string{"base_url has no host"}};
-    }
-    return endpoint_url{.secure = secure, .host = std::string{host}, .port = port, .base_path = base_path};
+    return endpoint_url{.secure = secure, .host = std::string{where->host}, .port = where->port, .base_path = std::string{rest.substr(slash)}};
 }
 
 constexpr auto hidden_headers = std::to_array<std::string_view>(
@@ -197,13 +207,8 @@ constexpr std::string_view bearer_value(std::string_view const authorization) no
     return authorization.starts_with(prefix) ? authorization.substr(prefix.size()) : std::string_view{};
 }
 
-template <class Lookup>
-constexpr std::expected<prepared_request, reply_body> prepare(std::string_view const body, Lookup&& lookup) {
-    auto const members = jsonscan::top_level_members(body);
-    if (!members) {
-        return std::unexpected{error_reply(400, "invalid_request_error", "the request body is not a JSON object")};
-    }
-    auto const models = jsonscan::members_named(*members, "model");
+constexpr std::expected<std::string_view, reply_body> model_field(std::string_view const body, std::span<jsonscan::member const> const members) {
+    auto const models = jsonscan::members_named(members, "model");
     auto const model_text = agreed_value(body, models);
     if (models.empty() || models.front().kind != jsonscan::value_kind::string) {
         return std::unexpected{error_reply(400, "invalid_request_error", "model is required and must be a string")};
@@ -211,10 +216,31 @@ constexpr std::expected<prepared_request, reply_body> prepare(std::string_view c
     if (!model_text) {
         return std::unexpected{error_reply(400, "invalid_request_error", "model appears more than once with different values")};
     }
-    auto const streams = jsonscan::members_named(*members, "stream");
+    return *model_text;
+}
+
+constexpr std::expected<bool, reply_body> stream_field(std::string_view const body, std::span<jsonscan::member const> const members) {
+    auto const streams = jsonscan::members_named(members, "stream");
     auto const stream_text = agreed_value(body, streams);
     if (!streams.empty() && !stream_text) {
         return std::unexpected{error_reply(400, "invalid_request_error", "stream appears more than once with different values")};
+    }
+    return stream_text == "true";
+}
+
+template <class Lookup>
+constexpr std::expected<prepared_request, reply_body> prepare(std::string_view const body, Lookup&& lookup) {
+    auto const members = jsonscan::top_level_members(body);
+    if (!members) {
+        return std::unexpected{error_reply(400, "invalid_request_error", "the request body is not a JSON object")};
+    }
+    auto const model_text = model_field(body, *members);
+    if (!model_text) {
+        return std::unexpected{model_text.error()};
+    }
+    auto const stream = stream_field(body, *members);
+    if (!stream) {
+        return std::unexpected{stream.error()};
     }
     auto text = std::string{body};
     auto const requested = jsonscan::decode_string(model_text->substr(1, model_text->size() - 2));
@@ -225,7 +251,7 @@ constexpr std::expected<prepared_request, reply_body> prepare(std::string_view c
         }
         text = std::move(*replaced);
     }
-    return prepared_request{.body = std::move(text), .stream = stream_text == "true", .requested = requested};
+    return prepared_request{.body = std::move(text), .stream = *stream, .requested = requested};
 }
 
 static_assert(route_of("POST", "/anthropic/v1/messages?beta=true") == route::messages);
