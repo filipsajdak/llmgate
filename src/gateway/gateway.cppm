@@ -402,10 +402,7 @@ public:
     void use_clock(std::function<std::int64_t()> clock) { clock_ = std::move(clock); }
     void use_breaker_clock(std::function<std::int64_t()> clock) { breaker_clock_ = std::move(clock); }
 
-    bool configured() const {
-        return !providers_.empty() && std::ranges::all_of(providers_, [](detail::provider_runtime const& item) { return item.url.has_value(); }) &&
-               selection::route_problem(routes_, declared_).empty();
-    }
+    bool configured() const { return !providers_.empty() && usable(); }
 
     template <net::byte_stream Client>
     async::task<net::result_void> operator()(httpio::request const& incoming, httpio::response_writer<Client>& out) {
@@ -415,19 +412,38 @@ public:
             ++counters_.refused;
             co_return co_await reject(out, std::move(*refusal));
         }
-        switch (which) {
-            case routing::route::messages: co_return co_await forward(incoming, out);
-            case routing::route::count_tokens: co_return co_await estimate_tokens(incoming, out);
-            case routing::route::models: co_return co_await respond(out, 200, detail::models_json(alias_names()));
-            case routing::route::health: co_return co_await respond(out, 200, health_body(incoming.head.target));
-            case routing::route::statistics: co_return co_await respond(out, 200, detail::stats_json(counters_, usage::summary_json(ledger_, settings_.usage.budget, clock_()), providers_json()));
-            case routing::route::wrong_method: co_return co_await reject(out, routing::error_reply(405, "invalid_request_error", "method not allowed"));
-            case routing::route::unknown_path: break;
+        if (which == routing::route::messages) {
+            co_return co_await forward(incoming, out);
         }
-        co_return co_await reject(out, routing::error_reply(404, "not_found_error", "unknown path"));
+        if (which == routing::route::count_tokens) {
+            co_return co_await estimate_tokens(incoming, out);
+        }
+        if (auto body = json_body(which, incoming.head.target)) {
+            co_return co_await respond(out, 200, std::move(*body));
+        }
+        co_return co_await reject(out, failure_for(which));
     }
 
 private:
+    bool usable() const {
+        return std::ranges::all_of(providers_, [](detail::provider_runtime const& item) { return item.url.has_value(); }) &&
+               selection::route_problem(routes_, declared_).empty();
+    }
+
+    std::optional<std::string> json_body(routing::route const which, std::string_view const target) const {
+        switch (which) {
+            case routing::route::models: return detail::models_json(alias_names());
+            case routing::route::health: return health_body(target);
+            case routing::route::statistics: return detail::stats_json(counters_, usage::summary_json(ledger_, settings_.usage.budget, clock_()), providers_json());
+            default: return std::nullopt;
+        }
+    }
+
+    static routing::reply_body failure_for(routing::route const which) {
+        return which == routing::route::wrong_method ? routing::error_reply(405, "invalid_request_error", "method not allowed")
+                                                     : routing::error_reply(404, "not_found_error", "unknown path");
+    }
+
     static credential_map single(credential& only) {
         credential_map all;
         all.emplace(std::string{implicit_provider}, &only);
