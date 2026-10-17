@@ -76,17 +76,24 @@ constexpr std::string_view device_grant = "urn:ietf:params:oauth:grant-type:devi
 
 namespace llmgate::copilot::detail {
 
+constexpr bool unreserved(char const c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || std::string_view{"-._~"}.contains(c);
+}
+
+void append_percent(std::string& out, char const c) {
+    constexpr std::string_view digits = "0123456789ABCDEF";
+    out.push_back('%');
+    out.push_back(digits[static_cast<unsigned char>(c) >> 4]);
+    out.push_back(digits[static_cast<unsigned char>(c) & 0xF]);
+}
+
 std::string url_encode(std::string_view const text) {
     std::string out;
     for (auto const c : text) {
-        auto const plain = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || std::string_view{"-._~"}.contains(c);
-        if (plain) {
+        if (unreserved(c)) {
             out.push_back(c);
         } else {
-            constexpr std::string_view digits = "0123456789ABCDEF";
-            out.push_back('%');
-            out.push_back(digits[static_cast<unsigned char>(c) >> 4]);
-            out.push_back(digits[static_cast<unsigned char>(c) & 0xF]);
+            append_percent(out, c);
         }
     }
     return out;
