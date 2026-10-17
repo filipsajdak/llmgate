@@ -1,12 +1,45 @@
+module;
+
+#include <meta>
+
 export module llmgate.routing;
 
 import std;
 import llmgate.http;
+import llmgate.json;
 import llmgate.jsonscan;
+import llmgate.members;
 
 export namespace llmgate::routing {
 
-enum class route { messages, count_tokens, models, health, statistics, unknown_path, wrong_method };
+constexpr std::size_t method_capacity = 8;
+constexpr std::size_t path_capacity = 48;
+
+struct endpoint {
+    char method[method_capacity]{};
+    char path[path_capacity]{};
+
+    consteval endpoint(std::string_view const verb, std::string_view const target) {
+        if (verb.size() >= method_capacity || target.size() >= path_capacity) {
+            throw "routing::endpoint: the method or path does not fit its capacity";
+        }
+        std::ranges::copy(verb, method);
+        std::ranges::copy(target, path);
+    }
+
+    constexpr std::string_view verb() const noexcept { return method; }
+    constexpr std::string_view target() const noexcept { return path; }
+};
+
+enum class route {
+    messages [[= endpoint{"POST", "/anthropic/v1/messages"}]],
+    count_tokens [[= endpoint{"POST", "/anthropic/v1/messages/count_tokens"}]],
+    models [[= endpoint{"GET", "/anthropic/v1/models"}]],
+    health [[= endpoint{"GET", "/healthz"}]],
+    statistics [[= endpoint{"GET", "/llmgate/stats"}]],
+    unknown_path,
+    wrong_method,
+};
 
 struct reply_body {
     int status;
@@ -29,44 +62,52 @@ struct prepared_request {
 constexpr std::uint16_t https_port = 443;
 constexpr std::uint16_t http_port = 80;
 
+struct error_detail {
+    std::string type{};
+    std::string message{};
+};
+
+struct error_body {
+    std::string type = "error";
+    error_detail error{};
+};
+
 constexpr std::string error_json(std::string_view const kind, std::string_view const message) {
-    std::string out = R"({"type":"error","error":{"type":")";
-    out += kind;
-    out += R"(","message":)";
-    out += jsonscan::encode_string(message);
-    out += "}}";
-    return out;
+    return json::write(json::to_value(error_body{.error = {.type = std::string{kind}, .message = std::string{message}}}));
 }
 
 constexpr reply_body error_reply(int const status, std::string_view const kind, std::string_view const message) {
     return {.status = status, .body = error_json(kind, message)};
 }
 
-constexpr std::string path_of(std::string_view const target) {
-    return std::string{target.substr(0, target.find('?'))};
+constexpr std::string_view path_of(std::string_view const target) noexcept {
+    return target.substr(0, target.find('?'));
 }
 
 struct route_entry {
-    std::string_view method;
-    std::string_view path;
+    endpoint where;
     route which;
 };
 
-constexpr auto route_table = std::to_array<route_entry>({
-    {"POST", "/anthropic/v1/messages", route::messages},
-    {"POST", "/anthropic/v1/messages/count_tokens", route::count_tokens},
-    {"GET", "/anthropic/v1/models", route::models},
-    {"GET", "/healthz", route::health},
-    {"GET", "/llmgate/stats", route::statistics},
-});
+consteval std::vector<route_entry> annotated_routes() {
+    std::vector<route_entry> found;
+    template for (constexpr auto enumerator : std::define_static_array(std::meta::enumerators_of(^^route))) {
+        if constexpr (reflect::has_annotation<endpoint>(enumerator)) {
+            found.push_back({.where = *reflect::annotation_of<endpoint>(enumerator), .which = [:enumerator:]});
+        }
+    }
+    return found;
+}
+
+constexpr auto route_table = std::define_static_array(annotated_routes());
 
 constexpr route route_of(std::string_view const method, std::string_view const target) {
     auto const path = path_of(target);
-    auto const known_path = std::ranges::find(route_table, std::string_view{path}, &route_entry::path);
-    if (known_path == route_table.end()) {
+    auto const same_path = [&](route_entry const& item) { return item.where.target() == path; };
+    if (!std::ranges::any_of(route_table, same_path)) {
         return route::unknown_path;
     }
-    auto const exact = std::ranges::find_if(route_table, [&](route_entry const& item) { return item.path == path && item.method == method; });
+    auto const exact = std::ranges::find_if(route_table, [&](route_entry const& item) { return same_path(item) && item.where.verb() == method; });
     return exact == route_table.end() ? route::wrong_method : exact->which;
 }
 
@@ -258,6 +299,19 @@ constexpr std::expected<prepared_request, reply_body> prepare(std::string_view c
     return prepared_request{.body = std::move(text), .stream = *stream, .requested = requested};
 }
 
+consteval bool route_table_holds() {
+    auto const fallbacks = std::to_array({route::unknown_path, route::wrong_method});
+    auto const own_route = [](route_entry const& item) { return route_of(item.where.verb(), item.where.target()) == item.which; };
+    auto const unique = [](route_entry const& left) {
+        return std::ranges::count_if(route_table, [&](route_entry const& right) { return left.where.verb() == right.where.verb() && left.where.target() == right.where.target(); }) == 1;
+    };
+    auto const answers_for_any_verb = [](route_entry const& item) { return route_of("PATCH", item.where.target()) == route::wrong_method; };
+    return route_table.size() + fallbacks.size() == std::meta::enumerators_of(^^route).size() && std::ranges::all_of(route_table, own_route) &&
+           std::ranges::all_of(route_table, unique) && std::ranges::all_of(route_table, answers_for_any_verb) &&
+           std::ranges::none_of(route_table, [&](route_entry const& item) { return std::ranges::contains(fallbacks, item.which); });
+}
+
+static_assert(route_table_holds());
 static_assert(route_of("POST", "/anthropic/v1/messages?beta=true") == route::messages);
 static_assert(route_of("GET", "/anthropic/v1/messages") == route::wrong_method);
 static_assert(route_of("GET", "/nope") == route::unknown_path);
