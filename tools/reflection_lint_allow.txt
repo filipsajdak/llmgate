@@ -8,5 +8,5 @@ src/gateway/gateway.cppm|json-format-template|return std::format(R"({}:{{"attemp
 src/gateway/gateway.cppm|json-format-template|R"({{"requests":{},"streamed":{}|pending: Tier 2 D2 replaces stats_json with json::to_value
 src/gateway/routing.cppm|route-table|{"POST", "/anthropic/v1/messages", route::messages},|pending: Tier 2 D2 annotates the route enumerators with the endpoint
 src/anthropic/guard.cppm|enum-handler-table|{event_type::error, &grammar_state::on_error},|pending: Tier 3 H annotates the event_type enumerators and static_asserts the table is exhaustive
-app/llmgate.cpp|enum-handler-table|{arguments::command::serve, &serve_command},|pending: Tier 2 F makes the handlers table static_assert-exhaustive
+app/llmgate.cpp|enum-handler-table|{arguments::command::serve, &serve_command},|handlers_cover_every_command static_asserts the table holds each command exactly once
 tests/fuzz/schedule/harness.cpp|enum-modulo|% scenario_count|pending: Tier 3 H replaces scenario_count with reflect::enum_count

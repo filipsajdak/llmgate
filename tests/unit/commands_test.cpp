@@ -109,8 +109,7 @@ const suite commands_suite = [] {
         auto const file = box.root / "vscode.json";
         std::filesystem::create_directories(box.root);
         std::ofstream{file} << R"({"editor.fontSize": 14})";
-        where.options.as_vscode = true;
-        where.options.vscode_file = file.string();
+        where.options.vscode = file.string();
 
         expect(commands::run_setup(where) == 0_i);
 
@@ -124,8 +123,7 @@ const suite commands_suite = [] {
         auto where = box.context();
         auto const file = box.root / "vscode.json";
         std::ofstream{file} << "{ // comment";
-        where.options.as_vscode = true;
-        where.options.vscode_file = file.string();
+        where.options.vscode = file.string();
         where.options.service = true;
 
         expect(commands::run_setup(where) == 1_i);

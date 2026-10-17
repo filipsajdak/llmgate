@@ -1,6 +1,8 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include <unistd.h>
+
 import std;
 import llmgate.arguments;
 import llmgate.async;
@@ -11,6 +13,7 @@ import llmgate.httpio;
 import llmgate.json;
 import llmgate.net;
 import llmgate.process;
+import llmgate.reflect;
 import llmgate.routing;
 import llmgate.shutdown;
 import llmgate.tls;
@@ -20,9 +23,6 @@ namespace {
 using namespace llmgate;
 
 constexpr std::string_view version_text = "llmgate " LLMGATE_VERSION;
-constexpr std::string_view usage_text =
-    "usage: llmgate [--config PATH] [serve | login | claude ARGS... | env [--json|--vscode] | setup [--service] [--dry-run] [--vscode FILE] | status | stop | "
-    "usage [--days N] [--json] | doctor [--offline] [--json] | quota [--json] | statusline] | --check-config | --version";
 constexpr int exit_usage = 2;
 constexpr int exit_config = 3;
 constexpr int exit_runtime = 1;
@@ -185,7 +185,7 @@ int login_command(commands::context const& where) {
 }
 
 int statusline_command(commands::context const& where) {
-    return commands::run_statusline(where, std::string{std::istreambuf_iterator<char>{std::cin}, std::istreambuf_iterator<char>{}});
+    return commands::run_statusline(where, process::read_all(STDIN_FILENO).value_or(std::string{}));
 }
 
 using command_handler = int (*)(commands::context const&);
@@ -204,12 +204,16 @@ constexpr auto handlers = std::to_array<std::pair<arguments::command, command_ha
     {arguments::command::statusline, &statusline_command},
 });
 
+constexpr bool handlers_cover_every_command() {
+    return handlers.size() == reflect::enum_count<arguments::command> &&
+           std::ranges::all_of(reflect::enum_values<arguments::command>, [](arguments::command const which) {
+               return std::ranges::count(handlers, which, &std::pair<arguments::command, command_handler>::first) == 1;
+           });
+}
+static_assert(handlers_cover_every_command());
+
 int dispatch(commands::context const& where) {
     return std::ranges::find(handlers, where.options.which, &std::pair<arguments::command, command_handler>::first)->second(where);
-}
-
-bool tolerates_missing_config(arguments::command const which) {
-    return which == arguments::command::statusline || which == arguments::command::stop || which == arguments::command::doctor;
 }
 
 int check_config(std::expected<gateway::config, std::string> const& settings) {
@@ -230,7 +234,7 @@ commands::context make_context(arguments::options const& parsed, std::expected<g
 
 int run(arguments::options const& parsed, char const* const program) {
     auto settings = load_config(parsed.config_path);
-    if (!settings && !tolerates_missing_config(parsed.which)) {
+    if (!settings && !arguments::command_marked<arguments::tolerant>(parsed.which)) {
         return fail(exit_config, settings.error());
     }
     if (parsed.check_config) {
@@ -244,7 +248,7 @@ int run(arguments::options const& parsed, char const* const program) {
 int main(int argc, char** argv) {
     auto const parsed = arguments::parse(std::vector<std::string>(argv + 1, argv + argc));
     if (!parsed) {
-        std::println(stderr, "llmgate: {}\n{}", parsed.error(), usage_text);
+        std::println(stderr, "llmgate: {}\n{}", parsed.error(), arguments::usage_text);
         return exit_usage;
     }
     if (parsed->show_version) {

@@ -1,5 +1,7 @@
 module;
 
+#include <meta>
+
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -352,7 +354,7 @@ inline int run_env(context const& where) {
         std::println(stderr, "llmgate: {}", list.error());
         return exit_failure;
     }
-    if (where.options.as_vscode) {
+    if (where.options.vscode) {
         std::print("{}", json::write(claude::vscode_snippet(*list), 2));
     } else if (where.options.as_json) {
         std::print("{}", json::write(claude::environment_object(*list), 2));
@@ -367,10 +369,10 @@ inline int run_env(context const& where) {
 namespace llmgate::commands::detail {
 
 outcome write_vscode_settings(context const& where, claude::environment_list const& list) {
-    if (!where.options.as_vscode || where.options.vscode_file.empty()) {
+    if (!where.options.vscode || where.options.vscode->empty()) {
         return {};
     }
-    auto const path = std::filesystem::path{process::expand_home(where.options.vscode_file)};
+    auto const path = std::filesystem::path{process::expand_home(*where.options.vscode)};
     auto existing = existing_json(path);
     if (!existing) {
         return std::unexpected{existing.error()};
@@ -557,6 +559,28 @@ void describe_ledger(gateway::config const& settings, doctor::facts& seen) {
     seen.ledger = can_write(path) ? doctor::ledger_state::writable : doctor::ledger_state::not_writable;
 }
 
+template <class Owner>
+consteval std::meta::info member_named(std::string_view const name) {
+    for (auto const candidate : std::meta::nonstatic_data_members_of(^^Owner, std::meta::access_context::current())) {
+        if (std::meta::identifier_of(candidate) == name) {
+            return candidate;
+        }
+    }
+    throw "commands::copy_matching_members: the target has no member with that name";
+}
+
+template <class From, class To>
+    requires std::is_class_v<From> && std::is_class_v<To>
+constexpr void copy_matching_members(From const& from, To& to) {
+    template for (constexpr auto source : std::define_static_array(std::meta::nonstatic_data_members_of(^^From, std::meta::access_context::current()))) {
+        to.[:member_named<To>(std::meta::identifier_of(source)):] = from.[:source:];
+    }
+}
+
+void copy_budget(usage::budget const& from, doctor::facts& seen) {
+    copy_matching_members(from, seen);
+}
+
 doctor::facts gather_facts(context const& where) {
     doctor::facts seen;
     seen.config_error = where.config_error;
@@ -573,9 +597,7 @@ doctor::facts gather_facts(context const& where) {
     seen.settings = profile_state(where);
     describe_credential(where, seen);
     describe_ledger(where.settings, seen);
-    seen.daily_tokens = where.settings.usage.budget.daily_tokens;
-    seen.monthly_tokens = where.settings.usage.budget.monthly_tokens;
-    seen.warn_percent = where.settings.usage.budget.warn_percent;
+    copy_budget(where.settings.usage.budget, seen);
     if (!where.options.offline && seen.copilot_configured && seen.token_valid) {
         probe_network(where.settings, seen);
     }

@@ -2,7 +2,6 @@
 src/async/async.cppm|std-include|#include <coroutine>|pending: Tier 3 H checks whether import std alone suffices for the coroutine machinery on GCC 16.2, else turns this into a justified exception
 src/async/shutdown.cppm|std-include|#include <coroutine>|pending: Tier 3 H checks whether import std alone suffices for the coroutine machinery on GCC 16.2, else turns this into a justified exception
 src/core/contract_violation.cpp|legacy-io|std::fprintf(stderr|pending: Tier 3 H moves the handler to std::println(stderr, ...) if it is safe inside a violation handler
-app/llmgate.cpp|legacy-io|std::istreambuf_iterator<char>{std::cin}|pending: Tier 2 F reads standard input without iostream
 tests/fuzz/driver.cppm|legacy-io|read_all(std::cin)|pending: Tier 3 H reads standard input without iostream
 src/gateway/copilot.cppm|append-chain|out.push_back('%');|pending: Tier 2 D2 builds the percent escape with std::format_to
 tests/support/properties.cppm|unconstrained-template|template <class Property> constexpr bool for_all_sequences|pending: Tier 3 H constrains Property with std::predicate

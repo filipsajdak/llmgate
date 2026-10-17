@@ -1,6 +1,10 @@
+#include <meta>
+
 #include <boost/ut.hpp>
 
 import llmgate.arguments;
+import llmgate.members;
+import llmgate.reflect;
 import std;
 
 namespace {
@@ -43,9 +47,9 @@ const suite arguments_suite = [] {
         auto const env = parse(words({"env", "--json"}));
         auto const snippet = parse(words({"env", "--vscode"}));
 
-        expect(setup->service && setup->dry_run && setup->as_vscode && setup->vscode_file == "/tmp/s.json");
+        expect(setup->service && setup->dry_run && setup->vscode == "/tmp/s.json");
         expect(env->as_json);
-        expect(snippet->as_vscode && snippet->vscode_file.empty());
+        expect(snippet->vscode == "");
     };
 
     "limit_unknown_words_a_second_command_and_a_dangling_config_are_refused"_test = [] {
@@ -121,8 +125,40 @@ const suite arguments_suite = [] {
     "capability_a_vscode_flag_before_a_command_leaves_the_command_alone"_test = [] {
         auto const parsed = parse(words({"--vscode", "env"}));
 
-        expect(parsed->as_vscode && parsed->vscode_file.empty() && parsed->which == command::env);
+        expect(parsed->vscode == "" && parsed->which == command::env);
         expect(parse(words({"--check-config", "--version"}))->check_config);
+    };
+
+    "capability_vscode_is_absent_unless_asked_and_does_not_swallow_a_command"_test = [] {
+        expect(!parse(words({"env"}))->vscode.has_value());
+        expect(parse(words({"setup", "--vscode", "serve"})).error() == "unknown argument: serve");
+        expect(parse(words({"env", "--vscode", "--json"}))->vscode == "" && parse(words({"env", "--vscode", "--json"}))->as_json);
+    };
+
+    "capability_the_usage_text_names_every_command_and_every_flag"_test = [] {
+        for (auto const which : llmgate::reflect::enum_values<command>) {
+            expect(usage_text.contains(llmgate::reflect::enum_name(which))) << llmgate::reflect::enum_name(which);
+        }
+        template for (constexpr auto member : std::define_static_array(std::meta::nonstatic_data_members_of(^^llmgate::arguments::options, std::meta::access_context::current()))) {
+            constexpr auto marker = llmgate::reflect::annotation_of<flag>(member).value_or(flag{});
+            if constexpr (marker.word[0] != '\0') {
+                expect(usage_text.contains(std::string_view{marker.word})) << marker.word;
+            }
+        }
+    };
+
+    "capability_the_usage_text_is_pinned"_test = [] {
+        expect(usage_text ==
+               "usage: llmgate [--config PATH] [serve | login | claude ARGS... | env [--json] [--vscode [FILE]] | setup [--vscode [FILE]] [--service] [--dry-run] | "
+               "statusline | status | stop | usage [--json] [--days N] | doctor [--json] [--offline] | quota [--json]] | --check-config | --version")
+            << usage_text;
+    };
+
+    "capability_only_statusline_stop_and_doctor_tolerate_a_missing_config"_test = [] {
+        for (auto const which : llmgate::reflect::enum_values<command>) {
+            auto const expected = which == command::statusline || which == command::stop || which == command::doctor;
+            expect(command_marked<tolerant>(which) == expected) << llmgate::reflect::enum_name(which);
+        }
     };
 };
 
