@@ -163,27 +163,52 @@ struct pending_op {
 
 namespace llmgate::async::detail {
 
+class spawn_registry {
+public:
+    spawn_registry() = default;
+    spawn_registry(spawn_registry const&) = delete;
+    spawn_registry& operator=(spawn_registry const&) = delete;
+    ~spawn_registry() { destroy_unfinished(); }
+
+    void add(std::coroutine_handle<> frame) { live_.insert(frame); }
+    void remove(std::coroutine_handle<> frame) noexcept { live_.erase(frame); }
+
+private:
+    void destroy_unfinished() noexcept {
+        std::vector<std::coroutine_handle<>> unfinished(live_.begin(), live_.end());
+        for (auto const frame : unfinished) {
+            frame.destroy();
+        }
+    }
+
+    std::set<std::coroutine_handle<>> live_;
+};
+
 struct detached {
     struct promise_type {
+        promise_type(spawn_registry& owner, task<void> const&) : owner_{&owner} {
+            owner_->add(std::coroutine_handle<promise_type>::from_promise(*this));
+        }
+        ~promise_type() { owner_->remove(std::coroutine_handle<promise_type>::from_promise(*this)); }
+
         detached get_return_object() const noexcept { return {}; }
         std::suspend_never initial_suspend() const noexcept { return {}; }
         std::suspend_never final_suspend() const noexcept { return {}; }
         void return_void() const noexcept {}
         void unhandled_exception() const noexcept { std::terminate(); }
+
+    private:
+        spawn_registry* owner_;
     };
 };
 
-inline detached run_detached(task<void> work) {
+inline detached run_detached(spawn_registry&, task<void> work) {
     co_await std::move(work);
 }
 
 }  // namespace llmgate::async::detail
 
 export namespace llmgate::async {
-
-void spawn(task<void> work) {
-    detail::run_detached(std::move(work));
-}
 
 class reactor {
 public:
@@ -269,6 +294,8 @@ public:
         (void)co_await readiness{*this, -1, interest::readable, length};
     }
 
+    void spawn(task<void> work) { detail::run_detached(spawned_, std::move(work)); }
+
     void poll_or_terminate() noexcept;
 
     template <class T>
@@ -292,6 +319,7 @@ private:
         pre(op != nullptr);
 
     int poller_fd_;
+    detail::spawn_registry spawned_;
 };
 
 }  // namespace llmgate::async

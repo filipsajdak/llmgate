@@ -277,7 +277,7 @@ async::task<void> serve(net::listener& listening, Handler& handler, limits bound
         if (!accepted) {
             co_return;
         }
-        async::spawn(serve_connection(std::move(*accepted), handler, bounds));
+        listening.reactor().spawn(serve_connection(std::move(*accepted), handler, bounds));
     }
 }
 

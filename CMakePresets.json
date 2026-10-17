@@ -26,6 +26,46 @@
         "CMAKE_CXX_COMPILER": "afl-g++-fast",
         "CMAKE_BUILD_TYPE": "RelWithDebInfo"
       }
+    },
+    {
+      "name": "coverage",
+      "inherits": "host",
+      "binaryDir": "${sourceDir}/build/coverage",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "--coverage -O0",
+        "CMAKE_EXE_LINKER_FLAGS": "--coverage"
+      }
+    },
+    {
+      "name": "asan",
+      "inherits": "host",
+      "binaryDir": "${sourceDir}/build/asan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fsanitize=float-divide-by-zero,float-cast-overflow,pointer-compare,pointer-subtract -fsanitize-address-use-after-scope -fno-omit-frame-pointer -fno-sanitize-recover=all -D_GLIBCXX_ASSERTIONS -ftrivial-auto-var-init=pattern -g -O1",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined -fsanitize=float-divide-by-zero,float-cast-overflow,pointer-compare,pointer-subtract -fsanitize-address-use-after-scope -fno-omit-frame-pointer -fno-sanitize-recover=all -D_GLIBCXX_ASSERTIONS -ftrivial-auto-var-init=pattern -g -O1"
+      }
+    },
+    {
+      "name": "linux-asan",
+      "inherits": "linux",
+      "binaryDir": "${sourceDir}/build/linux-asan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fsanitize=float-divide-by-zero,float-cast-overflow,pointer-compare,pointer-subtract -fsanitize-address-use-after-scope -fno-omit-frame-pointer -fno-sanitize-recover=all -D_GLIBCXX_ASSERTIONS -ftrivial-auto-var-init=pattern -g -O1",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined -fsanitize=float-divide-by-zero,float-cast-overflow,pointer-compare,pointer-subtract -fsanitize-address-use-after-scope -fno-omit-frame-pointer -fno-sanitize-recover=all -D_GLIBCXX_ASSERTIONS -ftrivial-auto-var-init=pattern -g -O1"
+      }
+    },
+    {
+      "name": "linux-tsan",
+      "inherits": "linux",
+      "binaryDir": "${sourceDir}/build/linux-tsan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer -fno-sanitize-recover=all -D_GLIBCXX_ASSERTIONS -ftrivial-auto-var-init=pattern -g -O1",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer -fno-sanitize-recover=all -D_GLIBCXX_ASSERTIONS -ftrivial-auto-var-init=pattern -g -O1"
+      }
     }
   ],
   "buildPresets": [
@@ -44,6 +84,22 @@
         "fuzz_http_parser",
         "fuzz_sse_parser"
       ]
+    },
+    {
+      "name": "coverage",
+      "configurePreset": "coverage"
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan"
+    },
+    {
+      "name": "linux-asan",
+      "configurePreset": "linux-asan"
+    },
+    {
+      "name": "linux-tsan",
+      "configurePreset": "linux-tsan"
     }
   ],
   "testPresets": [
@@ -76,6 +132,65 @@
       "configurePreset": "linux",
       "output": {
         "outputOnFailure": true
+      },
+      "filter": {
+        "exclude": {
+          "label": "network"
+        }
+      }
+    },
+    {
+      "name": "coverage",
+      "configurePreset": "coverage",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "exclude": {
+          "label": "network"
+        }
+      }
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "ASAN_OPTIONS": "strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1:detect_invalid_pointer_pairs=2:halt_on_error=1",
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1"
+      },
+      "filter": {
+        "exclude": {
+          "label": "network"
+        }
+      }
+    },
+    {
+      "name": "linux-asan",
+      "configurePreset": "linux-asan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "ASAN_OPTIONS": "strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1:detect_invalid_pointer_pairs=2:halt_on_error=1:detect_leaks=1",
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1"
+      },
+      "filter": {
+        "exclude": {
+          "label": "network"
+        }
+      }
+    },
+    {
+      "name": "linux-tsan",
+      "configurePreset": "linux-tsan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "TSAN_OPTIONS": "halt_on_error=1:second_deadlock_stack=1"
       },
       "filter": {
         "exclude": {

@@ -282,6 +282,7 @@ public:
     }
 
     std::uint16_t port() const noexcept { return port_; }
+    async::reactor& reactor() const noexcept { return *reactor_; }
 
 private:
     listener(async::reactor& reactor, unique_fd socket, std::uint16_t const port) noexcept

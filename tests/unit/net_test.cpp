@@ -35,7 +35,7 @@ async::task<void> accept_and_echo(net::listener& server) {
 }
 
 async::task<std::string> round_trip(async::reactor& loop, net::listener& server, std::string message) {
-    async::spawn(accept_and_echo(server));
+    loop.spawn(accept_and_echo(server));
     auto client = co_await net::tcp_stream::connect(loop, std::string{loopback}, server.port());
     if (!client) {
         co_return "connect failed";
@@ -48,7 +48,7 @@ async::task<std::string> round_trip(async::reactor& loop, net::listener& server,
 }
 
 async::task<std::error_code> read_from_silent_peer(async::reactor& loop, net::listener& server) {
-    async::spawn([](net::listener& listening) -> async::task<void> {
+    loop.spawn([](net::listener& listening) -> async::task<void> {
         auto accepted = co_await listening.accept();
         std::array<std::byte, 1> hold{};
         if (accepted) {
@@ -62,7 +62,7 @@ async::task<std::error_code> read_from_silent_peer(async::reactor& loop, net::li
 }
 
 async::task<std::size_t> read_after_peer_closes(async::reactor& loop, net::listener& server) {
-    async::spawn([](net::listener& listening) -> async::task<void> {
+    loop.spawn([](net::listener& listening) -> async::task<void> {
         auto accepted = co_await listening.accept();
         (void)accepted;
     }(server));
@@ -102,7 +102,7 @@ struct watched_read {
 
 async::task<watched_read> read_while_watching_client(async::reactor& loop, net::listener& server, bool const disconnects,
                                                      bool const upstream_replies) {
-    async::spawn(connect_then_disconnect(loop, server.port(), !disconnects));
+    loop.spawn(connect_then_disconnect(loop, server.port(), !disconnects));
     auto accepted = co_await server.accept();
     socket_pair upstream_pair;
     if (upstream_replies) {
@@ -276,4 +276,6 @@ const suite net_suite = [] {
 
 }  // namespace
 
-int main() {}
+int main() {
+    return boost::ut::cfg<>.run() ? 1 : 0;
+}

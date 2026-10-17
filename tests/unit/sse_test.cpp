@@ -123,4 +123,6 @@ const suite sse_suite = [] {
 
 }  // namespace
 
-int main() {}
+int main() {
+    return boost::ut::cfg<>.run() ? 1 : 0;
+}

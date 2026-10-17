@@ -73,7 +73,7 @@ httpio::request_spec post(std::string body) {
 template <class Handler>
 async::task<reply> single_request(async::reactor& loop, net::listener& server, Handler& handler, httpio::request_spec spec,
                                   httpio::limits bounds = {}) {
-    async::spawn(httpio::serve(server, handler, bounds));
+    loop.spawn(httpio::serve(server, handler, bounds));
     reply result;
     auto client = co_await net::tcp_stream::connect(loop, std::string{loopback}, server.port());
     auto const done = co_await httpio::exchange(*client, std::move(spec), collect_into(result));
@@ -89,7 +89,7 @@ reply run_single(Handler& handler, httpio::request_spec spec, httpio::limits bou
 }
 
 async::task<std::pair<reply, reply>> two_requests(async::reactor& loop, net::listener& server, echo_handler& handler) {
-    async::spawn(httpio::serve(server, handler));
+    loop.spawn(httpio::serve(server, handler));
     std::pair<reply, reply> results;
     auto client = co_await net::tcp_stream::connect(loop, std::string{loopback}, server.port());
     (void)co_await httpio::exchange(*client, post("first"), collect_into(results.first));
@@ -99,7 +99,7 @@ async::task<std::pair<reply, reply>> two_requests(async::reactor& loop, net::lis
 
 async::task<std::string> raw_exchange(async::reactor& loop, net::listener& server, echo_handler& handler,
                                       std::string wire, httpio::limits bounds) {
-    async::spawn(httpio::serve(server, handler, bounds));
+    loop.spawn(httpio::serve(server, handler, bounds));
     auto client = co_await net::tcp_stream::connect(loop, std::string{loopback}, server.port());
     (void)co_await client->write_all(std::as_bytes(std::span{wire}));
     std::string answer(32, '\0');
@@ -110,7 +110,7 @@ async::task<std::string> raw_exchange(async::reactor& loop, net::listener& serve
 
 async::task<std::size_t> silent_client(async::reactor& loop, net::listener& server, echo_handler& handler,
                                        httpio::limits bounds) {
-    async::spawn(httpio::serve(server, handler, bounds));
+    loop.spawn(httpio::serve(server, handler, bounds));
     auto client = co_await net::tcp_stream::connect(loop, std::string{loopback}, server.port());
     std::array<std::byte, 1> buffer{};
     auto const received = co_await client->read_some(buffer, {});
@@ -222,4 +222,6 @@ const suite httpio_suite = [] {
 
 }  // namespace
 
-int main() {}
+int main() {
+    return boost::ut::cfg<>.run() ? 1 : 0;
+}
