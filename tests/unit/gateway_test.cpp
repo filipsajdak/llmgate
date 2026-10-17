@@ -223,6 +223,31 @@ httpio::request_spec messages_request(std::string body, std::string target = "/a
 
 constexpr std::int64_t fixed_time = 1760659200;
 
+constexpr std::string_view golden_statistics =
+    R"({"requests":3,"streamed":1,"upstream_failures":0,"upstream_timeouts":0,"client_disconnects":0,"refused":0,"connections_opened":2,"connections_reused":0,"budget_refused":0,"no_provider":0,"repairs":{"duplicate_message_start":2},"providers":{"default":{"attempts":2,"answered":2,"failures":0,"skipped":0,"circuit":"closed"}},"usage":{"today":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"month":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"budget":{"state":"ok","window":"daily","used":18,"limit":100,"percent":18}}})";
+constexpr std::string_view golden_models = R"({"data":[{"type":"model","id":"opus","display_name":"opus","created_at":"1970-01-01T00:00:00Z"}],"has_more":false})";
+constexpr std::string_view golden_error = R"({"type":"error","error":{"type":"invalid_request_error","message":"a \"q\" \n b"}})";
+
+json::value canonical(json::value source) {
+    if (auto* members = std::get_if<json::object>(&source.data)) {
+        for (auto& member : *members) {
+            member.second = canonical(std::move(member.second));
+        }
+        std::ranges::sort(*members, {}, &json::object::value_type::first);
+    } else if (auto* items = std::get_if<json::array>(&source.data)) {
+        for (auto& item : *items) {
+            item = canonical(std::move(item));
+        }
+    }
+    return source;
+}
+
+json::value without_repairs(json::value source) {
+    auto& members = std::get<json::object>(source.data);
+    std::erase_if(members, [](auto const& member) { return member.first == "repairs"; });
+    return source;
+}
+
 std::string chat_with_session(std::string_view const model, bool const stream) {
     return std::format(R"({{"model":"{}","max_tokens":8,"stream":{},"metadata":{{"user_id":"user_ab_account_cd_session_5f3a-90"}},"messages":[{{"role":"user","content":"hi"}}]}})", model, stream);
 }
@@ -478,6 +503,47 @@ const suite gateway_suite = [] {
 
         expect(second.status == 200);
         expect(w.gateway.counters().budget_refused == 0_u);
+    };
+
+    "capability_the_statistics_wire_format_keeps_every_key_and_value"_test = [] {
+        world w{"upstream-token", "", std::nullopt, "", {.budget = {.daily_tokens = 100}}};
+        w.gateway.use_clock([] { return fixed_time; });
+        w.upstream.mode = behaviour::sse_duplicate_start;
+        (void)w.ask(messages_request(chat("opus", true)));
+        w.upstream.mode = behaviour::json_usage;
+        (void)w.ask(messages_request(chat("opus", false)));
+        auto stats = messages_request("");
+        stats.method = "GET";
+        stats.target = "/llmgate/stats";
+
+        auto const body = w.ask(std::move(stats)).body;
+
+        auto actual = json::parse(body);
+        auto golden = json::parse(golden_statistics);
+        expect(actual.has_value() && golden.has_value());
+        expect(json::write(without_repairs(canonical(*actual))) == json::write(without_repairs(canonical(*golden))));
+        auto const* repairs = json::at(*actual, {"repairs", "duplicate_message_start"});
+        expect(repairs != nullptr && json::count_at(*actual, {"repairs", "duplicate_message_start"}) == std::optional<std::uint64_t>{2});
+        for (auto const key : {"requests", "streamed", "upstream_failures", "upstream_timeouts", "client_disconnects", "refused", "connections_opened",
+                               "connections_reused", "budget_refused", "no_provider", "repairs", "providers", "usage"}) {
+            expect(json::at(*actual, {key}) != nullptr) << key;
+        }
+    };
+
+    "capability_the_models_wire_format_keeps_every_key_and_value"_test = [] {
+        world w;
+        auto request = messages_request("");
+        request.method = "GET";
+        request.target = "/anthropic/v1/models";
+
+        auto const body = w.ask(std::move(request)).body;
+
+        expect(body == golden_models);
+    };
+
+    "capability_the_error_body_wire_format_is_unchanged"_test = [] {
+        expect(routing::error_json("invalid_request_error", "a \"q\" \n b") == golden_error);
+        expect(routing::error_reply(404, "not_found_error", "unknown path").body == R"({"type":"error","error":{"type":"not_found_error","message":"unknown path"}})");
     };
 
     "capability_the_statistics_endpoint_reports_todays_usage_and_the_budget"_test = [] {
