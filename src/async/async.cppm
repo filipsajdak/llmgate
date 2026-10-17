@@ -194,7 +194,7 @@ private:
         pre(fd >= 0)
         pre(op != nullptr);
 
-    int kqueue_fd_;
+    int poller_fd_;
 };
 
 }  // namespace llmgate::async

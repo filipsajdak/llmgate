@@ -52,6 +52,11 @@ private:
 namespace llmgate::net::detail {
 
 constexpr std::size_t receive_buffer_bytes = 16384;
+#ifdef MSG_NOSIGNAL
+constexpr int send_flags = MSG_NOSIGNAL;
+#else
+constexpr int send_flags = 0;
+#endif
 
 struct addrinfo_deleter {
     void operator()(addrinfo* list) const noexcept { ::freeaddrinfo(list); }
@@ -215,7 +220,7 @@ private:
         auto const pending = session_.take_outgoing();
         std::span<std::byte const> remaining{pending};
         while (!remaining.empty()) {
-            auto const sent = ::send(socket_.get(), remaining.data(), remaining.size(), 0);
+            auto const sent = ::send(socket_.get(), remaining.data(), remaining.size(), detail::send_flags);
             if (sent >= 0) {
                 remaining = remaining.subspan(static_cast<std::size_t>(sent));
             } else if (detail::would_block(errno)) {

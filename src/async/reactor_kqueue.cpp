@@ -21,19 +21,19 @@ std::error_code last_error() noexcept {
 
 }  // namespace
 
-reactor::reactor() : kqueue_fd_{::kqueue()} {
-    contract_assert(kqueue_fd_ >= 0);
+reactor::reactor() : poller_fd_{::kqueue()} {
+    contract_assert(poller_fd_ >= 0);
 }
 
 reactor::~reactor() {
-    ::close(kqueue_fd_);
+    ::close(poller_fd_);
 }
 
 std::error_code reactor::arm(int const fd, interest const what, detail::pending_op* const op) noexcept {
     struct kevent change;
     auto const filter = what == interest::readable ? EVFILT_READ : EVFILT_WRITE;
     EV_SET(&change, static_cast<uintptr_t>(fd), filter, EV_ADD | EV_ONESHOT, 0, 0, op);
-    if (::kevent(kqueue_fd_, &change, 1, nullptr, 0, nullptr) < 0) {
+    if (::kevent(poller_fd_, &change, 1, nullptr, 0, nullptr) < 0) {
         return last_error();
     }
     return {};
@@ -41,7 +41,7 @@ std::error_code reactor::arm(int const fd, interest const what, detail::pending_
 
 void reactor::poll_or_terminate() noexcept {
     std::array<struct kevent, events_per_poll> events;
-    auto const count = ::kevent(kqueue_fd_, nullptr, 0, events.data(), static_cast<int>(events.size()), nullptr);
+    auto const count = ::kevent(poller_fd_, nullptr, 0, events.data(), static_cast<int>(events.size()), nullptr);
     if (count < 0) {
         if (errno != EINTR) {
             std::terminate();

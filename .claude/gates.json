@@ -1,0 +1,7 @@
+{
+  "gates": [
+    {"name": "cpp",
+     "source_globs": ["src/**/*.cpp", "src/**/*.cppm", "tests/**/*.cpp", "**/CMakeLists.txt", "**/*.cmake", "CMakePresets.json"],
+     "gate_commands": ["cmake --build --preset host\\b", "ctest --preset host\\b", "ops/ci/linux\\.sh"]}
+  ]
+}
