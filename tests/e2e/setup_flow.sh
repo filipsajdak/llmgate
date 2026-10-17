@@ -143,7 +143,7 @@ class H(http.server.BaseHTTPRequestHandler):
 http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 PY
 squatter=$!
-sleep 1
+while ! python3 -c "import socket; socket.create_connection(('127.0.0.1',$port),1)" 2>/dev/null; do sleep 0.1; done
 if "$binary" --config "$config" claude --never 2>"$work/err3.txt"; then rc=0; else rc=$?; fi
 kill $squatter 2>/dev/null || true
 check sh -c "[ $rc -ne 0 ] && grep -q 'not this user' '$work/err3.txt' && ! grep -q 'x-api-key\\|authorization' '$work/squat.log'"
