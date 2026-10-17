@@ -119,9 +119,19 @@ int serve(gateway::config settings) {
     return exit_runtime;
 }
 
+std::optional<gateway::copilot_config> copilot_login_target(gateway::config const& settings) {
+    for (auto const& entry : gateway::effective_providers(settings)) {
+        if (entry.second.copilot && !entry.second.copilot->token_file.empty()) {
+            return entry.second.copilot;
+        }
+    }
+    return std::nullopt;
+}
+
 int login(gateway::config const& settings) {
-    if (!settings.copilot || settings.copilot->token_file.empty()) {
-        std::println(stderr, "llmgate: set copilot.token_file in the configuration first");
+    auto const target = copilot_login_target(settings);
+    if (!target) {
+        std::println(stderr, "llmgate: set copilot.token_file (or a provider's copilot.token_file) in the configuration first");
         return exit_config;
     }
     async::reactor loop;
@@ -129,7 +139,7 @@ int login(gateway::config const& settings) {
     if (!tls_context) {
         return exit_runtime;
     }
-    auto const code = loop.run(copilot::request_device_code(loop, *tls_context, *settings.copilot));
+    auto const code = loop.run(copilot::request_device_code(loop, *tls_context, *target));
     if (!code) {
         std::println(stderr, "llmgate: cannot reach GitHub: {}", code.error().message());
         return exit_runtime;
@@ -137,16 +147,16 @@ int login(gateway::config const& settings) {
     std::println("Open {} and enter the code {}", code->verification_uri, code->user_code);
     std::println("Waiting for you to authorise...");
     std::fflush(stdout);
-    auto const token = loop.run(copilot::wait_for_authorisation(loop, *tls_context, *settings.copilot, *code));
+    auto const token = loop.run(copilot::wait_for_authorisation(loop, *tls_context, *target, *code));
     if (!token) {
         std::println(stderr, "llmgate: login failed: {}", token.error().message());
         return exit_runtime;
     }
-    if (auto const saved = copilot::save_oauth_token(settings.copilot->token_file, *token); !saved) {
+    if (auto const saved = copilot::save_oauth_token(target->token_file, *token); !saved) {
         std::println(stderr, "llmgate: cannot save the token: {}", saved.error().message());
         return exit_runtime;
     }
-    std::println("Logged in. The token is stored in {}", settings.copilot->token_file);
+    std::println("Logged in. The token is stored in {}", target->token_file);
     return 0;
 }
 
