@@ -9,7 +9,7 @@ Clean-room C++26 gateway (GCC 16.2, named modules, `import std`, `-freflection`)
 - **Modules only.** `import std;` in every `.cppm` and `.cpp`; the global module fragment holds C, POSIX, OpenSSL, `<meta>` and `<contracts>` headers only.
 - **Text.** `std::format`, `std::print`, `std::println` at run time; `text::append_all` in constexpr code. No iostream, no `printf`, no chains of `+=` or `push_back`.
 - **constexpr by default**, with a compile-time check beside it (`*_holds`, corpus and exhaustive targets). **Structural `static_assert`s** state each type property once. **Contracts** guard API boundaries; `std::expected` carries expected failures.
-- **Braced construction** (designated initializers, initializer lists), views and moves instead of copies, named constants instead of magic numbers, mp-units for durations and sizes.
+- **Braced construction** (designated initializers, initializer lists), views and moves instead of copies, named constants instead of magic numbers, `std::chrono` for durations (mp-units adoption is still open, so do not introduce it piecemeal).
 - Skill `cpp26-idioms` has the replacements.
 
 ## Comments
