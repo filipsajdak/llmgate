@@ -36,9 +36,9 @@ namespace llmgate::tls::detail {
 constexpr std::string_view post_quantum_groups = "X25519MLKEM768:SecP256r1MLKEM768";
 constexpr std::string_view classical_groups = "X25519:secp256r1:secp384r1";
 constexpr std::string_view post_quantum_marker = "MLKEM";
-constexpr std::array<char const*, 3> ca_bundle_candidates = {
-    "/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"};
-constexpr std::array<unsigned char, 9> alpn_http11 = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+constexpr auto ca_bundle_candidates = std::to_array<char const*>(
+    {"/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"});
+constexpr auto alpn_http11 = std::to_array<unsigned char>({8, 'h', 't', 't', 'p', '/', '1', '.', '1'});
 constexpr std::size_t error_text_size = 256;
 
 struct ssl_ctx_deleter {

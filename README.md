@@ -13,6 +13,23 @@ ctest --preset host            # unit tests
 ctest --preset host-network    # real TLS to api.anthropic.com and api.githubcopilot.com
 ```
 
+## Reentrancy and interleaving checks
+
+TSan and ASan cannot see bugs that need two coroutines to interleave on one thread. These checks do:
+
+| Technique | What it catches | Where |
+|---|---|---|
+| Seeded chaos reactor (`reactor{seed}`) | Shuffles the order in which ready I/O completions and posted resumptions run, so resume order is an explored dimension and any failure replays from its seed | `src/async/async.cppm` |
+| `reactor::post` and `yield` | Nothing resumes another coroutine inline (the mutex hands over through the queue), which removes a class of reentrancy and gives the chaos reactor its hook | `src/async/async.cppm` |
+| Refused duplicate waits | A second waiter on the same descriptor and direction gets `device_or_resource_busy` instead of silently replacing the first | `waiter_table` |
+| Busy flags and async mutex | Concurrent readers get `operation_in_progress`; concurrent writers are serialised so their bytes never interleave; destroying a stream with a pending operation aborts with a message | `src/net/net.cppm`, `src/http/io.cppm` |
+| `chaos::stream` | Random short reads and random yields around every I/O call | `tests/support/chaos.cppm` |
+| Seed-sweep scenarios | Concurrent writers, concurrent HTTP clients and a full-duplex TLS echo run under 136 seeds; a failure prints the seed | `tests/unit/schedule_test.cpp` |
+| AFL++ schedule harness | Coverage-guided search over seeds and scenarios | `tests/fuzz/schedule` |
+| `tools/coroutine_lint.py --strict src` | Coroutines that take references or views (clang-tidy CP.53 cannot parse this code); every allowed case carries its reason in `tools/coroutine_lint_allow.txt` | `tools/` |
+
+The tests were validated by reintroducing the defects they target: an epoll mask that ignores writers hangs `async_test`, and a reactor without the duplicate-wait refusal fails its test.
+
 ## CRAP gate
 
 `tools/coverage.sh` builds with coverage, runs the unit tests and fails when any function has CRAP above 8 (CRAP = CC^2 * (1 - coverage)^3 + CC, complexity from lizard, line coverage from gcovr, a line counts as covered when any template instantiation ran it). Last run: 215 functions, 0 above 8. The epoll backend is not instrumented by the macOS run, so it is held to complexity 8 alone.

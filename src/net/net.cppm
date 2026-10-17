@@ -1,6 +1,7 @@
 module;
 
 #include <cerrno>
+#include <cstdio>
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -26,35 +27,30 @@ struct read_options {
     int watch = -1;
 };
 
-class unique_fd {
-public:
-    unique_fd() noexcept = default;
-    explicit unique_fd(int const fd) noexcept : fd_{fd} {}
-    unique_fd(unique_fd&& other) noexcept : fd_{std::exchange(other.fd_, -1)} {}
-    unique_fd& operator=(unique_fd&& other) noexcept {
-        if (this != &other) {
-            reset();
-            fd_ = std::exchange(other.fd_, -1);
-        }
-        return *this;
-    }
-    unique_fd(unique_fd const&) = delete;
-    unique_fd& operator=(unique_fd const&) = delete;
-    ~unique_fd() { reset(); }
+struct fd_handle {
+    int value = -1;
 
-    int get() const noexcept { return fd_; }
-    explicit operator bool() const noexcept { return fd_ >= 0; }
-
-private:
-    void reset() noexcept {
-        if (fd_ >= 0) {
-            ::close(fd_);
-        }
-        fd_ = -1;
-    }
-
-    int fd_ = -1;
+    fd_handle() = default;
+    constexpr fd_handle(std::nullptr_t) noexcept {}
+    constexpr explicit fd_handle(int const descriptor) noexcept : value{descriptor} {}
+    constexpr explicit operator bool() const noexcept { return value >= 0; }
+    friend constexpr bool operator==(fd_handle const&, fd_handle const&) = default;
 };
+
+struct fd_closer {
+    using pointer = fd_handle;
+    void operator()(fd_handle const handle) const noexcept { ::close(handle.value); }
+};
+
+using unique_fd = std::unique_ptr<int, fd_closer>;
+
+inline unique_fd adopt(int const descriptor) noexcept {
+    return unique_fd{fd_handle{descriptor}};
+}
+
+constexpr int raw(unique_fd const& owner) noexcept {
+    return owner.get().value;
+}
 
 template <class Stream>
 concept byte_stream = requires(Stream& stream, std::span<std::byte> into, std::span<std::byte const> from, read_options options) {
@@ -73,6 +69,11 @@ constexpr int send_flags = MSG_NOSIGNAL;
 #else
 constexpr int send_flags = 0;
 #endif
+
+[[noreturn]] void abort_destroyed_while_busy(std::string_view const what) noexcept {
+    std::println(stderr, "llmgate: {} destroyed while an operation was still pending", what);
+    std::terminate();
+}
 
 struct addrinfo_deleter {
     void operator()(addrinfo* list) const noexcept { ::freeaddrinfo(list); }
@@ -184,32 +185,32 @@ async::task<result_void> send_all(async::reactor& reactor, int const fd, std::sp
 
 async::task<std::expected<unique_fd, std::error_code>> connect_candidate(async::reactor& reactor,
                                                                          addrinfo const& candidate) {
-    unique_fd socket{::socket(candidate.ai_family, candidate.ai_socktype, candidate.ai_protocol)};
+    auto socket = adopt(::socket(candidate.ai_family, candidate.ai_socktype, candidate.ai_protocol));
     if (!socket) {
         co_return std::unexpected{last_error()};
     }
-    if (auto const error = make_nonblocking(socket.get())) {
+    if (auto const error = make_nonblocking(raw(socket))) {
         co_return std::unexpected{error};
     }
-    if (::connect(socket.get(), candidate.ai_addr, candidate.ai_addrlen) == 0) {
+    if (::connect(raw(socket), candidate.ai_addr, candidate.ai_addrlen) == 0) {
         co_return socket;
     }
     if (errno != EINPROGRESS) {
         co_return std::unexpected{last_error()};
     }
-    if (auto const error = co_await reactor.writable(socket.get())) {
+    if (auto const error = co_await reactor.writable(raw(socket))) {
         co_return std::unexpected{error};
     }
     int pending = 0;
     socklen_t length = sizeof pending;
-    ::getsockopt(socket.get(), SOL_SOCKET, SO_ERROR, &pending, &length);
+    ::getsockopt(raw(socket), SOL_SOCKET, SO_ERROR, &pending, &length);
     if (pending != 0) {
         co_return std::unexpected{std::error_code{pending, std::system_category()}};
     }
     co_return socket;
 }
 
-async::task<std::expected<unique_fd, std::error_code>> tcp_connect(async::reactor& reactor, std::string const& host,
+async::task<std::expected<unique_fd, std::error_code>> tcp_connect(async::reactor& reactor, std::string host,
                                                                    std::uint16_t const port) {
     auto const hints = stream_hints();
     addrinfo* found = nullptr;
@@ -235,7 +236,15 @@ export namespace llmgate::net {
 
 class tcp_stream {
 public:
-    tcp_stream(async::reactor& reactor, unique_fd socket) noexcept : reactor_{&reactor}, socket_{std::move(socket)} {}
+    tcp_stream(async::reactor& reactor, unique_fd socket) noexcept
+        : reactor_{&reactor}, socket_{std::move(socket)}, write_lock_{reactor} {}
+    tcp_stream(tcp_stream&&) noexcept = default;
+    tcp_stream& operator=(tcp_stream&&) noexcept = default;
+    ~tcp_stream() {
+        if (reading_ || write_lock_.in_use()) {
+            detail::abort_destroyed_while_busy("tcp_stream");
+        }
+    }
 
     static async::task<std::expected<tcp_stream, std::error_code>> connect(async::reactor& reactor, std::string host,
                                                                            std::uint16_t const port) {
@@ -247,19 +256,26 @@ public:
     }
 
     async::task<result_size> read_some(std::span<std::byte> into, read_options const options) {
-        return detail::receive_some(*reactor_, socket_.get(), into, options);
+        if (reading_) {
+            co_return std::unexpected{std::make_error_code(std::errc::operation_in_progress)};
+        }
+        async::exclusive_scope const exclusive{reading_};
+        co_return co_await detail::receive_some(*reactor_, raw(socket_), into, options);
     }
 
     async::task<result_void> write_all(std::span<std::byte const> data) {
-        return detail::send_all(*reactor_, socket_.get(), data);
+        auto const turn = co_await write_lock_.lock();
+        co_return co_await detail::send_all(*reactor_, raw(socket_), data);
     }
 
-    int descriptor() const noexcept { return socket_.get(); }
+    int descriptor() const noexcept { return raw(socket_); }
     unique_fd release() && noexcept { return std::move(socket_); }
 
 private:
     async::reactor* reactor_;
     unique_fd socket_;
+    async::mutex write_lock_;
+    bool reading_ = false;
 };
 
 class listener {
@@ -272,30 +288,30 @@ public:
         if (::inet_pton(AF_INET, address.c_str(), &local.sin_addr) != 1) {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
-        unique_fd socket{::socket(AF_INET, SOCK_STREAM, 0)};
+        auto socket = adopt(::socket(AF_INET, SOCK_STREAM, 0));
         if (!socket) {
             return std::unexpected{detail::last_error()};
         }
         int const enabled = 1;
-        ::setsockopt(socket.get(), SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof enabled);
-        if (auto const error = detail::make_nonblocking(socket.get())) {
+        ::setsockopt(raw(socket), SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof enabled);
+        if (auto const error = detail::make_nonblocking(raw(socket))) {
             return std::unexpected{error};
         }
-        if (::bind(socket.get(), reinterpret_cast<sockaddr const*>(&local), sizeof local) < 0 ||
-            ::listen(socket.get(), detail::listen_backlog) < 0) {
+        if (::bind(raw(socket), reinterpret_cast<sockaddr const*>(&local), sizeof local) < 0 ||
+            ::listen(raw(socket), detail::listen_backlog) < 0) {
             return std::unexpected{detail::last_error()};
         }
         sockaddr_in bound{};
         socklen_t length = sizeof bound;
-        ::getsockname(socket.get(), reinterpret_cast<sockaddr*>(&bound), &length);
+        ::getsockname(raw(socket), reinterpret_cast<sockaddr*>(&bound), &length);
         return listener{reactor, std::move(socket), ntohs(bound.sin_port)};
     }
 
     async::task<std::expected<tcp_stream, std::error_code>> accept() {
         for (;;) {
-            unique_fd client{::accept(socket_.get(), nullptr, nullptr)};
+            auto client = adopt(::accept(raw(socket_), nullptr, nullptr));
             if (client) {
-                if (auto const error = detail::make_nonblocking(client.get())) {
+                if (auto const error = detail::make_nonblocking(raw(client))) {
                     co_return std::unexpected{error};
                 }
                 co_return tcp_stream{*reactor_, std::move(client)};
@@ -306,7 +322,7 @@ public:
             if (!detail::would_block(errno)) {
                 co_return std::unexpected{detail::last_error()};
             }
-            if (auto const error = co_await reactor_->readable(socket_.get())) {
+            if (auto const error = co_await reactor_->readable(raw(socket_))) {
                 co_return std::unexpected{error};
             }
         }
@@ -359,11 +375,16 @@ public:
     }
 
     async::task<result_void> close() {
+        auto const turn = co_await write_lock_.lock();
         session_.shutdown();
-        co_return co_await flush();
+        co_return co_await flush_locked();
     }
 
     async::task<result_size> read_some(std::span<std::byte> destination, read_options const options) {
+        if (reading_) {
+            co_return std::unexpected{std::make_error_code(std::errc::operation_in_progress)};
+        }
+        async::exclusive_scope const exclusive{reading_};
         for (;;) {
             auto const result = session_.read(destination);
             if (!result) {
@@ -385,26 +406,35 @@ public:
     }
 
     async::task<result_void> write_all(std::span<std::byte const> data) {
+        auto const turn = co_await write_lock_.lock();
         while (!data.empty()) {
             auto const result = session_.write(data);
             if (!result) {
                 co_return std::unexpected{result.error()};
             }
             data = data.subspan(result->bytes);
-            if (auto const sent = co_await flush(); !sent) {
+            if (auto const sent = co_await flush_locked(); !sent) {
                 co_return sent;
             }
         }
         co_return result_void{};
     }
 
+    tls_stream(tls_stream&&) noexcept = default;
+    tls_stream& operator=(tls_stream&&) noexcept = default;
+    ~tls_stream() {
+        if (reading_ || write_lock_.in_use()) {
+            detail::abort_destroyed_while_busy("tls_stream");
+        }
+    }
+
     tls::connection const& session() const noexcept { return session_; }
-    int descriptor() const noexcept { return socket_.get(); }
+    int descriptor() const noexcept { return raw(socket_); }
 
 private:
     tls_stream(async::reactor& reactor, unique_fd socket, tls::connection session)
         : reactor_{&reactor}, socket_{std::move(socket)}, session_{std::move(session)},
-          buffer_(detail::receive_buffer_bytes) {}
+          buffer_(detail::receive_buffer_bytes), write_lock_{reactor} {}
 
     async::task<result_void> complete_handshake() {
         for (;;) {
@@ -425,12 +455,17 @@ private:
     }
 
     async::task<result_void> flush() {
+        auto const turn = co_await write_lock_.lock();
+        co_return co_await flush_locked();
+    }
+
+    async::task<result_void> flush_locked() {
         auto const pending = session_.take_outgoing();
-        co_return co_await detail::send_all(*reactor_, socket_.get(), pending);
+        co_return co_await detail::send_all(*reactor_, raw(socket_), pending);
     }
 
     async::task<result_void> fill(read_options const options) {
-        auto const received = co_await detail::receive_some(*reactor_, socket_.get(), buffer_, options);
+        auto const received = co_await detail::receive_some(*reactor_, raw(socket_), buffer_, options);
         if (!received) {
             co_return std::unexpected{received.error()};
         }
@@ -445,6 +480,8 @@ private:
     unique_fd socket_;
     tls::connection session_;
     std::vector<std::byte> buffer_;
+    async::mutex write_lock_;
+    bool reading_ = false;
 };
 
 static_assert(byte_stream<tcp_stream>);

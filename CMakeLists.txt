@@ -85,6 +85,18 @@ target_link_libraries(tls_stream_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 llmgate_test(httpio_test unit llmgate_httpio)
 llmgate_test(tls_network_test network llmgate_net)
 
+add_library(llmgate_chaos)
+target_sources(llmgate_chaos PUBLIC FILE_SET CXX_MODULES BASE_DIRS tests/support FILES tests/support/chaos.cppm)
+target_link_libraries(llmgate_chaos PUBLIC llmgate_flags llmgate_contracts llmgate_net)
+
+add_library(llmgate_scenarios)
+target_sources(llmgate_scenarios PUBLIC FILE_SET CXX_MODULES BASE_DIRS tests/support FILES tests/support/scenarios.cppm)
+target_include_directories(llmgate_scenarios PRIVATE tests)
+target_link_libraries(llmgate_scenarios PUBLIC llmgate_flags llmgate_contracts llmgate_chaos llmgate_httpio llmgate_net llmgate_tls
+  OpenSSL::SSL OpenSSL::Crypto)
+
+llmgate_test(schedule_test unit llmgate_scenarios)
+
 add_library(llmgate_fuzz_driver)
 target_sources(llmgate_fuzz_driver PUBLIC FILE_SET CXX_MODULES BASE_DIRS tests/fuzz FILES tests/fuzz/driver.cppm)
 target_link_libraries(llmgate_fuzz_driver PUBLIC llmgate_flags)
@@ -98,3 +110,4 @@ endfunction()
 
 llmgate_fuzz(http_parser llmgate_http)
 llmgate_fuzz(sse_parser llmgate_sse)
+llmgate_fuzz(schedule llmgate_scenarios)

@@ -66,6 +66,49 @@ task<reactor::race_result> race_two(reactor& loop, int const first, int const se
     co_return co_await loop.readable_or_other(first, second, limit);
 }
 
+task<std::error_code> wait_readable_then_record(reactor& loop, int const fd, std::vector<std::string>& log, std::string name) {
+    auto const outcome = co_await loop.readable(fd, long_wait);
+    log.push_back(name + (outcome ? ":error" : ":ready"));
+    co_return outcome;
+}
+
+task<void> record_readable(reactor& loop, int const fd, std::vector<std::string>& log, std::string name) {
+    (void)co_await wait_readable_then_record(loop, fd, log, std::move(name));
+}
+
+task<void> record_writable(reactor& loop, int const fd, std::vector<std::string>& log, std::string name) {
+    auto const outcome = co_await loop.writable(fd, long_wait);
+    log.push_back(name + (outcome ? ":error" : ":ready"));
+}
+
+task<void> locked_section(reactor& loop, mutex& gate, int const id, std::vector<int>& order, int& inside, int& most_inside) {
+    auto const turn = co_await gate.lock();
+    ++inside;
+    most_inside = std::max(most_inside, inside);
+    order.push_back(id);
+    co_await loop.yield();
+    co_await loop.sleep(duration{1});
+    --inside;
+}
+
+task<void> record_turns(reactor& loop, int const id, int const turns, std::vector<int>& order) {
+    for (int turn = 0; turn < turns; ++turn) {
+        order.push_back(id);
+        co_await loop.yield();
+    }
+}
+
+std::vector<int> resume_order(std::optional<std::uint64_t> const seed) {
+    reactor loop{seed};
+    std::vector<int> order;
+    constexpr int tasks = 6;
+    for (int id = 0; id < tasks; ++id) {
+        loop.spawn(record_turns(loop, id, 3, order));
+    }
+    loop.run(loop.sleep(duration{5}));
+    return order;
+}
+
 task<void> write_then_flag(bool& flag) {
     flag = true;
     co_return;
@@ -203,6 +246,85 @@ const suite async_suite = [] {
 
         expect(static_cast<bool>(failed.error));
         expect(!later);
+    };
+
+    "limit_a_second_waiter_on_the_same_descriptor_and_direction_is_refused"_test = [] {
+        reactor loop;
+        socket_pair pair;
+        std::vector<std::string> log;
+        loop.spawn(record_readable(loop, pair.fds[0], log, "first"));
+
+        auto const second = loop.run(wait_readable_for(loop, pair.fds[0], long_wait));
+        ::write(pair.fds[1], "x", 1);
+        loop.run(loop.sleep(short_wait));
+
+        expect(second == std::errc::device_or_resource_busy);
+        expect(log == std::vector<std::string>{"first:ready"});
+    };
+
+    "capability_a_reader_and_a_writer_wait_on_one_descriptor_together"_test = [] {
+        reactor loop;
+        socket_pair pair;
+        std::vector<std::string> log;
+        loop.spawn(record_readable(loop, pair.fds[0], log, "reader"));
+        loop.spawn(record_writable(loop, pair.fds[0], log, "writer"));
+        loop.run(loop.sleep(short_wait));
+        ::write(pair.fds[1], "x", 1);
+        loop.run(loop.sleep(short_wait));
+
+        expect(log == std::vector<std::string>{"writer:ready", "reader:ready"});
+    };
+
+    "limit_a_waiter_that_finishes_frees_its_claim_for_the_next_one"_test = [] {
+        reactor loop;
+        socket_pair pair;
+        ::write(pair.fds[1], "x", 1);
+
+        auto const first = loop.run(wait_readable_for(loop, pair.fds[0], long_wait));
+        std::array<char, 1> drain{};
+        ::read(pair.fds[0], drain.data(), 1);
+        ::write(pair.fds[1], "y", 1);
+        auto const second = loop.run(wait_readable_for(loop, pair.fds[0], long_wait));
+
+        expect(!first);
+        expect(!second);
+    };
+
+    "capability_the_mutex_admits_one_holder_at_a_time_in_arrival_order"_test = [] {
+        reactor loop;
+        mutex gate{loop};
+        std::vector<int> order;
+        int inside = 0;
+        int most_inside = 0;
+        for (int id = 0; id < 5; ++id) {
+            loop.spawn(locked_section(loop, gate, id, order, inside, most_inside));
+        }
+
+        loop.run(loop.sleep(duration{100}));
+
+        expect(most_inside == 1);
+        expect(order == std::vector<int>{0, 1, 2, 3, 4});
+    };
+
+    "capability_yield_lets_other_ready_work_run_between_turns"_test = [] {
+        auto const order = resume_order(std::nullopt);
+
+        expect(order.size() == 18_u);
+        expect(order.front() == 0);
+        expect(std::ranges::count(order, 3) == 3);
+    };
+
+    "capability_the_same_chaos_seed_replays_the_same_resume_order"_test = [] {
+        expect(resume_order(7) == resume_order(7));
+    };
+
+    "capability_different_chaos_seeds_explore_different_resume_orders"_test = [] {
+        std::set<std::vector<int>> distinct;
+        for (std::uint64_t seed = 1; seed <= 16; ++seed) {
+            distinct.insert(resume_order(seed));
+        }
+
+        expect(distinct.size() > 4_u);
     };
 
     "limit_readable_on_an_unopened_descriptor_reports_the_error_as_a_value"_test = [] {

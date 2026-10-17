@@ -1,0 +1,18 @@
+src/async/async.cppm|drive|out|run() owns the optional and loops until the driver finishes
+src/async/async.cppm|drive|finished|run() owns the flag and loops until the driver finishes
+src/async/async.cppm|run_detached|spawn_registry|the registry is a reactor member that outlives every spawned frame
+src/http/io.cppm|end_of_stream|track|private helper awaited immediately by read(), whose frame owns both referents
+src/http/io.cppm|end_of_stream|done|private helper awaited immediately by read(), whose frame owns both referents
+src/http/io.cppm|send|fields|awaited in the full expression that builds the argument, so a temporary lives long enough
+src/http/io.cppm|send|body|awaited in the full expression that builds the argument, so a temporary lives long enough
+src/http/io.cppm|begin_stream|fields|awaited in the full expression that builds the argument, so a temporary lives long enough
+src/http/io.cppm|write_chunk|bytes|zero-copy IO buffer that the caller keeps alive across the await
+src/http/io.cppm|dispatch|incoming|awaited immediately by serve_connection, whose frame owns the request
+src/net/net.cppm|await_data|watch|private helper awaited immediately by receive_some, whose frame owns the counter
+src/net/net.cppm|receive_some|into|zero-copy IO buffer that the caller keeps alive across the await
+src/net/net.cppm|send_all|remaining|zero-copy IO buffer that the caller keeps alive across the await
+src/net/net.cppm|connect_candidate|candidate|awaited immediately by tcp_connect, whose frame owns the address list
+src/net/net.cppm|read_some|into|zero-copy IO buffer that the caller keeps alive across the await
+src/net/net.cppm|read_some|destination|zero-copy IO buffer that the caller keeps alive across the await
+src/net/net.cppm|write_all|data|zero-copy IO buffer that the caller keeps alive across the await
+tests/|*|*|test coroutines borrow fixtures from the scenario frame, which waits for them

@@ -40,12 +40,12 @@ constexpr bool is_token_char(char const c) noexcept {
            std::string_view{"!#$%&'*+-.^_`|~"}.contains(c);
 }
 
-bool valid_field(http::header const& field) noexcept {
+constexpr bool valid_field(http::header const& field) noexcept {
     auto const clean_value = std::ranges::none_of(field.value, [](char const c) { return c == '\r' || c == '\n' || c == '\0'; });
     return !field.name.empty() && std::ranges::all_of(field.name, is_token_char) && clean_value;
 }
 
-constexpr std::array<std::pair<int, std::string_view>, 8> reason_phrases{{
+constexpr auto reason_phrases = std::to_array<std::pair<int, std::string_view>>({
     {200, "OK"},
     {400, "Bad Request"},
     {404, "Not Found"},
@@ -54,9 +54,9 @@ constexpr std::array<std::pair<int, std::string_view>, 8> reason_phrases{{
     {500, "Internal Server Error"},
     {502, "Bad Gateway"},
     {504, "Gateway Timeout"},
-}};
+});
 
-std::string_view reason_phrase(int const status) noexcept {
+constexpr std::string_view reason_phrase(int const status) noexcept {
     auto const match = std::ranges::find(reason_phrases, status, &std::pair<int, std::string_view>::first);
     return match == reason_phrases.end() ? std::string_view{"Status"} : match->second;
 }
@@ -71,9 +71,13 @@ std::expected<void, std::error_code> append_fields(std::string& out, http::heade
     return {};
 }
 
-std::span<std::byte const> as_bytes(std::string const& text) noexcept {
+constexpr std::span<std::byte const> as_bytes(std::string const& text) noexcept {
     return std::as_bytes(std::span{text});
 }
+
+static_assert(reason_phrase(404) == "Not Found");
+static_assert(reason_phrase(299) == "Status");
+static_assert(is_token_char('-') && !is_token_char(':') && !is_token_char(' '));
 
 }  // namespace llmgate::httpio::detail
 
@@ -120,6 +124,10 @@ public:
 
     template <std::invocable<http::event const&> Sink>
     async::task<result_void> read(Sink on_event, net::read_options const options) {
+        if (reading_) {
+            co_return std::unexpected{std::make_error_code(std::errc::operation_in_progress)};
+        }
+        async::exclusive_scope const exclusive{reading_};
         bool done = false;
         auto track = [&done, &on_event](http::event const& item) {
             done = done || std::holds_alternative<http::message_complete>(item);
@@ -170,6 +178,7 @@ private:
     std::size_t begin_ = 0;
     std::size_t end_ = 0;
     bool fresh_ = true;
+    bool reading_ = false;
 };
 
 template <net::byte_stream Stream, std::invocable<http::event const&> Sink>

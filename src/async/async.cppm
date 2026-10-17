@@ -159,6 +159,46 @@ struct pending_op {
     bool fired = false;
 };
 
+class waiter_table {
+public:
+    bool claim_all(pending_op* const op) {
+        if (!claim(op->fd, op->what, op)) {
+            return false;
+        }
+        if (!claim(op->other_fd, interest::readable, op)) {
+            release(op->fd, op->what, op);
+            return false;
+        }
+        return true;
+    }
+
+    void release_all(pending_op const* const op) noexcept {
+        release(op->fd, op->what, op);
+        release(op->other_fd, interest::readable, op);
+    }
+
+    pending_op* find(int const fd, interest const what) const noexcept {
+        auto const found = table_.find(key{fd, what});
+        return found == table_.end() ? nullptr : found->second;
+    }
+
+private:
+    using key = std::pair<int, interest>;
+
+    bool claim(int const fd, interest const what, pending_op* const op) {
+        return fd < 0 || table_.try_emplace(key{fd, what}, op).second;
+    }
+
+    void release(int const fd, interest const what, pending_op const* const op) noexcept {
+        auto const found = table_.find(key{fd, what});
+        if (fd >= 0 && found != table_.end() && found->second == op) {
+            table_.erase(found);
+        }
+    }
+
+    std::map<key, pending_op*> table_;
+};
+
 }  // namespace llmgate::async::detail
 
 namespace llmgate::async::detail {
@@ -212,7 +252,7 @@ export namespace llmgate::async {
 
 class reactor {
 public:
-    reactor();
+    explicit reactor(std::optional<std::uint64_t> chaos_seed = std::nullopt);
     ~reactor();
     reactor(reactor const&) = delete;
     reactor& operator=(reactor const&) = delete;
@@ -251,6 +291,7 @@ public:
     readiness writable(int const fd, std::optional<duration> const timeout = std::nullopt) noexcept {
         return readiness{*this, fd, interest::writable, timeout};
     }
+
     struct race_result {
         std::error_code error;
         bool other_ready;
@@ -290,6 +331,22 @@ public:
         return race{*this, fd, other, timeout};
     }
 
+    class yield_awaiter {
+    public:
+        explicit yield_awaiter(reactor& owner) noexcept : owner_{&owner} {}
+
+        bool await_ready() const noexcept { return false; }
+        void await_suspend(std::coroutine_handle<> waiter) const { owner_->post(waiter); }
+        void await_resume() const noexcept {}
+
+    private:
+        reactor* owner_;
+    };
+
+    yield_awaiter yield() noexcept { return yield_awaiter{*this}; }
+
+    void post(std::coroutine_handle<> waiter) { posted_.push_back(waiter); }
+
     task<void> sleep(duration const length) {
         (void)co_await readiness{*this, -1, interest::readable, length};
     }
@@ -300,6 +357,13 @@ public:
 
     template <class T>
     T run(task<T> root) {
+        if (std::exchange(running_, true)) {
+            std::terminate();
+        }
+        struct finished_running {
+            bool& flag;
+            ~finished_running() { flag = false; }
+        } const leaving{running_};
         std::optional<detail::stored<T>> result;
         bool finished = false;
         auto driver = detail::drive(std::move(root), result, finished);
@@ -313,13 +377,125 @@ public:
     }
 
 private:
-    std::error_code arm(int fd, interest what, std::optional<duration> timeout, detail::pending_op* op) noexcept
+    std::error_code arm(int const fd, interest const what, std::optional<duration> const timeout,
+                        detail::pending_op* const op) noexcept {
+        op->fd = fd;
+        op->what = what;
+        if (!waiters_.claim_all(op)) {
+            return std::make_error_code(std::errc::device_or_resource_busy);
+        }
+        return arm_backend(fd, what, timeout, op);
+    }
+
+    std::error_code arm_backend(int fd, interest what, std::optional<duration> timeout, detail::pending_op* op) noexcept
         pre(fd >= -1)
         pre(fd >= 0 || timeout.has_value())
         pre(op != nullptr);
+    void release_claims(detail::pending_op* op) noexcept;
+    std::error_code sync_descriptor(int fd) noexcept;
+
+    bool has_posted() const noexcept { return !posted_.empty(); }
+
+    void deliver(std::span<detail::pending_op*> ready) noexcept {
+        if (chaos_) {
+            std::ranges::shuffle(ready, *chaos_);
+        }
+        for (auto* const op : ready) {
+            op->complete(op, op->outcome);
+        }
+    }
+
+    void run_posted() noexcept {
+        auto batch = std::exchange(posted_, {});
+        if (chaos_) {
+            std::ranges::shuffle(batch, *chaos_);
+        }
+        for (auto const waiter : batch) {
+            waiter.resume();
+        }
+    }
 
     int poller_fd_;
+    bool running_ = false;
+    std::optional<std::mt19937_64> chaos_;
+    std::vector<std::coroutine_handle<>> posted_;
+    detail::waiter_table waiters_;
     detail::spawn_registry spawned_;
+};
+
+class exclusive_scope {
+public:
+    explicit exclusive_scope(bool& flag) noexcept : flag_{&flag} { flag = true; }
+    exclusive_scope(exclusive_scope const&) = delete;
+    exclusive_scope& operator=(exclusive_scope const&) = delete;
+    ~exclusive_scope() { *flag_ = false; }
+
+private:
+    bool* flag_;
+};
+
+class mutex {
+public:
+    explicit mutex(reactor& owner) noexcept : reactor_{&owner} {}
+    mutex(mutex&& other) noexcept : reactor_{other.reactor_} {
+        if (other.in_use()) {
+            std::terminate();
+        }
+    }
+    mutex& operator=(mutex&& other) noexcept {
+        if (in_use() || other.in_use()) {
+            std::terminate();
+        }
+        reactor_ = other.reactor_;
+        return *this;
+    }
+    mutex(mutex const&) = delete;
+    mutex& operator=(mutex const&) = delete;
+
+    class scoped_lock {
+    public:
+        explicit scoped_lock(mutex& owner) noexcept : owner_{&owner} {}
+        scoped_lock(scoped_lock const&) = delete;
+        scoped_lock& operator=(scoped_lock const&) = delete;
+        ~scoped_lock() { owner_->unlock(); }
+
+    private:
+        mutex* owner_;
+    };
+
+    class lock_awaiter {
+    public:
+        explicit lock_awaiter(mutex& owner) noexcept : owner_{&owner} {}
+
+        bool await_ready() const noexcept { return owner_->try_acquire(); }
+        void await_suspend(std::coroutine_handle<> waiter) const { owner_->waiters_.push_back(waiter); }
+        scoped_lock await_resume() const noexcept { return scoped_lock{*owner_}; }
+
+    private:
+        mutex* owner_;
+    };
+
+    lock_awaiter lock() noexcept { return lock_awaiter{*this}; }
+
+    bool in_use() const noexcept { return locked_ || !waiters_.empty(); }
+
+private:
+
+    bool try_acquire() noexcept { return !std::exchange(locked_, true); }
+
+    void unlock() noexcept {
+        if (waiters_.empty()) {
+            locked_ = false;
+            return;
+        }
+        auto const next = waiters_.front();
+        waiters_.pop_front();
+        reactor_->post(next);
+    }
+
+    reactor* reactor_;
+    bool locked_ = false;
+    std::deque<std::coroutine_handle<>> waiters_;
 };
 
 }  // namespace llmgate::async

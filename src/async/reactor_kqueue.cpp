@@ -58,22 +58,27 @@ void disarm_others(int const poller, detail::pending_op const* const op, detail:
 
 }  // namespace
 
-reactor::reactor() : poller_fd_{::kqueue()} {
+reactor::reactor(std::optional<std::uint64_t> const chaos_seed) : poller_fd_{::kqueue()} {
     contract_assert(poller_fd_ >= 0);
+    if (chaos_seed) {
+        chaos_.emplace(*chaos_seed);
+    }
 }
 
 reactor::~reactor() {
     ::close(poller_fd_);
 }
 
-std::error_code reactor::arm(int const fd, interest const what, std::optional<duration> const timeout,
-                             detail::pending_op* const op) noexcept {
+void reactor::release_claims(detail::pending_op* const op) noexcept {
+    waiters_.release_all(op);
+}
+
+std::error_code reactor::arm_backend(int const fd, interest const what, std::optional<duration> const timeout,
+                                     detail::pending_op* const op) noexcept {
     std::array<struct kevent, changes_per_arm> changes;
     int count = 0;
     op->fired = false;
     op->has_timer = timeout.has_value();
-    op->fd = fd;
-    op->what = what;
     op->outcome = {};
     if (fd >= 0) {
         EV_SET(&changes[count++], static_cast<std::uintptr_t>(fd), filter_of(what), EV_ADD | EV_ONESHOT, 0, 0,
@@ -90,6 +95,7 @@ std::error_code reactor::arm(int const fd, interest const what, std::optional<du
     if (::kevent(poller_fd_, changes.data(), count, nullptr, 0, nullptr) < 0) {
         auto const error = last_error();
         disarm_others(poller_fd_, op, detail::source_kind::nothing);
+        release_claims(op);
         return error;
     }
     return {};
@@ -97,7 +103,9 @@ std::error_code reactor::arm(int const fd, interest const what, std::optional<du
 
 void reactor::poll_or_terminate() noexcept {
     std::array<struct kevent, events_per_poll> events;
-    auto const count = ::kevent(poller_fd_, nullptr, 0, events.data(), static_cast<int>(events.size()), nullptr);
+    timespec const immediately{};
+    auto const count = ::kevent(poller_fd_, nullptr, 0, events.data(), static_cast<int>(events.size()),
+                                has_posted() ? &immediately : nullptr);
     if (count < 0) {
         if (errno != EINTR) {
             std::terminate();
@@ -116,11 +124,11 @@ void reactor::poll_or_terminate() noexcept {
         op->winner = source->kind;
         op->outcome = outcome_of(event, source->kind);
         disarm_others(poller_fd_, op, source->kind);
+        release_claims(op);
         ready[ready_count++] = op;
     }
-    for (auto* const op : std::span{ready.data(), ready_count}) {
-        op->complete(op, op->outcome);
-    }
+    deliver(std::span{ready.data(), ready_count});
+    run_posted();
 }
 
 }  // namespace llmgate::async

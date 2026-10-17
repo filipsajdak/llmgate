@@ -108,7 +108,7 @@ async::task<watched_read> read_while_watching_client(async::reactor& loop, net::
     if (upstream_replies) {
         ::write(upstream_pair.fds[1], "z", 1);
     }
-    net::tcp_stream upstream{loop, net::unique_fd{::dup(upstream_pair.fds[0])}};
+    net::tcp_stream upstream{loop, net::adopt(::dup(upstream_pair.fds[0]))};
     std::array<std::byte, 1> buffer{};
     auto const started = std::chrono::steady_clock::now();
     auto const received = co_await upstream.read_some(buffer, {.idle = long_wait, .watch = accepted->descriptor()});
