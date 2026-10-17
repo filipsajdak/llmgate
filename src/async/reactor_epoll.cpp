@@ -63,6 +63,37 @@ void close_timer(detail::pending_op* const op) noexcept {
     }
 }
 
+struct firing {
+    detail::pending_op* op;
+    detail::source_kind kind;
+};
+
+int wait_for_events(int const poller_fd, std::array<epoll_event, events_per_poll>& events, bool const has_posted) noexcept {
+    auto const count = ::epoll_wait(poller_fd, events.data(), static_cast<int>(events.size()), has_posted ? 0 : -1);
+    if (count < 0 && errno != EINTR) {
+        std::terminate();
+    }
+    return count;
+}
+
+std::array<firing, 2> firings_for(detail::waiter_table& waiters, epoll_event const& event) noexcept {
+    auto const tag = event.data.u64;
+    if ((tag & timer_tag) != 0) {
+        auto const* const source = reinterpret_cast<detail::event_source const*>(tag & ~timer_tag);
+        return {firing{.op = source->owner, .kind = detail::source_kind::timer}, firing{}};
+    }
+    auto const fd = static_cast<int>(tag >> 1);
+    std::array<firing, 2> result{};
+    auto* const reader = (event.events & readiness_events) != 0 ? waiters.find(fd, interest::readable) : nullptr;
+    auto* const writer = (event.events & writability_events) != 0 ? waiters.find(fd, interest::writable) : nullptr;
+    auto slot = result.begin();
+    for (auto* const waiter : {reader, writer}) {
+        auto const second = waiter != nullptr && waiter->other_fd == fd && waiter->fd != fd;
+        *slot++ = firing{.op = waiter, .kind = second ? detail::source_kind::other_descriptor : detail::source_kind::descriptor};
+    }
+    return result;
+}
+
 }  // namespace
 
 reactor::reactor(std::optional<std::uint64_t> const chaos_seed) : poller_fd_{::epoll_create1(EPOLL_CLOEXEC)} {
@@ -135,11 +166,8 @@ std::error_code reactor::arm_backend(int const fd, interest const, std::optional
 
 void reactor::poll_or_terminate() noexcept {
     std::array<epoll_event, events_per_poll> events;
-    auto const count = ::epoll_wait(poller_fd_, events.data(), static_cast<int>(events.size()), has_posted() ? 0 : -1);
+    auto const count = wait_for_events(poller_fd_, events, has_posted());
     if (count < 0) {
-        if (errno != EINTR) {
-            std::terminate();
-        }
         return;
     }
     std::array<detail::pending_op*, 2 * events_per_poll> ready;
@@ -156,18 +184,8 @@ void reactor::poll_or_terminate() noexcept {
         ready[ready_count++] = op;
     };
     for (auto const& event : std::span{events.data(), static_cast<std::size_t>(count)}) {
-        auto const tag = event.data.u64;
-        if ((tag & timer_tag) != 0) {
-            auto const* const source = reinterpret_cast<detail::event_source const*>(tag & ~timer_tag);
-            fire(source->owner, detail::source_kind::timer);
-            continue;
-        }
-        auto const fd = static_cast<int>(tag >> 1);
-        auto* const reader = (event.events & readiness_events) != 0 ? waiters_.find(fd, interest::readable) : nullptr;
-        auto* const writer = (event.events & writability_events) != 0 ? waiters_.find(fd, interest::writable) : nullptr;
-        for (auto* const waiter : {reader, writer}) {
-            auto const second = waiter != nullptr && waiter->other_fd == fd && waiter->fd != fd;
-            fire(waiter, second ? detail::source_kind::other_descriptor : detail::source_kind::descriptor);
+        for (auto const& [op, kind] : firings_for(waiters_, event)) {
+            fire(op, kind);
         }
     }
     deliver(std::span{ready.data(), ready_count});
