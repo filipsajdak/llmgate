@@ -12,6 +12,7 @@ import llmgate.json;
 import llmgate.net;
 import llmgate.process;
 import llmgate.routing;
+import llmgate.shutdown;
 import llmgate.tls;
 
 namespace {
@@ -96,10 +97,21 @@ int serve(gateway::config settings) {
         proxy.use_ledger(std::move(history.loaded));
         proxy.persist_usage_with(sink);
     }
+    auto stop = shutdown::stop_signal::make();
+    if (!stop || stop->install()) {
+        std::println(stderr, "llmgate: cannot install the stop signal handlers");
+        return exit_runtime;
+    }
     std::println("llmgate listening on {}:{}", address->host, listening->port());
     std::fflush(stdout);
-    loop.run(httpio::serve(*listening, proxy, httpio::limits{}));
-    return exit_runtime;
+    auto const abandoned = loop.run(httpio::serve_until(*listening, proxy, httpio::limits{}, stop->descriptor(), settings.time.drain));
+    if (abandoned != 0) {
+        std::println(stderr, "llmgate: stopped with {} requests still running after the {} s drain", abandoned,
+                     std::chrono::duration_cast<std::chrono::seconds>(settings.time.drain).count());
+    }
+    commands::release_pid_file();
+    std::println("llmgate stopped");
+    return 0;
 }
 
 int login(gateway::config const& settings) {

@@ -3,6 +3,7 @@ module;
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <csignal>
 #include <cstring>
 
 #include <arpa/inet.h>
@@ -284,6 +285,10 @@ inline int run_and_wait(std::filesystem::path const& program, std::vector<std::s
     while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {
     }
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+inline bool process_running(pid_t const pid) noexcept {
+    return ::kill(pid, 0) == 0 || errno == EPERM;
 }
 
 template <std::invocable Condition>

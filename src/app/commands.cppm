@@ -34,6 +34,8 @@ constexpr std::string_view state_pid_name = "gateway.pid";
 constexpr std::string_view service_label = "dev.llmgate";
 constexpr std::chrono::milliseconds startup_limit{30000};
 constexpr std::chrono::milliseconds statusline_limit{400};
+constexpr std::chrono::milliseconds stop_margin = std::chrono::seconds{5};
+constexpr std::chrono::milliseconds stop_step{50};
 constexpr int exit_failure = 1;
 constexpr int exit_missing = 127;
 
@@ -384,16 +386,34 @@ inline int run_status(context const& where) {
     return 0;
 }
 
-inline int run_stop(context const&) {
+inline void release_pid_file() {
+    if (auto const recorded = detail::recorded_pid(); recorded && *recorded == ::getpid()) {
+        std::error_code ignored;
+        std::filesystem::remove(detail::pid_file(), ignored);
+    }
+}
+
+inline int run_stop(context const& where) {
     auto const pid = detail::recorded_pid();
     if (!pid) {
         std::println("no gateway started by llmgate is recorded; a service is stopped with launchctl or systemctl");
         return exit_failure;
     }
-    auto const killed = ::kill(*pid, SIGTERM) == 0;
-    std::filesystem::remove(detail::pid_file());
-    std::println("{}", killed ? "gateway stopped" : "the recorded gateway was not running");
-    return killed ? 0 : exit_failure;
+    std::error_code ignored;
+    if (::kill(*pid, SIGTERM) != 0) {
+        std::filesystem::remove(detail::pid_file(), ignored);
+        std::println("the recorded gateway was not running");
+        return exit_failure;
+    }
+    auto const limit = where.settings.time.drain + stop_margin;
+    if (!process::wait_until([&pid] { return !process::process_running(*pid); }, limit, stop_step)) {
+        std::println("the gateway has not stopped after {} s; it is still finishing requests (a second SIGTERM stops it at once)",
+                     std::chrono::duration_cast<std::chrono::seconds>(limit).count());
+        return exit_failure;
+    }
+    std::filesystem::remove(detail::pid_file(), ignored);
+    std::println("gateway stopped");
+    return 0;
 }
 
 inline usage::load_result read_ledger(std::string const& configured_path) {

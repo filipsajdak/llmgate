@@ -78,7 +78,7 @@ llmgate_module(llmgate_net INTERFACE src/net/net.cppm LIBS llmgate_async llmgate
 llmgate_module(llmgate_httpio INTERFACE src/http/io.cppm LIBS llmgate_async llmgate_http llmgate_net llmgate_shutdown)
 llmgate_module(llmgate_routing INTERFACE src/gateway/routing.cppm LIBS llmgate_http llmgate_jsonscan)
 llmgate_module(llmgate_fetch INTERFACE src/gateway/fetch.cppm SOURCES src/gateway/fetch.cpp LIBS llmgate_async llmgate_http llmgate_httpio llmgate_net llmgate_routing llmgate_tls)
-llmgate_module(llmgate_gateway INTERFACE src/gateway/gateway.cppm LIBS llmgate_usage llmgate_proof llmgate_claude llmgate_routing llmgate_anthropic llmgate_httpio llmgate_json llmgate_jsonscan llmgate_net llmgate_reflect llmgate_sse llmgate_tls)
+llmgate_module(llmgate_gateway INTERFACE src/gateway/gateway.cppm LIBS llmgate_usage llmgate_proof llmgate_claude llmgate_routing llmgate_anthropic llmgate_httpio llmgate_json llmgate_jsonscan llmgate_net llmgate_reflect llmgate_shutdown llmgate_sse llmgate_tls)
 llmgate_module(llmgate_copilot INTERFACE src/gateway/copilot.cppm SOURCES src/gateway/copilot.cpp LIBS llmgate_process llmgate_gateway llmgate_fetch llmgate_json llmgate_jsonscan llmgate_reflect)
 
 enable_testing()
@@ -207,7 +207,7 @@ llmgate_fuzz(usage llmgate_properties)
 
 add_executable(llmgate app/llmgate.cpp)
 target_compile_definitions(llmgate PRIVATE LLMGATE_VERSION="${PROJECT_VERSION}")
-target_link_libraries(llmgate PRIVATE llmgate_usage llmgate_arguments llmgate_commands llmgate_process llmgate_routing llmgate_copilot llmgate_gateway llmgate_httpio llmgate_json llmgate_net llmgate_tls llmgate_contracts)
+target_link_libraries(llmgate PRIVATE llmgate_usage llmgate_arguments llmgate_commands llmgate_process llmgate_routing llmgate_copilot llmgate_gateway llmgate_httpio llmgate_json llmgate_net llmgate_shutdown llmgate_tls llmgate_contracts)
 add_test(NAME llmgate_version COMMAND llmgate --version)
 set_tests_properties(llmgate_version PROPERTIES LABELS unit PASS_REGULAR_EXPRESSION "llmgate [0-9]")
 add_test(NAME llmgate_example_config COMMAND llmgate --check-config --config ${CMAKE_CURRENT_SOURCE_DIR}/config.example.jsonc)
