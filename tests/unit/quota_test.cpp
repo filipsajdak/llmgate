@@ -27,16 +27,16 @@ const suite quota_suite = [] {
 
         expect(found.has_value());
         expect(found->plan == "individual" && found->sku == "free_limited_copilot" && found->reset_date == "2026-11-01");
-        expect(found->allowances.size() == 3_u);
-        expect(found->allowances[0].remaining == 196_u && found->allowances[0].entitlement == 200_u && found->allowances[0].percent_remaining == 98);
+        expect(found->quotas.size() == 3_u);
+        expect(found->quotas[0].remaining == 196_u && found->quotas[0].entitlement == 200_u && found->quotas[0].percent_remaining == 98);
     };
 
     "capability_the_remaining_count_falls_back_to_the_fractional_field_and_the_percent_is_computed"_test = [] {
         auto const found = quota::parse(paid_plan);
 
-        expect(found->allowances[1].remaining == 42_u);
-        expect(found->allowances[1].percent_remaining == 14);
-        expect(found->allowances[0].unlimited);
+        expect(found->quotas[1].remaining == 42_u);
+        expect(found->quotas[1].percent_remaining == 14);
+        expect(found->quotas[0].unlimited);
     };
 
     "capability_a_low_allowance_is_flagged_but_an_unlimited_or_absent_one_is_not"_test = [] {
@@ -71,7 +71,7 @@ const suite quota_suite = [] {
             many += (index == 0 ? "" : ",") + std::format(R"("q{}":{{"has_quota":true}})", index);
         }
 
-        expect(quota::parse(many + "}}")->allowances.size() == quota::most_allowances);
+        expect(quota::parse(many + "}}")->quotas.size() == quota::most_allowances);
     };
 
     "capability_the_json_form_parses_back_and_carries_the_numbers"_test = [] {
@@ -81,6 +81,68 @@ const suite quota_suite = [] {
         expect(again.has_value());
         expect(json::text_at(*again, {"plan"}) == "individual");
         expect(text.contains(R"("remaining": 196)"));
+    };
+
+    "capability_the_json_form_keeps_its_bytes_and_key_order"_test = [] {
+        constexpr std::string_view golden = R"({
+  "plan": "individual",
+  "sku": "free_limited_copilot",
+  "reset_date": "2026-11-01",
+  "quotas": [
+    {
+      "name": "chat",
+      "unlimited": false,
+      "has_quota": true,
+      "entitlement": 200,
+      "remaining": 196,
+      "percent_remaining": 98
+    },
+    {
+      "name": "completions",
+      "unlimited": false,
+      "has_quota": true,
+      "entitlement": 2000,
+      "remaining": 1983,
+      "percent_remaining": 99
+    },
+    {
+      "name": "premium_interactions",
+      "unlimited": false,
+      "has_quota": false,
+      "entitlement": 0,
+      "remaining": 0,
+      "percent_remaining": 0
+    }
+  ]
+}
+)";
+
+        expect(quota::to_json(*quota::parse(free_plan)) == golden);
+        expect(quota::to_json(quota::summary{}) == "{\n  \"plan\": \"\",\n  \"sku\": \"\",\n  \"reset_date\": \"\",\n  \"quotas\": []\n}\n");
+    };
+
+    "capability_allowances_keep_the_order_the_reply_listed_them_in"_test = [] {
+        auto const found = quota::parse(free_plan);
+
+        expect(found->quotas.size() == 3_u);
+        expect(found->quotas[0].name == "chat" && found->quotas[1].name == "completions" && found->quotas[2].name == "premium_interactions");
+    };
+
+    "limit_wrong_typed_reply_fields_read_as_zero_false_or_empty_one_by_one"_test = [] {
+        auto const found = quota::parse(
+            R"({"copilot_plan":5,"access_type_sku":"s","quota_snapshots":{"x":{"entitlement":"many","remaining":"q","quota_remaining":7,"unlimited":"yes","has_quota":1,"percent_remaining":"high"},"skipped":3,"y":{"entitlement":-1,"remaining":null,"quota_remaining":4,"has_quota":true,"percent_remaining":null}}})");
+
+        expect(found.has_value() && found->plan.empty() && found->sku == "s" && found->quotas.size() == 2_u);
+        auto const& first = found->quotas[0];
+        auto const& second = found->quotas[1];
+        expect(first.name == "x" && first.remaining == 7_u && first.entitlement == 0_u && !first.unlimited && !first.has_quota && first.percent_remaining == 0);
+        expect(second.name == "y" && second.remaining == 4_u && second.entitlement == 0_u && second.has_quota && second.percent_remaining == 0);
+    };
+
+    "limit_a_given_percent_wins_over_the_computed_one_and_is_clamped"_test = [] {
+        auto const found = quota::parse(R"({"quota_snapshots":{"a":{"entitlement":10,"remaining":5,"percent_remaining":33},"b":{"entitlement":10,"remaining":5,"percent_remaining":250.5}}})");
+
+        expect(found->quotas[0].percent_remaining == 33 && found->quotas[1].percent_remaining == quota::full_percent);
     };
 };
 

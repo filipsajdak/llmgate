@@ -29,7 +29,7 @@ constexpr unsigned long_budget_percent = 100;
 
 struct finding {
     std::string check{};
-    status state = status::pass;
+    doctor::status status = doctor::status::pass;
     std::string detail{};
     std::string remedy{};
 };
@@ -85,7 +85,7 @@ constexpr std::string name_of(check const item) {
 }
 
 constexpr finding make(check const item, status const state, std::string_view const detail, std::string_view const remedy = {}) {
-    return {.check = name_of(item), .state = state, .detail = clean(detail), .remedy = clean(remedy)};
+    return {.check = name_of(item), .status = state, .detail = clean(detail), .remedy = clean(remedy)};
 }
 
 constexpr std::string octal(unsigned const mode) {
@@ -258,7 +258,7 @@ constexpr finding budget_finding(facts const& seen) {
 
 constexpr std::string lowest_summary(quota::summary const& found) {
     std::string out;
-    for (auto const& item : found.allowances) {
+    for (auto const& item : found.quotas) {
         if (quota::is_low(item)) {
             out += (out.empty() ? "" : ", ") + item.name + " " + text::decimal(item.percent_remaining) + "% left";
         }
@@ -323,7 +323,7 @@ constexpr std::string label_of(status const state) {
 }
 
 constexpr std::size_t count_of(std::span<finding const> const findings, status const state) {
-    return static_cast<std::size_t>(std::ranges::count(findings, state, &finding::state));
+    return static_cast<std::size_t>(std::ranges::count(findings, state, &finding::status));
 }
 
 constexpr int exit_code(std::span<finding const> const findings) {
@@ -333,8 +333,8 @@ constexpr int exit_code(std::span<finding const> const findings) {
 constexpr std::string render_text(std::span<finding const> const findings) {
     std::string out;
     for (auto const& item : findings) {
-        out += label_of(item.state) + "  " + item.check + ": " + item.detail + "\n";
-        if (item.state != status::pass) {
+        out += label_of(item.status) + "  " + item.check + ": " + item.detail + "\n";
+        if (item.status != status::pass) {
             out += "      fix: " + item.remedy + "\n";
         }
     }
@@ -343,15 +343,13 @@ constexpr std::string render_text(std::span<finding const> const findings) {
     return out;
 }
 
+struct diagnosis {
+    bool ok = true;
+    std::vector<finding> findings{};
+};
+
 constexpr std::string render_json(std::span<finding const> const findings) {
-    json::array items;
-    for (auto const& item : findings) {
-        items.push_back(json::make_object({{"check", json::make_string(item.check)},
-                                           {"status", json::make_string(reflect::enum_string(item.state))},
-                                           {"detail", json::make_string(item.detail)},
-                                           {"remedy", json::make_string(item.remedy)}}));
-    }
-    return json::write(json::make_object({{"ok", json::value{exit_code(findings) == 0}}, {"findings", json::value{std::move(items)}}}), 2);
+    return json::write(json::to_value(diagnosis{.ok = exit_code(findings) == 0, .findings = {findings.begin(), findings.end()}}), 2);
 }
 
 }  // namespace llmgate::doctor

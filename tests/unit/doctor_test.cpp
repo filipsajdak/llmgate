@@ -36,12 +36,12 @@ finding named(std::vector<finding> const& found, std::string_view const check) {
 }
 
 status state_of(facts const& seen, std::string_view const check) {
-    return named(diagnose(seen), check).state;
+    return named(diagnose(seen), check).status;
 }
 
 quota::summary summary_with(int const percent) {
     return {.plan = "individual", .sku = "free", .reset_date = "2026-11-01",
-            .allowances = {{.name = "chat", .has_quota = true, .entitlement = 200, .remaining = 4, .percent_remaining = percent}}};
+            .quotas = {{.name = "chat", .has_quota = true, .entitlement = 200, .remaining = 4, .percent_remaining = percent}}};
 }
 
 const suite doctor_suite = [] {
@@ -58,7 +58,7 @@ const suite doctor_suite = [] {
 
         auto const found = diagnose(seen);
 
-        expect(found.front().check == "config" && found.front().state == status::fail);
+        expect(found.front().check == "config" && found.front().status == status::fail);
         expect(exit_code(found) == 1);
         expect(named(found, "listen").check == "missing");
     };
@@ -100,8 +100,8 @@ const suite doctor_suite = [] {
 
         auto const found = diagnose(seen);
 
-        expect(named(found, "identity").state == status::fail && named(found, "identity").remedy == "chmod 600 /s/identity");
-        expect(named(found, "copilot-login").state == status::fail && named(found, "copilot-login").remedy == "chmod 600 /c/token.json");
+        expect(named(found, "identity").status == status::fail && named(found, "identity").remedy == "chmod 600 /s/identity");
+        expect(named(found, "copilot-login").status == status::fail && named(found, "copilot-login").remedy == "chmod 600 /c/token.json");
         expect(named(found, "identity").detail.contains("644"));
     };
 
@@ -190,7 +190,7 @@ const suite doctor_suite = [] {
 
         auto const found = diagnose(seen);
 
-        expect(named(found, "quota").state == status::warn);
+        expect(named(found, "quota").status == status::warn);
         expect(named(found, "quota").detail.contains("chat 2% left") && named(found, "quota").detail.contains("2026-11-01"));
         expect(exit_code(found) == 0);
         seen.quota_summary = summary_with(70);
@@ -241,6 +241,38 @@ const suite doctor_suite = [] {
         expect(ok != nullptr && std::get<bool>(ok->data) == false);
         auto const* listed = json::at(*document, {"findings"});
         expect(listed != nullptr && std::get<json::array>(listed->data).size() == found.size());
+    };
+
+    "capability_the_json_report_keeps_its_bytes_and_key_order"_test = [] {
+        constexpr std::string_view golden = R"json({
+  "ok": false,
+  "findings": [
+    {
+      "check": "config",
+      "status": "fail",
+      "detail": "bad?",
+      "remedy": "fix the file, then check it with llmgate --check-config"
+    },
+    {
+      "check": "identity",
+      "status": "pass",
+      "detail": "the identity file is private (0600)",
+      "remedy": ""
+    },
+    {
+      "check": "claude",
+      "status": "pass",
+      "detail": "the claude command is on PATH",
+      "remedy": ""
+    }
+  ]
+}
+)json";
+        auto seen = healthy();
+        seen.config_error = "bad\x01";
+
+        expect(render_json(diagnose(seen)) == golden);
+        expect(render_json({}) == "{\n  \"ok\": true,\n  \"findings\": []\n}\n");
     };
 };
 

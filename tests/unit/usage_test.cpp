@@ -260,6 +260,89 @@ const suite usage_suite = [] {
         expect(text.contains("total"));
         expect(json.contains(R"("date": "2025-10-17")") && json.contains(R"("days": 2)") && !json.contains("old"));
     };
+    "capability_the_ledger_line_keeps_its_bytes_and_key_order"_test = [] {
+        constexpr std::string_view golden =
+            R"({"time":1760702400,"requested":"sonnet","model":"claude-sonnet-5-5","role":"sonnet","provider":"copilot","session":"s1","input":1,"output":2,"cache_read":3,"cache_creation":4,"duration_ms":350,"status":200,"repairs":1})"
+            "\n";
+        constexpr std::string_view bare = R"({"time":0,"requested":"","model":"","role":"","provider":"","session":"","input":0,"output":0,"cache_read":0,"cache_creation":0,"duration_ms":0,"status":0,"repairs":0})" "\n";
+
+        auto const line = to_line({.time = noon, .requested = "sonnet", .model = "claude-sonnet-5-5", .role = "sonnet", .provider = "copilot", .session = "s1",
+                                   .used = {.input = 1, .output = 2, .cache_read = 3, .cache_creation = 4}, .duration_ms = 350, .status = 200, .repairs = 1});
+
+        expect(line == golden);
+        expect(to_line({}) == bare);
+    };
+
+    "limit_a_damaged_ledger_line_is_read_field_by_field_as_zero_or_empty"_test = [] {
+        auto const entry = from_line(R"({"time":7,"model":3,"input":"x","output":-3,"cache_read":4.7,"cache_creation":null,"duration_ms":"q","status":99999,"repairs":[1]})");
+
+        expect(entry.has_value());
+        expect(entry->time == 7 && entry->model.empty() && entry->used == tokens{.cache_read = 4});
+        expect(entry->duration_ms == 0 && entry->status == 999 && entry->repairs == 0_u);
+        expect(from_line(R"({"time":7,"status":-4})")->status == 0);
+        expect(!from_line(R"({"time":"7"})") && !from_line(R"({"time":7.5})") && !from_line("[1]") && !from_line("3"));
+    };
+
+    "capability_the_summary_json_keeps_its_bytes_and_key_order"_test = [] {
+        constexpr std::string_view warning =
+            R"({"today":{"input":600,"output":200,"cache_read":9999,"cache_creation":0,"requests":1},"month":{"input":600,"output":200,"cache_read":9999,"cache_creation":0,"requests":1},"budget":{"state":"warning","window":"daily","used":800,"limit":1000,"percent":80}})";
+        constexpr std::string_view idle =
+            R"({"today":{"input":0,"output":0,"cache_read":0,"cache_creation":0,"requests":0},"month":{"input":0,"output":0,"cache_read":0,"cache_creation":0,"requests":0},"budget":{"state":"ok","window":"","used":0,"limit":0,"percent":0}})";
+        ledger book;
+        book.add({.time = noon, .model = "a", .used = {.input = 600, .output = 200, .cache_read = 9999}});
+
+        expect(summary_json(book, {.daily_tokens = 1000}, noon) == warning);
+        expect(summary_json({}, {}, noon) == idle);
+        expect(summary_json(book, {.monthly_tokens = 700}, noon).ends_with(R"("budget":{"state":"exhausted","window":"monthly","used":800,"limit":700,"percent":114}})"));
+    };
+
+    "capability_the_json_report_keeps_its_bytes_and_key_order"_test = [] {
+        constexpr std::string_view golden = R"({
+  "days": 1,
+  "rows": [
+    {
+      "date": "2025-10-17",
+      "model": "m",
+      "input": 7,
+      "output": 999,
+      "cache_read": 1000,
+      "cache_creation": 0,
+      "requests": 1
+    }
+  ]
+}
+)";
+        ledger book;
+        book.add({.time = noon, .model = "m", .used = {.input = 7, .output = 999, .cache_read = 1000}});
+
+        expect(report_json(book, day_of(noon), day_of(noon)) == golden);
+    };
+
+    "capability_the_text_report_keeps_its_bytes"_test = [] {
+        ledger book;
+        book.add({.time = noon, .model = "m", .used = {.input = 7, .output = 999, .cache_read = 1000}});
+
+        auto const text = report(book, day_of(noon), day_of(noon));
+
+        expect(text == std::format("{:<12}{:<22}{:>9}{:>12}{:>12}{:>12}{:>12}\n", "date", "model", "requests", "input", "output", "cache read", "cache write") +
+                           std::format("{:<12}{:<22}{:>9}{:>12}{:>12}{:>12}{:>12}\n", "2025-10-17", "m", "1", "7", "999", "1k", "0") +
+                           std::format("{:<34}{:>9}{:>12}{:>12}{:>12}{:>12}\n", "total", "1", "7", "999", "1k", "0"));
+    };
+
+    "limit_wrong_typed_stream_counts_read_as_zero_one_by_one"_test = [] {
+        observer seen;
+
+        seen.on_body(R"({"usage":{"input_tokens":5,"output_tokens":"many","cache_read_input_tokens":2.5,"cache_creation_input_tokens":-1}})");
+
+        expect(seen.used() == tokens{.input = 5, .cache_read = 2});
+    };
+
+    "limit_a_damaged_stats_body_gives_a_headline_of_zero_and_empty_one_by_one"_test = [] {
+        auto const head = headline_from(R"({"usage":{"today":{"input":"x","output":2.9,"cache_creation":-1},"budget":{"state":3,"window":"daily","used":"u","limit":10,"percent":5000}}})");
+
+        expect(head.today == 2_u && head.state.empty() && head.window == "daily" && head.used == 0_u && head.limit == 10_u && head.percent == percent_cap);
+        expect(headline_from("[]").limit == 0_u && headline_from(R"({"usage":3})").today == 0_u && headline_from(R"({"usage":{"budget":[]}})").window.empty());
+    };
 };
 
 }  // namespace

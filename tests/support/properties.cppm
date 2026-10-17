@@ -12,9 +12,11 @@ import llmgate.reflect;
 import llmgate.role;
 import llmgate.json;
 import llmgate.jsonscan;
+import llmgate.lenient;
 import llmgate.routing;
 import llmgate.selection;
 import llmgate.sse;
+import llmgate.text;
 
 export namespace llmgate::properties {
 
@@ -412,7 +414,7 @@ constexpr bool quota_holds(std::string_view const text) {
     auto const within = [](quota::allowance const& item) {
         return item.percent_remaining >= 0 && item.percent_remaining <= quota::full_percent && item.name.size() <= usage::longest_label;
     };
-    if (found->allowances.size() > quota::most_allowances || !std::ranges::all_of(found->allowances, within) || !printable(quota::render(*found))) {
+    if (found->quotas.size() > quota::most_allowances || !std::ranges::all_of(found->quotas, within) || !printable(quota::render(*found))) {
         return false;
     }
     auto const again = json::parse(quota::to_json(*found), {.jsonc = false});
@@ -461,7 +463,7 @@ constexpr doctor::facts doctor_facts_from(std::string_view const text) {
     seen.quota = static_cast<doctor::quota_state>(bits(d, 3, 2) % reflect::enum_count<doctor::quota_state>);
     if (bit(d, 6)) {
         seen.quota_summary = quota::summary{.plan = "p", .sku = "s", .reset_date = "2026-11-01",
-                                            .allowances = {{.name = "chat", .has_quota = true, .entitlement = 10, .remaining = 1, .percent_remaining = bit(d, 5) ? 5 : 90}}};
+                                            .quotas = {{.name = "chat", .has_quota = true, .entitlement = 10, .remaining = 1, .percent_remaining = bit(d, 5) ? 5 : 90}}};
     }
     seen.daily_tokens = strictness % 2 == 0 ? 1000 : 50000;
     seen.monthly_tokens = strictness % 3 == 0 ? 0 : 20000;
@@ -471,7 +473,7 @@ constexpr doctor::facts doctor_facts_from(std::string_view const text) {
 
 constexpr bool findings_well_formed(std::span<doctor::finding const> const found) {
     return std::ranges::all_of(found, [](doctor::finding const& item) {
-        return !item.check.empty() && !item.detail.empty() && (item.state == doctor::status::pass || !item.remedy.empty());
+        return !item.check.empty() && !item.detail.empty() && (item.status == doctor::status::pass || !item.remedy.empty());
     });
 }
 
@@ -482,7 +484,7 @@ constexpr bool doctor_holds(std::string_view const text) {
     if (found.empty() || !findings_well_formed(found) || (doctor::exit_code(found) != 0) != failed || !printable(doctor::render_text(found))) {
         return false;
     }
-    if (!seen.config_error.empty() && (found.size() != 3 || found.front().check != "config" || found.front().state != doctor::status::fail)) {
+    if (!seen.config_error.empty() && (found.size() != 3 || found.front().check != "config" || found.front().status != doctor::status::fail)) {
         return false;
     }
     auto const document = json::parse(doctor::render_json(found), {.jsonc = false});
@@ -644,6 +646,32 @@ constexpr bool wire_sample_matches(wire_sample const& sample, std::expected<wire
     }
     back->scratch = sample.scratch;
     return *back == sample;
+}
+
+constexpr auto lenient_values = std::to_array<std::string_view>({"1", "-1", "\"x\"", "null", "[]", "true", "9223372036854775807"});
+
+constexpr std::string lenient_line_from(std::string_view const seed) {
+    auto const value_at = [&seed](std::size_t const index) { return lenient_values[byte_at(seed, index) % lenient_values.size()]; };
+    std::string line;
+    text::append_all(line, R"({"time":)", value_at(0), R"(,"input":)", value_at(1), R"(,"model":)", value_at(2), R"(,"status":)", value_at(3), R"(,"repairs":)", value_at(4), "}");
+    return line;
+}
+
+constexpr bool lenient_holds(std::string_view const text) {
+    auto const parsed = json::parse(lenient_line_from(text), {.jsonc = false});
+    if (!parsed) {
+        return false;
+    }
+    auto const loose = lenient::read<usage::record>(*parsed);
+    auto const strict = json::read<usage::record>(*parsed);
+    if (strict && (!loose || *loose != *strict)) {
+        return false;
+    }
+    if (!loose) {
+        return json::at(*parsed, {"time"}) == nullptr || !std::holds_alternative<std::int64_t>(json::at(*parsed, {"time"})->data);
+    }
+    auto const again = json::read<usage::record>(json::to_value(*loose));
+    return again && *again == *loose && usage::from_line(usage::to_line(*loose)).has_value();
 }
 
 constexpr bool writer_holds(std::string_view const text) {
