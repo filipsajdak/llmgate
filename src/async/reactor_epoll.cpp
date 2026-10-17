@@ -59,6 +59,19 @@ int make_timer(duration const length) noexcept {
     return timer;
 }
 
+void disarm_others(int const poller, detail::pending_op* const op, detail::source_kind const fired) noexcept {
+    if (fired != detail::source_kind::descriptor && op->fd >= 0) {
+        ::epoll_ctl(poller, EPOLL_CTL_DEL, op->fd, nullptr);
+    }
+    if (fired != detail::source_kind::other_descriptor && op->other_fd >= 0) {
+        ::epoll_ctl(poller, EPOLL_CTL_DEL, op->other_fd, nullptr);
+    }
+    if (op->has_timer) {
+        ::close(op->timer_fd);
+        op->has_timer = false;
+    }
+}
+
 }  // namespace
 
 reactor::reactor() : poller_fd_{::epoll_create1(EPOLL_CLOEXEC)} {
@@ -77,28 +90,26 @@ std::error_code reactor::arm(int const fd, interest const what, std::optional<du
     op->what = what;
     op->outcome = {};
     op->timer_fd = -1;
+    std::error_code failure;
     if (fd >= 0) {
         auto const events = what == interest::readable ? EPOLLIN : EPOLLOUT;
-        if (auto const error = watch(poller_fd_, fd, events, &op->fd_source)) {
-            return error;
-        }
+        failure = watch(poller_fd_, fd, events, &op->fd_source);
     }
-    if (timeout) {
+    if (!failure && op->other_fd >= 0) {
+        failure = watch(poller_fd_, op->other_fd, EPOLLIN, &op->other_source);
+    }
+    if (!failure && timeout) {
         auto const timer = make_timer(*timeout);
-        auto const failure = timer < 0 ? last_error() : watch(poller_fd_, timer, EPOLLIN, &op->timer_source);
-        if (failure) {
-            if (timer >= 0) {
-                ::close(timer);
-            }
-            if (fd >= 0) {
-                ::epoll_ctl(poller_fd_, EPOLL_CTL_DEL, fd, nullptr);
-            }
-            return failure;
+        failure = timer < 0 ? last_error() : watch(poller_fd_, timer, EPOLLIN, &op->timer_source);
+        if (timer >= 0) {
+            op->timer_fd = timer;
+            op->has_timer = true;
         }
-        op->timer_fd = timer;
-        op->has_timer = true;
     }
-    return {};
+    if (failure) {
+        disarm_others(poller_fd_, op, detail::source_kind::timer);
+    }
+    return failure;
 }
 
 void reactor::poll_or_terminate() noexcept {
@@ -119,14 +130,9 @@ void reactor::poll_or_terminate() noexcept {
             continue;
         }
         op->fired = true;
-        op->outcome = source->timer ? std::make_error_code(std::errc::timed_out) : std::error_code{};
-        if (source->timer && op->fd >= 0) {
-            ::epoll_ctl(poller_fd_, EPOLL_CTL_DEL, op->fd, nullptr);
-        }
-        if (op->has_timer) {
-            ::close(op->timer_fd);
-            op->has_timer = false;
-        }
+        op->winner = source->kind;
+        op->outcome = source->kind == detail::source_kind::timer ? std::make_error_code(std::errc::timed_out) : std::error_code{};
+        disarm_others(poller_fd_, op, source->kind);
         ready[ready_count++] = op;
     }
     for (auto* const op : std::span{ready.data(), ready_count}) {

@@ -14,7 +14,7 @@ namespace llmgate::async {
 namespace {
 
 constexpr std::size_t events_per_poll = 64;
-constexpr std::size_t changes_per_arm = 2;
+constexpr std::size_t changes_per_arm = 3;
 
 std::error_code last_error() noexcept {
     return {errno, std::system_category()};
@@ -32,6 +32,18 @@ void remove_event(int const poller, std::uintptr_t const ident, int const filter
 
 int filter_of(interest const what) noexcept {
     return what == interest::readable ? EVFILT_READ : EVFILT_WRITE;
+}
+
+void disarm_others(int const poller, detail::pending_op const* const op, detail::source_kind const fired) noexcept {
+    if (fired != detail::source_kind::descriptor && op->fd >= 0) {
+        remove_event(poller, static_cast<std::uintptr_t>(op->fd), filter_of(op->what));
+    }
+    if (fired != detail::source_kind::other_descriptor && op->other_fd >= 0) {
+        remove_event(poller, static_cast<std::uintptr_t>(op->other_fd), EVFILT_READ);
+    }
+    if (fired != detail::source_kind::timer && op->has_timer) {
+        remove_event(poller, timer_ident(op), EVFILT_TIMER);
+    }
 }
 
 }  // namespace
@@ -57,15 +69,17 @@ std::error_code reactor::arm(int const fd, interest const what, std::optional<du
         EV_SET(&changes[count++], static_cast<std::uintptr_t>(fd), filter_of(what), EV_ADD | EV_ONESHOT, 0, 0,
                &op->fd_source);
     }
+    if (op->other_fd >= 0) {
+        EV_SET(&changes[count++], static_cast<std::uintptr_t>(op->other_fd), EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0,
+               &op->other_source);
+    }
     if (timeout) {
         EV_SET(&changes[count++], timer_ident(op), EVFILT_TIMER, EV_ADD | EV_ONESHOT, 0, timeout->count(),
                &op->timer_source);
     }
     if (::kevent(poller_fd_, changes.data(), count, nullptr, 0, nullptr) < 0) {
         auto const error = last_error();
-        if (timeout) {
-            remove_event(poller_fd_, timer_ident(op), EVFILT_TIMER);
-        }
+        disarm_others(poller_fd_, op, detail::source_kind::descriptor);
         return error;
     }
     return {};
@@ -89,18 +103,14 @@ void reactor::poll_or_terminate() noexcept {
             continue;
         }
         op->fired = true;
-        if (source->timer) {
+        op->winner = source->kind;
+        auto const failed = (event.flags & EV_ERROR) != 0;
+        if (source->kind == detail::source_kind::timer) {
             op->outcome = std::make_error_code(std::errc::timed_out);
-            if (op->fd >= 0) {
-                remove_event(poller_fd_, static_cast<std::uintptr_t>(op->fd), filter_of(op->what));
-            }
         } else {
-            auto const failed = (event.flags & EV_ERROR) != 0;
             op->outcome = failed ? std::error_code{static_cast<int>(event.data), std::system_category()} : std::error_code{};
-            if (op->has_timer) {
-                remove_event(poller_fd_, timer_ident(op), EVFILT_TIMER);
-            }
         }
+        disarm_others(poller_fd_, op, source->kind);
         ready[ready_count++] = op;
     }
     for (auto* const op : std::span{ready.data(), ready_count}) {

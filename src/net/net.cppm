@@ -21,6 +21,11 @@ using result_void = std::expected<void, std::error_code>;
 using result_size = std::expected<std::size_t, std::error_code>;
 using idle_limit = std::optional<async::duration>;
 
+struct read_options {
+    idle_limit idle{};
+    int watch = -1;
+};
+
 class unique_fd {
 public:
     unique_fd() noexcept = default;
@@ -52,8 +57,8 @@ private:
 };
 
 template <class Stream>
-concept byte_stream = requires(Stream& stream, std::span<std::byte> into, std::span<std::byte const> from, idle_limit idle) {
-    { stream.read_some(into, idle) } -> std::same_as<async::task<result_size>>;
+concept byte_stream = requires(Stream& stream, std::span<std::byte> into, std::span<std::byte const> from, read_options options) {
+    { stream.read_some(into, options) } -> std::same_as<async::task<result_size>>;
     { stream.write_all(from) } -> std::same_as<async::task<result_void>>;
 };
 
@@ -101,7 +106,8 @@ std::error_code make_nonblocking(int const fd) noexcept {
 }
 
 async::task<result_size> receive_some(async::reactor& reactor, int const fd, std::span<std::byte> into,
-                                      idle_limit const idle) {
+                                      read_options const options) {
+    auto watch = options.watch;
     for (;;) {
         auto const received = ::recv(fd, into.data(), into.size(), 0);
         if (received >= 0) {
@@ -113,8 +119,23 @@ async::task<result_size> receive_some(async::reactor& reactor, int const fd, std
         if (!would_block(errno)) {
             co_return std::unexpected{last_error()};
         }
-        if (auto const error = co_await reactor.readable(fd, idle)) {
-            co_return std::unexpected{error};
+        if (watch < 0) {
+            if (auto const error = co_await reactor.readable(fd, options.idle)) {
+                co_return std::unexpected{error};
+            }
+            continue;
+        }
+        auto const raced = co_await reactor.readable_or_other(fd, watch, options.idle);
+        if (raced.error) {
+            co_return std::unexpected{raced.error};
+        }
+        if (raced.other_ready) {
+            char probe = 0;
+            auto const peeked = ::recv(watch, &probe, 1, MSG_PEEK);
+            if (peeked == 0 || (peeked < 0 && !would_block(errno) && errno != EINTR)) {
+                co_return std::unexpected{std::make_error_code(std::errc::connection_aborted)};
+            }
+            watch = peeked > 0 ? -1 : watch;
         }
     }
 }
@@ -195,8 +216,8 @@ public:
         co_return tcp_stream{reactor, std::move(*socket)};
     }
 
-    async::task<result_size> read_some(std::span<std::byte> into, idle_limit const idle) {
-        return detail::receive_some(*reactor_, socket_.get(), into, idle);
+    async::task<result_size> read_some(std::span<std::byte> into, read_options const options) {
+        return detail::receive_some(*reactor_, socket_.get(), into, options);
     }
 
     async::task<result_void> write_all(std::span<std::byte const> data) {
@@ -291,7 +312,7 @@ public:
         co_return stream;
     }
 
-    async::task<result_size> read_some(std::span<std::byte> destination, idle_limit const idle) {
+    async::task<result_size> read_some(std::span<std::byte> destination, read_options const options) {
         for (;;) {
             auto const result = session_.read(destination);
             if (!result) {
@@ -306,7 +327,7 @@ public:
             if (auto const sent = co_await flush(); !sent) {
                 co_return std::unexpected{sent.error()};
             }
-            if (auto const filled = co_await fill(idle); !filled) {
+            if (auto const filled = co_await fill(options); !filled) {
                 co_return std::unexpected{filled.error()};
             }
         }
@@ -346,7 +367,7 @@ private:
             if (*progress == tls::want::none) {
                 co_return result_void{};
             }
-            if (auto const filled = co_await fill(std::nullopt); !filled) {
+            if (auto const filled = co_await fill({}); !filled) {
                 co_return filled;
             }
         }
@@ -357,8 +378,8 @@ private:
         co_return co_await detail::send_all(*reactor_, socket_.get(), pending);
     }
 
-    async::task<result_void> fill(idle_limit const idle) {
-        auto const received = co_await detail::receive_some(*reactor_, socket_.get(), buffer_, idle);
+    async::task<result_void> fill(read_options const options) {
+        auto const received = co_await detail::receive_some(*reactor_, socket_.get(), buffer_, options);
         if (!received) {
             co_return std::unexpected{received.error()};
         }

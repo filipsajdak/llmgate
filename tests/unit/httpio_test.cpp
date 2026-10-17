@@ -103,7 +103,7 @@ async::task<std::string> raw_exchange(async::reactor& loop, net::listener& serve
     auto client = co_await net::tcp_stream::connect(loop, std::string{loopback}, server.port());
     (void)co_await client->write_all(std::as_bytes(std::span{wire}));
     std::string answer(32, '\0');
-    auto const received = co_await client->read_some(std::as_writable_bytes(std::span{answer}), std::nullopt);
+    auto const received = co_await client->read_some(std::as_writable_bytes(std::span{answer}), {});
     answer.resize(received.value_or(0));
     co_return answer;
 }
@@ -113,7 +113,7 @@ async::task<std::size_t> silent_client(async::reactor& loop, net::listener& serv
     async::spawn(httpio::serve(server, handler, bounds));
     auto client = co_await net::tcp_stream::connect(loop, std::string{loopback}, server.port());
     std::array<std::byte, 1> buffer{};
-    auto const received = co_await client->read_some(buffer, std::nullopt);
+    auto const received = co_await client->read_some(buffer, {});
     co_return received.value_or(std::numeric_limits<std::size_t>::max());
 }
 

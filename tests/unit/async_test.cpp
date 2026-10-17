@@ -62,6 +62,10 @@ task<std::error_code> wait_then_idle(reactor& loop, int const fd, duration const
     co_return first;
 }
 
+task<reactor::race_result> race_two(reactor& loop, int const first, int const second, std::optional<duration> const limit) {
+    co_return co_await loop.readable_or_other(first, second, limit);
+}
+
 task<void> write_then_flag(bool& flag) {
     flag = true;
     co_return;
@@ -139,6 +143,54 @@ const suite async_suite = [] {
         ::write(pair.fds[1], "x", 1);
 
         expect(!loop.run(wait_readable_for(loop, pair.fds[0], long_wait)));
+    };
+
+    "capability_race_reports_the_first_descriptor_when_it_is_ready"_test = [] {
+        reactor loop;
+        socket_pair first;
+        socket_pair second;
+        ::write(first.fds[1], "x", 1);
+
+        auto const outcome = loop.run(race_two(loop, first.fds[0], second.fds[0], long_wait));
+
+        expect(!outcome.error);
+        expect(!outcome.other_ready);
+    };
+
+    "capability_race_reports_the_other_descriptor_when_it_is_ready"_test = [] {
+        reactor loop;
+        socket_pair first;
+        socket_pair second;
+        ::write(second.fds[1], "x", 1);
+
+        auto const outcome = loop.run(race_two(loop, first.fds[0], second.fds[0], long_wait));
+
+        expect(!outcome.error);
+        expect(outcome.other_ready);
+    };
+
+    "limit_race_times_out_when_neither_descriptor_is_ready"_test = [] {
+        reactor loop;
+        socket_pair first;
+        socket_pair second;
+
+        auto const outcome = loop.run(race_two(loop, first.fds[0], second.fds[0], short_wait));
+
+        expect(outcome.error == std::errc::timed_out);
+        expect(!outcome.other_ready);
+    };
+
+    "limit_a_lost_race_leaves_both_descriptors_usable"_test = [] {
+        reactor loop;
+        socket_pair first;
+        socket_pair second;
+        ::write(first.fds[1], "x", 1);
+        (void)loop.run(race_two(loop, first.fds[0], second.fds[0], long_wait));
+        ::write(second.fds[1], "y", 1);
+
+        auto const outcome = loop.run(race_two(loop, first.fds[0], second.fds[0], long_wait));
+
+        expect(!outcome.error);
     };
 
     "limit_readable_on_an_unopened_descriptor_reports_the_error_as_a_value"_test = [] {

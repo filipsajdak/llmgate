@@ -130,21 +130,28 @@ task<void> drive(task<T> root, std::optional<stored<T>>& out, bool& finished) {
 
 struct pending_op;
 
+enum class source_kind { descriptor, timer, other_descriptor };
+
 struct event_source {
     pending_op* owner;
-    bool timer;
+    source_kind kind;
 };
 
 struct pending_op {
     explicit pending_op(void (*on_complete)(pending_op*, std::error_code) noexcept) noexcept
-        : complete{on_complete}, fd_source{.owner = this, .timer = false}, timer_source{.owner = this, .timer = true} {}
+        : complete{on_complete}, fd_source{.owner = this, .kind = source_kind::descriptor},
+          timer_source{.owner = this, .kind = source_kind::timer},
+          other_source{.owner = this, .kind = source_kind::other_descriptor} {}
     pending_op(pending_op const&) = delete;
     pending_op& operator=(pending_op const&) = delete;
 
     void (*complete)(pending_op*, std::error_code) noexcept;
     event_source fd_source;
     event_source timer_source;
+    event_source other_source;
     std::error_code outcome{};
+    source_kind winner = source_kind::descriptor;
+    int other_fd = -1;
     int fd = -1;
     int timer_fd = -1;
     interest what = interest::readable;
@@ -219,6 +226,45 @@ public:
     readiness writable(int const fd, std::optional<duration> const timeout = std::nullopt) noexcept {
         return readiness{*this, fd, interest::writable, timeout};
     }
+    struct race_result {
+        std::error_code error;
+        bool other_ready;
+    };
+
+    class race final : detail::pending_op {
+    public:
+        race(reactor& owner, int fd, int other, std::optional<duration> timeout) noexcept
+            : detail::pending_op{&race::finish}, owner_{&owner}, timeout_{timeout} {
+            this->fd = fd;
+            this->other_fd = other;
+        }
+
+        bool await_ready() const noexcept { return false; }
+        bool await_suspend(std::coroutine_handle<> caller) noexcept {
+            waiter_ = caller;
+            outcome = owner_->arm(fd, interest::readable, timeout_, this);
+            return !outcome;
+        }
+        race_result await_resume() const noexcept {
+            return {.error = outcome, .other_ready = !outcome && winner == detail::source_kind::other_descriptor};
+        }
+
+    private:
+        static void finish(detail::pending_op* self, std::error_code error) noexcept {
+            auto& op = *static_cast<race*>(self);
+            op.outcome = error;
+            op.waiter_.resume();
+        }
+
+        reactor* owner_;
+        std::optional<duration> timeout_;
+        std::coroutine_handle<> waiter_;
+    };
+
+    race readable_or_other(int const fd, int const other, std::optional<duration> const timeout = std::nullopt) noexcept {
+        return race{*this, fd, other, timeout};
+    }
+
     task<void> sleep(duration const length) {
         (void)co_await readiness{*this, -1, interest::readable, length};
     }

@@ -117,7 +117,7 @@ public:
           buffer_(detail::read_buffer_bytes) {}
 
     template <std::invocable<http::event const&> Sink>
-    async::task<result_void> read(Sink on_event, net::idle_limit const idle) {
+    async::task<result_void> read(Sink on_event, net::read_options const options) {
         bool done = false;
         auto track = [&done, &on_event](http::event const& item) {
             done = done || std::holds_alternative<http::message_complete>(item);
@@ -125,7 +125,7 @@ public:
         };
         while (!done) {
             if (begin_ == end_) {
-                auto const received = co_await stream_->read_some(buffer_, idle);
+                auto const received = co_await stream_->read_some(buffer_, options);
                 if (!received) {
                     co_return std::unexpected{received.error()};
                 }
@@ -180,7 +180,7 @@ async::task<result_void> exchange(Stream& stream, request_spec spec, Sink on_eve
         co_return sent;
     }
     message_reader<Stream> reader{stream, http::kind::response, bounds};
-    co_return co_await reader.read(std::move(on_event), bounds.read_idle);
+    co_return co_await reader.read(std::move(on_event), {.idle = bounds.read_idle});
 }
 
 template <net::byte_stream Stream>
@@ -244,7 +244,7 @@ async::task<void> serve_connection(Stream stream, Handler& handler, limits bound
                 }
             }
         };
-        auto const received = co_await reader.read(collect, bounds.read_idle);
+        auto const received = co_await reader.read(collect, {.idle = bounds.read_idle});
         if (!received) {
             if (received.error() == http::errc::head_too_large) {
                 (void)co_await writer.send(431, {}, "");

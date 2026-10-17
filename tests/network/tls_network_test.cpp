@@ -36,7 +36,7 @@ async::task<exchange> get_root(async::reactor& loop, tls::group_policy const pol
         co_return exchange{.error = sent.error()};
     }
     std::string head(response_head_bytes, '\0');
-    auto const received = co_await stream->read_some(std::as_writable_bytes(std::span{head}), std::nullopt);
+    auto const received = co_await stream->read_some(std::as_writable_bytes(std::span{head}), {});
     if (!received) {
         co_return exchange{.error = received.error()};
     }
