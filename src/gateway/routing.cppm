@@ -229,6 +229,10 @@ constexpr std::expected<bool, reply_body> stream_field(std::string_view const bo
 }
 
 template <class Lookup>
+concept model_lookup = std::invocable<Lookup&, std::string const&> &&
+                       std::convertible_to<std::invoke_result_t<Lookup&, std::string const&>, std::optional<std::string>>;
+
+template <model_lookup Lookup>
 constexpr std::expected<prepared_request, reply_body> prepare(std::string_view const body, Lookup&& lookup) {
     auto const members = jsonscan::top_level_members(body);
     if (!members) {
