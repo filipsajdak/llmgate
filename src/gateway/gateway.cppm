@@ -85,15 +85,36 @@ struct config {
     usage_config usage{};
 };
 
+consteval std::optional<std::meta::info> member_named(std::meta::info const owner, std::string_view const name) {
+    for (auto const member : std::meta::nonstatic_data_members_of(owner, std::meta::access_context::current())) {
+        if (std::meta::identifier_of(member) == name) {
+            return member;
+        }
+    }
+    return std::nullopt;
+}
+
+provider_config legacy_provider(config const& settings) {
+    provider_config out;
+    template for (constexpr auto field : std::define_static_array(std::meta::nonstatic_data_members_of(^^provider_config, std::meta::access_context::current()))) {
+        constexpr auto from_upstream = member_named(^^upstream_config, std::meta::identifier_of(field));
+        constexpr auto from_config = member_named(^^config, std::meta::identifier_of(field));
+        static_assert(from_upstream || from_config, "a provider_config member has no legacy source of the same name");
+        if constexpr (from_upstream) {
+            static_assert(std::meta::type_of(*from_upstream) == std::meta::type_of(field), "the legacy upstream member has another type");
+            out.[:field:] = settings.upstream.[:*from_upstream:];
+        } else {
+            static_assert(std::meta::type_of(*from_config) == std::meta::type_of(field), "the legacy config member has another type");
+            out.[:field:] = settings.[:*from_config:];
+        }
+    }
+    return out;
+}
+
 std::map<std::string, provider_config> effective_providers(config const& settings) {
     auto all = settings.providers;
     if (!settings.upstream.base_url.empty() && !all.contains(std::string{implicit_provider})) {
-        all.emplace(std::string{implicit_provider}, provider_config{.base_url = settings.upstream.base_url,
-                                                                    .messages_path = settings.upstream.messages_path,
-                                                                    .headers = settings.upstream.headers,
-                                                                    .static_token_env = settings.static_token_env,
-                                                                    .copilot = settings.copilot,
-                                                                    .models = settings.models});
+        all.emplace(std::string{implicit_provider}, legacy_provider(settings));
     }
     return all;
 }
