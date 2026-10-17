@@ -6,6 +6,7 @@ export module llmgate.arguments;
 
 import std;
 import llmgate.json;
+import llmgate.members;
 import llmgate.reflect;
 import llmgate.statusline;
 
@@ -98,21 +99,11 @@ constexpr step vscode_flag(parse_state& state) {
 }
 
 consteval flag flag_of(std::meta::info const member) {
-    for (auto const annotation : std::meta::annotations_of(member)) {
-        if (std::meta::remove_cvref(std::meta::type_of(annotation)) == ^^flag) {
-            return std::meta::extract<flag>(annotation);
-        }
-    }
-    return {};
+    return reflect::annotation_of<flag>(member).value_or(flag{});
 }
 
 consteval limits limits_of(std::meta::info const member) {
-    for (auto const annotation : std::meta::annotations_of(member)) {
-        if (std::meta::remove_cvref(std::meta::type_of(annotation)) == ^^limits) {
-            return std::meta::extract<limits>(annotation);
-        }
-    }
-    return {};
+    return reflect::annotation_of<limits>(member).value_or(limits{});
 }
 
 constexpr std::string number_text(unsigned const number) {

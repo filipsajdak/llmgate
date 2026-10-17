@@ -6,6 +6,7 @@ export module llmgate.json;
 
 import std;
 import llmgate.jsonscan;
+import llmgate.members;
 import llmgate.reflect;
 
 export namespace llmgate::json {
@@ -42,6 +43,30 @@ struct read_error {
 
 struct required_t {};
 inline constexpr required_t required{};
+
+constexpr std::size_t key_capacity = 32;
+
+struct key {
+    char text[key_capacity]{};
+
+    consteval key(std::string_view const wire) {
+        if (wire.size() >= key_capacity) {
+            throw "json::key: the wire name does not fit in key_capacity";
+        }
+        std::ranges::copy(wire, text);
+    }
+};
+
+struct flatten_t {};
+inline constexpr flatten_t flatten{};
+
+struct skip_t {};
+inline constexpr skip_t skip{};
+
+struct redact_t {};
+inline constexpr redact_t redact{};
+
+inline constexpr std::string_view redacted_text = "<redacted>";
 
 struct read_options {
     bool allow_unknown_keys = false;
@@ -360,14 +385,26 @@ constexpr result<std::chrono::milliseconds> read_duration(std::string_view const
     return unit->second * amount;
 }
 
-template <class T>
 consteval bool member_is_required(std::meta::info const member) {
-    for (auto const annotation : std::meta::annotations_of(member)) {
-        if (std::meta::remove_cvref(std::meta::type_of(annotation)) == ^^required_t) {
-            return true;
-        }
+    return reflect::has_annotation<required_t>(member);
+}
+
+enum class field_kind { plain, flatten, skip, redact };
+
+consteval field_kind kind_of(std::meta::info const member) {
+    if (reflect::has_annotation<skip_t>(member)) {
+        return field_kind::skip;
     }
-    return false;
+    if (reflect::has_annotation<flatten_t>(member)) {
+        return field_kind::flatten;
+    }
+    return reflect::has_annotation<redact_t>(member) ? field_kind::redact : field_kind::plain;
+}
+
+consteval std::string_view wire_of(std::meta::info const member) {
+    auto const renamed = reflect::annotation_of<key>(member);
+    std::string_view const wire = renamed ? std::string_view{renamed->text} : std::meta::identifier_of(member);
+    return {std::define_static_string(wire), wire.size()};
 }
 
 constexpr std::string element_path(std::string const& path, std::size_t const index) {
@@ -401,9 +438,14 @@ struct is_vector : std::false_type {};
 template <class U>
 struct is_vector<std::vector<U>> : std::true_type {};
 template <class T>
-struct is_string_map : std::false_type {};
-template <class U>
-struct is_string_map<std::map<std::string, U>> : std::true_type {};
+struct is_named_map : std::false_type {};
+template <class K, class U>
+    requires(std::same_as<K, std::string> || std::is_enum_v<K>)
+struct is_named_map<std::map<K, U>> : std::true_type {};
+template <class T>
+struct is_std_array : std::false_type {};
+template <class U, std::size_t N>
+struct is_std_array<std::array<U, N>> : std::true_type {};
 
 template <class T>
 concept boolean_target = std::same_as<T, bool>;
@@ -422,7 +464,7 @@ concept optional_target = is_optional<T>::value;
 template <class T>
 concept vector_target = is_vector<T>::value;
 template <class T>
-concept map_target = is_string_map<T>::value;
+concept map_target = is_named_map<T>::value;
 template <class T>
 concept listed_target = boolean_target<T> || integer_target<T> || real_target<T> || text_target<T> || duration_target<T> ||
                         enum_target<T> || optional_target<T> || vector_target<T> || map_target<T>;
@@ -524,6 +566,15 @@ constexpr result<T> read_as(value const& source, std::string const& path, read_o
     return out;
 }
 
+template <class K>
+constexpr std::optional<K> map_key_from(std::string const& text) {
+    if constexpr (std::is_enum_v<K>) {
+        return reflect::enum_from_name<K>(text);
+    } else {
+        return text;
+    }
+}
+
 template <map_target T>
 constexpr result<T> read_as(value const& source, std::string const& path, read_options const options) {
     auto const* members = alternative_of<object>(source);
@@ -531,40 +582,69 @@ constexpr result<T> read_as(value const& source, std::string const& path, read_o
         return std::unexpected{expected_error(path, "expected an object")};
     }
     T out;
-    for (auto const& [key, item] : *members) {
-        auto element = read_value<typename T::mapped_type>(item, member_path(path, key), options);
+    for (auto const& [name, item] : *members) {
+        auto const named = map_key_from<typename T::key_type>(name);
+        if (!named) {
+            return std::unexpected{expected_error(member_path(path, name), "not one of the allowed names")};
+        }
+        auto element = read_value<typename T::mapped_type>(item, member_path(path, name), options);
         if (!element) {
             return std::unexpected{std::move(element.error())};
         }
-        out.insert_or_assign(key, std::move(*element));
+        out.insert_or_assign(*named, std::move(*element));
     }
     return out;
 }
 
 template <class T>
-constexpr std::optional<read_error> unknown_key_in(object const& members, std::string const& path, read_options const options) {
+constexpr bool has_key(std::string_view wanted);
+
+template <std::meta::info field>
+constexpr bool key_matches(std::string_view const wanted) {
+    constexpr auto kind = kind_of(field);
+    if constexpr (kind == field_kind::skip) {
+        return false;
+    } else if constexpr (kind == field_kind::flatten) {
+        return has_key<typename [:std::meta::type_of(field):]>(wanted);
+    } else {
+        return wire_of(field) == wanted;
+    }
+}
+
+template <class T>
+constexpr bool has_key(std::string_view const wanted) {
     static constexpr auto fields = std::define_static_array(
         std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::current()));
-    static constexpr auto names = std::define_static_array(
-        fields | std::views::transform([](std::meta::info const field) { return std::define_static_string(std::meta::identifier_of(field)); }));
+    bool found = false;
+    template for (constexpr auto field : fields) {
+        found = found || key_matches<field>(wanted);
+    }
+    return found;
+}
+
+template <class T>
+constexpr std::optional<read_error> unknown_key_in(object const& members, std::string const& path, read_options const options) {
     if (options.allow_unknown_keys) {
         return std::nullopt;
     }
-    for (auto const& [key, ignored] : members) {
-        if (!std::ranges::any_of(names, [&key](char const* const name) { return std::string_view{name} == key; })) {
-            return read_error{member_path(path, key), "unknown key"};
+    for (auto const& [name, ignored] : members) {
+        if (!has_key<T>(name)) {
+            return read_error{member_path(path, name), "unknown key"};
         }
     }
     return std::nullopt;
 }
 
+template <class T>
+constexpr std::optional<read_error> read_members(T& target, object const& members, std::string const& path, read_options options);
+
 template <class T, std::meta::info field>
-constexpr std::optional<read_error> read_field(T& target, object const& members, std::string const& path, read_options const options) {
-    constexpr auto key = std::meta::identifier_of(field);
-    auto const found = std::ranges::find_if(members, [](auto const& entry) { return entry.first == key; });
-    auto const child_path = member_path(path, key);
+constexpr std::optional<read_error> read_plain(T& target, object const& members, std::string const& path, read_options const options) {
+    std::string_view const name = wire_of(field);
+    auto const found = std::ranges::find_if(members, [name](auto const& entry) { return entry.first == name; });
+    auto const child_path = member_path(path, name);
     if (found == members.end()) {
-        if constexpr (member_is_required<T>(field)) {
+        if constexpr (member_is_required(field)) {
             return read_error{child_path, "required"};
         }
         return std::nullopt;
@@ -577,6 +657,31 @@ constexpr std::optional<read_error> read_field(T& target, object const& members,
     return std::nullopt;
 }
 
+template <class T, std::meta::info field>
+constexpr std::optional<read_error> read_field(T& target, object const& members, std::string const& path, read_options const options) {
+    constexpr auto kind = kind_of(field);
+    if constexpr (kind == field_kind::skip) {
+        return std::nullopt;
+    } else if constexpr (kind == field_kind::flatten) {
+        return read_members(target.[:field:], members, path, options);
+    } else {
+        return read_plain<T, field>(target, members, path, options);
+    }
+}
+
+template <class T>
+constexpr std::optional<read_error> read_members(T& target, object const& members, std::string const& path, read_options const options) {
+    static constexpr auto fields = std::define_static_array(
+        std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::current()));
+    std::optional<read_error> failure;
+    template for (constexpr auto field : fields) {
+        if (!failure) {
+            failure = read_field<T, field>(target, members, path, options);
+        }
+    }
+    return failure;
+}
+
 template <aggregate_target T>
 constexpr result<T> read_as(value const& source, std::string const& path, read_options const options) {
     static_assert(std::is_aggregate_v<T>, "read<T> supports aggregates and the listed leaf types");
@@ -587,16 +692,8 @@ constexpr result<T> read_as(value const& source, std::string const& path, read_o
     if (auto unknown = unknown_key_in<T>(*members, path, options)) {
         return std::unexpected{std::move(*unknown)};
     }
-    static constexpr auto fields = std::define_static_array(
-        std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::current()));
     T target{};
-    std::optional<read_error> failure;
-    template for (constexpr auto field : fields) {
-        if (!failure) {
-            failure = read_field<T, field>(target, *members, path, options);
-        }
-    }
-    if (failure) {
+    if (auto failure = read_members(target, *members, path, options)) {
         return std::unexpected{std::move(*failure)};
     }
     return target;
@@ -628,6 +725,179 @@ constexpr std::expected<T, read_error> read_text(std::string_view const text, pa
         return std::unexpected{read_error{std::format("offset {}", parsed.error().offset), parsed.error().message}};
     }
     return read<T>(*parsed, reading);
+}
+
+}  // namespace llmgate::json
+
+namespace llmgate::json::detail {
+
+template <class T>
+consteval bool serialisable_type() {
+    if constexpr (optional_target<T> || vector_target<T>) {
+        return serialisable_type<typename T::value_type>();
+    } else if constexpr (map_target<T>) {
+        return serialisable_type<typename T::mapped_type>();
+    } else if constexpr (listed_target<T>) {
+        return true;
+    } else {
+        return std::is_class_v<T> && std::is_aggregate_v<T> && !is_std_array<T>::value;
+    }
+}
+
+consteval std::string_view unsupported_message(std::meta::info const member) {
+    std::string text = "json::to_value cannot write member '";
+    text += std::meta::identifier_of(member);
+    text += "': use a supported type or mark it [[=json::skip]]";
+    return std::string_view{std::define_static_string(text)};
+}
+
+template <class T>
+constexpr value value_of(T const& source);
+
+template <class T>
+constexpr void write_members(object& out, T const& source);
+
+constexpr std::int64_t saturate(std::uint64_t const whole) noexcept {
+    constexpr auto ceiling = std::numeric_limits<std::int64_t>::max();
+    return std::in_range<std::int64_t>(whole) ? static_cast<std::int64_t>(whole) : ceiling;
+}
+
+constexpr std::string duration_text(std::chrono::milliseconds const span) {
+    auto chosen = duration_units.front();
+    for (auto const& unit : duration_units) {
+        if (span.count() != 0 && span % unit.second == std::chrono::milliseconds::zero()) {
+            chosen = unit;
+        }
+    }
+    std::array<char, 24> digits{};
+    auto const end = std::to_chars(digits.data(), digits.data() + digits.size(), span / chosen.second).ptr;
+    std::string text{digits.data(), end};
+    text += chosen.first;
+    return text;
+}
+
+template <class K>
+constexpr std::string map_key_text(K const& name) {
+    if constexpr (std::is_enum_v<K>) {
+        return std::string{reflect::enum_name(name)};
+    } else {
+        return name;
+    }
+}
+
+template <boolean_target T>
+constexpr value write_as(T const& source) {
+    return value{source};
+}
+
+template <integer_target T>
+constexpr value write_as(T const& source) {
+    if constexpr (std::is_signed_v<T>) {
+        return value{static_cast<std::int64_t>(source)};
+    } else {
+        return value{saturate(source)};
+    }
+}
+
+template <real_target T>
+constexpr value write_as(T const& source) {
+    return value{static_cast<double>(source)};
+}
+
+template <text_target T>
+constexpr value write_as(T const& source) {
+    return value{source};
+}
+
+template <duration_target T>
+constexpr value write_as(T const& source) {
+    return value{duration_text(source)};
+}
+
+template <enum_target T>
+constexpr value write_as(T const& source) {
+    return value{std::string{reflect::enum_name(source)}};
+}
+
+template <optional_target T>
+constexpr value write_as(T const& source) {
+    return source ? value_of(*source) : value{};
+}
+
+template <vector_target T>
+constexpr value write_as(T const& source) {
+    array items;
+    for (auto const& item : source) {
+        items.push_back(value_of(item));
+    }
+    return value{std::move(items)};
+}
+
+template <map_target T>
+constexpr value write_as(T const& source) {
+    object members;
+    for (auto const& [name, item] : source) {
+        members.emplace_back(map_key_text(name), value_of(item));
+    }
+    return value{std::move(members)};
+}
+
+template <aggregate_target T>
+constexpr value write_as(T const& source) {
+    object members;
+    write_members(members, source);
+    return value{std::move(members)};
+}
+
+template <class T>
+constexpr value value_of(T const& source) {
+    return write_as(source);
+}
+
+template <class T>
+constexpr void emit(object& out, std::string_view const name, T const& item) {
+    if constexpr (optional_target<T>) {
+        if (item) {
+            out.emplace_back(std::string{name}, value_of(*item));
+        }
+    } else {
+        out.emplace_back(std::string{name}, value_of(item));
+    }
+}
+
+template <class T, std::meta::info field>
+constexpr void write_field(object& out, T const& source) {
+    constexpr auto kind = kind_of(field);
+    using member = typename [:std::meta::type_of(field):];
+    static_assert(kind == field_kind::skip || serialisable_type<member>(), unsupported_message(field));
+    if constexpr (kind == field_kind::flatten) {
+        write_members(out, source.[:field:]);
+    } else if constexpr (kind == field_kind::redact) {
+        out.emplace_back(std::string{wire_of(field)}, value{std::string{redacted_text}});
+    } else if constexpr (kind == field_kind::plain) {
+        emit(out, wire_of(field), source.[:field:]);
+    }
+}
+
+template <class T>
+constexpr void write_members(object& out, T const& source) {
+    static constexpr auto fields = std::define_static_array(
+        std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::current()));
+    template for (constexpr auto field : fields) {
+        write_field<T, field>(out, source);
+    }
+}
+
+}  // namespace llmgate::json::detail
+
+export namespace llmgate::json {
+
+template <class T>
+concept writable = detail::serialisable_type<T>();
+
+template <writable T>
+constexpr value to_value(T const& source) {
+    return detail::value_of(source);
 }
 
 }  // namespace llmgate::json

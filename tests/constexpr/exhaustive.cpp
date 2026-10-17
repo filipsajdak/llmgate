@@ -14,6 +14,7 @@ constexpr std::string_view usage_alphabet = R"({}":,0-9a_ep)";
 constexpr std::string_view selection_alphabet = R"(fsatT :,b)";
 constexpr std::string_view quota_alphabet = R"({}":,1 qstru)";
 constexpr std::string_view doctor_alphabet = "\x01\x02\x04\x08\x10\x20\x40";
+constexpr std::string_view writer_alphabet = R"(a,"\)";
 constexpr std::string_view sse_alphabet = "dat: \n\re";
 constexpr std::array<std::size_t, 6> core_tokens{
     static_cast<std::size_t>(token::start),         static_cast<std::size_t>(token::block_start_0),
@@ -41,6 +42,8 @@ static_assert(for_all_texts(selection_alphabet, LLMGATE_SELECTION_LENGTH, &selec
 static_assert(for_all_texts(quota_alphabet, LLMGATE_QUOTA_LENGTH, &quota_holds), "a short text breaks the quota reader");
 #elif LLMGATE_CHECK == 11
 static_assert(for_all_texts(doctor_alphabet, LLMGATE_DOCTOR_LENGTH, &doctor_holds), "a combination of facts breaks the doctor checks");
+#elif LLMGATE_CHECK == 12
+static_assert(for_all_texts(writer_alphabet, LLMGATE_WRITER_LENGTH, &writer_holds), "a short text breaks the write and read round trip");
 #elif LLMGATE_CHECK == 5
 static_assert(for_all_sequences(token_count, LLMGATE_GUARD_FULL_LENGTH, &guard_holds_for_tokens),
               "an event sequence makes the guard emit an invalid stream");
