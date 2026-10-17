@@ -93,6 +93,11 @@ const suite arguments_suite = [] {
         expect(statusline_input("not json").model.empty());
         expect(statusline_input(R"({"model":7,"context_window":"x"})").context_percent == 0);
         expect(statusline_input(R"({"cwd":"/c"})").directory == "/c");
+        expect(statusline_input(R"({"cwd":"/c","workspace":{"current_dir":"/w"}})").directory == "/w");
+        expect(statusline_input(R"({"model":{"id":"claude-x"}})").model == "claude-x");
+        expect(statusline_input(R"({"model":{"display_name":"Opus","id":"claude-x"}})").model == "Opus");
+        expect(statusline_input(R"({"context_window":{"used_percentage":-5}})").context_percent == 0);
+        expect(statusline_input(R"({"context_window":{"used_percentage":99999}})").context_percent == 1000);
     };
 
     "capability_gateway_counters_are_summed_from_the_stats_body"_test = [] {
@@ -101,6 +106,9 @@ const suite arguments_suite = [] {
         expect(requests == 12_u);
         expect(repairs == 3_u);
         expect(counters_from("garbage") == std::pair<std::uint64_t, std::uint64_t>{0, 0});
+        expect(counters_from(R"({"requests":"x","repairs":[1,2]})") == std::pair<std::uint64_t, std::uint64_t>{0, 0});
+        expect(counters_from(R"({"requests":4,"repairs":{"a":-3,"b":"x","c":2.5,"d":5}})") == std::pair<std::uint64_t, std::uint64_t>{4, 5});
+        expect(counters_from(R"({"requests":4})") == std::pair<std::uint64_t, std::uint64_t>{4, 0});
     };
 
     "limit_flag_errors_keep_their_exact_texts"_test = [] {
