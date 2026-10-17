@@ -1,0 +1,59 @@
+module;
+
+#include <cstdlib>
+
+module llmgate.copilot;
+
+import std;
+import llmgate.fetch;
+import llmgate.json;
+
+namespace llmgate::copilot {
+
+async::task<std::expected<device_code, std::error_code>> request_device_code(async::reactor& loop, tls::client_context const& tls_context,
+                                                                             gateway::copilot_config settings) {
+    auto spec = detail::github_post("/login/device/code", detail::form({{"client_id", settings.client_id}, {"scope", "read:user"}}));
+    auto const answer = co_await fetch::request(loop, tls_context, settings.github_url, std::move(spec), github_limit);
+    if (!answer) {
+        co_return std::unexpected{make_error_code(errc::github_unreachable)};
+    }
+    if (answer->status != 200) {
+        co_return std::unexpected{make_error_code(errc::github_rejected)};
+    }
+    co_return detail::parse_reply<device_code>(answer->body);
+}
+
+async::task<std::expected<std::string, std::error_code>> wait_for_authorisation(async::reactor& loop, tls::client_context const& tls_context,
+                                                                                gateway::copilot_config settings, device_code code) {
+    auto interval = settings.poll_interval.value_or(milliseconds{code.interval * 1000});
+    auto const deadline = std::chrono::steady_clock::now() + seconds{code.expires_in};
+    while (std::chrono::steady_clock::now() < deadline) {
+        co_await loop.sleep(interval);
+        auto spec = detail::github_post("/login/oauth/access_token", detail::form({{"client_id", settings.client_id},
+                                                                                    {"device_code", code.device_code},
+                                                                                    {"grant_type", device_grant}}));
+        auto const answer = co_await fetch::request(loop, tls_context, settings.github_url, std::move(spec), github_limit);
+        if (!answer) {
+            co_return std::unexpected{make_error_code(errc::github_unreachable)};
+        }
+        auto const reply = detail::parse_reply<oauth_reply>(answer->body);
+        if (!reply) {
+            co_return std::unexpected{reply.error()};
+        }
+        if (!reply->access_token.empty()) {
+            co_return reply->access_token;
+        }
+        if (reply->error == "slow_down") {
+            interval += slow_down_step;
+        } else if (reply->error == "access_denied") {
+            co_return std::unexpected{make_error_code(errc::login_denied)};
+        } else if (reply->error == "expired_token") {
+            co_return std::unexpected{make_error_code(errc::login_expired)};
+        } else if (reply->error != "authorization_pending") {
+            co_return std::unexpected{make_error_code(errc::github_rejected)};
+        }
+    }
+    co_return std::unexpected{make_error_code(errc::login_expired)};
+}
+
+}  // namespace llmgate::copilot

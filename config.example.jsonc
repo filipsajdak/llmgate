@@ -1,0 +1,28 @@
+{
+  // where Claude Code connects: ANTHROPIC_BASE_URL=http://127.0.0.1:9480/anthropic
+  "listen": "127.0.0.1:9480",
+
+  "upstream": {
+    "base_url": "https://api.githubcopilot.com",
+    "messages_path": "/v1/messages",
+    "headers": {
+      "Editor-Version": "vscode/1.99.0",
+      "Copilot-Integration-Id": "vscode-chat"
+    }
+  },
+
+  // Claude Code expands aliases such as "sonnet" to full model names before it calls the gateway,
+  // so map full names: client model name -> upstream model name. Unknown names go through unchanged.
+  "models": {
+    "claude-sonnet-5-5": "claude-sonnet-4.5",
+    "claude-opus-5-5": "claude-opus-4.5"
+  },
+
+  "time": { "connect": "10s", "response_head": "2m", "stream_idle": "10m" },
+
+  // post_quantum_preferred, post_quantum_required or classical_only
+  "tls_groups": "post_quantum_preferred",
+
+  // GitHub Copilot device login: run `llmgate login` once
+  "copilot": { "token_file": "~/.config/llmgate/copilot-token.json" }
+}

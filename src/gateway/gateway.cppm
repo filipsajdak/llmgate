@@ -29,12 +29,24 @@ struct upstream_config {
     std::map<std::string, std::string> headers{};
 };
 
+constexpr std::string_view vscode_copilot_client_id = "Iv1.b507a08c87ecfe98";
+
+struct copilot_config {
+    std::string token_file{};
+    std::string client_id = std::string{vscode_copilot_client_id};
+    std::string github_url = "https://github.com";
+    std::string api_url = "https://api.github.com";
+    std::optional<milliseconds> poll_interval{};
+};
+
 struct config {
     [[= json::required]] std::string listen{};
     [[= json::required]] upstream_config upstream{};
     std::map<std::string, std::string> models{};
     timeouts time{};
     tls::group_policy tls_groups = tls::group_policy::post_quantum_preferred;
+    std::optional<copilot_config> copilot{};
+    std::string static_token_env{};
 };
 
 class credential {
@@ -42,6 +54,7 @@ public:
     virtual ~credential() = default;
     virtual async::task<std::expected<std::string, std::error_code>> bearer() = 0;
     virtual void rejected() noexcept {}
+    virtual std::optional<std::string> endpoint() const { return std::nullopt; }
 };
 
 class static_credential final : public credential {
@@ -187,6 +200,8 @@ public:
         }
     }
 
+    bool uses_credential_endpoint() const { return credentials_->endpoint().has_value(); }
+
     stats const& counters() const noexcept { return counters_; }
     bool configured() const noexcept { return upstream_.has_value(); }
 
@@ -263,7 +278,12 @@ private:
         }
         auto token = co_await credentials_->bearer();
         if (!token) {
-            co_return co_await reject(out, routing::error_reply(401, "authentication_error", "no upstream credential: run llmgate login"));
+            co_return co_await reject(out, routing::error_reply(401, "authentication_error", "no upstream credential: run llmgate login (" + token.error().message() + ")"));
+        }
+        if (auto const dynamic = credentials_->endpoint()) {
+            if (auto parsed = routing::parse_url(*dynamic)) {
+                upstream_ = std::move(*parsed);
+            }
         }
         auto upstream = co_await connect_upstream();
         if (!upstream) {
@@ -346,6 +366,9 @@ private:
         }
         if (state.buffer_overflow) {
             co_return co_await reject(out, routing::error_reply(502, "api_error", "the upstream response is too large"));
+        }
+        if (state.head->status == 401 || state.head->status == 403) {
+            credentials_->rejected();
         }
         if (state.head->keep_alive) {
             pool_.give_back(std::move(key), std::move(upstream));

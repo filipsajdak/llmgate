@@ -16,3 +16,11 @@ src/net/net.cppm|read_some|into|zero-copy IO buffer that the caller keeps alive 
 src/net/net.cppm|read_some|destination|zero-copy IO buffer that the caller keeps alive across the await
 src/net/net.cppm|write_all|data|zero-copy IO buffer that the caller keeps alive across the await
 tests/|*|*|test coroutines borrow fixtures from the scenario frame, which waits for them
+src/gateway/gateway.cppm|operator ( )|incoming|awaited immediately by serve_connection, whose frame owns the request
+src/gateway/gateway.cppm|estimate_tokens|incoming|awaited in the same full expression by operator(), whose caller owns the request
+src/gateway/gateway.cppm|forward|incoming|awaited in the same full expression by operator(), whose caller owns the request
+src/gateway/gateway.cppm|relay|upstream|awaited immediately by forward, whose frame owns the upstream stream
+src/gateway/gateway.cppm|conclude|upstream|awaited immediately by relay, whose frame owns the stream reference
+src/gateway/gateway.cppm|conclude|state|awaited immediately by relay, whose frame owns the relay state
+src/http/io.cppm|step|on_event|awaited immediately by the caller, which owns the stateful sink for the whole exchange
+src/http/io.cppm|advance|on_event|private helper awaited immediately by read and step, whose callers own the sink

@@ -42,6 +42,10 @@ struct read_error {
 struct required_t {};
 inline constexpr required_t required{};
 
+struct read_options {
+    bool allow_unknown_keys = false;
+};
+
 }  // namespace llmgate::json
 
 namespace llmgate::json::detail {
@@ -300,10 +304,10 @@ constexpr std::string element_path(std::string const& path, std::size_t const in
 }
 
 template <class T>
-constexpr result<T> read_value(value const& source, std::string const& path);
+constexpr result<T> read_value(value const& source, std::string const& path, read_options options);
 
 template <class T>
-constexpr result<T> read_aggregate(value const& source, std::string const& path) {
+constexpr result<T> read_aggregate(value const& source, std::string const& path, read_options const options) {
     auto const* members = std::get_if<object>(&source.data);
     if (members == nullptr) {
         return std::unexpected{read_error{path, "expected an object"}};
@@ -313,7 +317,7 @@ constexpr result<T> read_aggregate(value const& source, std::string const& path)
     static constexpr auto names = std::define_static_array(
         fields | std::views::transform([](std::meta::info const field) { return std::define_static_string(std::meta::identifier_of(field)); }));
     for (auto const& [key, ignored] : *members) {
-        if (!std::ranges::any_of(names, [&key](char const* const name) { return std::string_view{name} == key; })) {
+        if (!options.allow_unknown_keys && !std::ranges::any_of(names, [&key](char const* const name) { return std::string_view{name} == key; })) {
             return std::unexpected{read_error{path.empty() ? key : path + "." + key, "unknown key"}};
         }
     }
@@ -328,7 +332,7 @@ constexpr result<T> read_aggregate(value const& source, std::string const& path)
                 if constexpr (member_is_required<T>(field)) {
                     failure = read_error{child_path, "required"};
                 }
-            } else if (auto parsed = read_value<typename [:std::meta::type_of(field):]>(found->second, child_path)) {
+            } else if (auto parsed = read_value<typename [:std::meta::type_of(field):]>(found->second, child_path, options)) {
                 result.[:field:] = std::move(*parsed);
             } else {
                 failure = std::move(parsed.error());
@@ -355,7 +359,7 @@ template <class U>
 struct is_string_map<std::map<std::string, U>> : std::true_type {};
 
 template <class T>
-constexpr result<T> read_value(value const& source, std::string const& path) {
+constexpr result<T> read_value(value const& source, std::string const& path, read_options const options) {
     if constexpr (std::is_same_v<T, bool>) {
         if (auto const* flag = std::get_if<bool>(&source.data)) {
             return *flag;
@@ -398,7 +402,7 @@ constexpr result<T> read_value(value const& source, std::string const& path) {
         if (std::holds_alternative<std::nullptr_t>(source.data)) {
             return T{};
         }
-        auto inner = read_value<typename T::value_type>(source, path);
+        auto inner = read_value<typename T::value_type>(source, path, options);
         if (!inner) {
             return std::unexpected{std::move(inner.error())};
         }
@@ -410,7 +414,7 @@ constexpr result<T> read_value(value const& source, std::string const& path) {
         }
         T out;
         for (auto const& [index, item] : std::views::enumerate(*items)) {
-            auto element = read_value<typename T::value_type>(item, element_path(path, static_cast<std::size_t>(index)));
+            auto element = read_value<typename T::value_type>(item, element_path(path, static_cast<std::size_t>(index)), options);
             if (!element) {
                 return std::unexpected{std::move(element.error())};
             }
@@ -424,7 +428,7 @@ constexpr result<T> read_value(value const& source, std::string const& path) {
         }
         T out;
         for (auto const& [key, item] : *members) {
-            auto element = read_value<typename T::mapped_type>(item, path.empty() ? key : path + "." + key);
+            auto element = read_value<typename T::mapped_type>(item, path.empty() ? key : path + "." + key, options);
             if (!element) {
                 return std::unexpected{std::move(element.error())};
             }
@@ -433,7 +437,7 @@ constexpr result<T> read_value(value const& source, std::string const& path) {
         return out;
     } else {
         static_assert(std::is_aggregate_v<T>, "read<T> supports aggregates and the listed leaf types");
-        return read_aggregate<T>(source, path);
+        return read_aggregate<T>(source, path, options);
     }
 }
 
@@ -446,17 +450,18 @@ constexpr std::expected<value, parse_error> parse(std::string_view const text, p
 }
 
 template <class T>
-constexpr std::expected<T, read_error> read(value const& source) {
-    return detail::read_value<T>(source, {});
+constexpr std::expected<T, read_error> read(value const& source, read_options const options = {}) {
+    return detail::read_value<T>(source, {}, options);
 }
 
 template <class T>
-constexpr std::expected<T, read_error> read_text(std::string_view const text, parse_options const options = {}) {
+constexpr std::expected<T, read_error> read_text(std::string_view const text, parse_options const options = {},
+                                                 read_options const reading = {}) {
     auto parsed = parse(text, options);
     if (!parsed) {
         return std::unexpected{read_error{std::format("offset {}", parsed.error().offset), parsed.error().message}};
     }
-    return read<T>(*parsed);
+    return read<T>(*parsed, reading);
 }
 
 }  // namespace llmgate::json

@@ -2,7 +2,18 @@
 
 A gateway that lets Claude Code talk to Copilot, OpenAI-compatible and Anthropic backends without losing anything silently. C++26 with static reflection, Apache-2.0.
 
-Status: walking-skeleton phase (BET-1, decision on 2026-11-06). Nothing here serves traffic yet.
+Status: walking-skeleton phase (BET-1, decision on 2026-11-06). The Anthropic passthrough works end to end with the real Claude Code CLI against a scripted upstream (`tests/e2e/claude_through_gateway.sh`); the first run against GitHub Copilot needs your device login.
+
+## Quick start
+
+```bash
+cp config.example.jsonc ~/.config/llmgate/config.jsonc
+build/host/llmgate login            # prints a code; authorise it at github.com/login/device
+build/host/llmgate                  # serves on 127.0.0.1:9480
+ANTHROPIC_BASE_URL=http://127.0.0.1:9480/anthropic ANTHROPIC_API_KEY=any claude
+```
+
+`llmgate --check-config` validates a configuration (unknown keys and wrong types are reported with their path), `llmgate --version` prints the version.
 
 ## Build
 
@@ -84,6 +95,7 @@ Requires GCC 16.2 (`/opt/homebrew/bin/g++-16`), CMake 4.4+, Ninja. Clang cannot 
 | An inline function with contracts exported from a module leaves `__tu_has_violation` undefined at link time | Put contracts on the non-inline declaration and the body in an implementation unit |
 | libstdc++ 16.2 has no default `handle_contract_violation` | `src/core/contract_violation.cpp` defines it |
 | boost-ext/ut uses `constructor(101)`, unsupported on Mach-O | `cmake/patch_ut.cmake` disables that block on Apple |
+| An exported non-template free function that is a coroutine and has its body in a module interface makes importers fail with `failed to read compiled module cluster N: Bad file data` | Declare it in the interface and define it in an implementation unit (`fetch.cpp`, `copilot.cpp`); coroutine class members and templates are fine |
 | `import std` through CMake needs the `CxxImportStd` experimental gate | Set before `project()` in `CMakeLists.txt` |
 | `SSL_get0_group_name` before the handshake finishes dereferences a null session | Guarded in `tls::connection::negotiated_group`, covered by a named test |
 | LeakSanitizer found spawned server loops still suspended when a reactor was destroyed | `reactor::spawn` registers each task and the reactor destroys unfinished ones |

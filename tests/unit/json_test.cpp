@@ -72,6 +72,13 @@ const suite json_suite = [] {
         expect(loaded.error().message == "required");
     };
 
+    "capability_unknown_keys_can_be_allowed_for_third_party_replies"_test = [] {
+        auto const loaded = read_text<settings>(R"({"listen":"x","extra":{"deep":[1]}})", {}, {.allow_unknown_keys = true});
+
+        expect(loaded.has_value());
+        expect(loaded->listen == "x");
+    };
+
     "limit_an_unknown_key_is_rejected_so_typos_cannot_hide"_test = [] {
         auto const loaded = read_text<settings>(R"({"listen":"x","verbos":true})");
 
