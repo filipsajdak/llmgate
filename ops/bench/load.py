@@ -2,6 +2,7 @@
 import argparse
 import asyncio
 import json
+import ssl
 import sys
 import time
 from urllib.parse import urlsplit
@@ -53,7 +54,7 @@ async def one_request(reader, writer, payload):
     return status, first_byte - started, (first_delta - started) if first_delta else None, done - started, b"connection: close" in lowered
 
 
-async def worker(host, port, payload, state):
+async def worker(host, port, payload, state, context):
     reader = writer = None
     while state["remaining"] > 0 or state["deadline"] > time.perf_counter():
         if state["remaining"] <= 0 and state["count_mode"]:
@@ -62,7 +63,7 @@ async def worker(host, port, payload, state):
             state["remaining"] -= 1
         try:
             if writer is None:
-                reader, writer = await asyncio.open_connection(host, port)
+                reader, writer = await asyncio.open_connection(host, port, ssl=context, server_hostname=host if context else None)
             status, ttfb, tdelta, total, closing = await one_request(reader, writer, payload)
         except (asyncio.IncompleteReadError, OSError, ValueError) as error:
             state["errors"] += 1
@@ -88,8 +89,9 @@ async def worker(host, port, payload, state):
         writer.close()
 
 
-async def run(url, key, concurrency, stream, kb, seconds, requests, warmup):
+async def run(url, key, concurrency, stream, kb, seconds, requests, warmup, cafile=None):
     parts = urlsplit(url)
+    context = ssl.create_default_context(cafile=cafile) if parts.scheme == "https" else None
     host, port, path = parts.hostname, parts.port, parts.path or "/"
     body = request_body(stream, kb)
     payload = (f"POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nx-api-key: {key}\r\ncontent-type: application/json\r\n"
@@ -97,7 +99,7 @@ async def run(url, key, concurrency, stream, kb, seconds, requests, warmup):
     state = {"remaining": requests if requests else 0, "count_mode": bool(requests), "deadline": time.perf_counter() + seconds,
              "errors": 0, "error_kinds": {}, "seen": 0, "warmup": warmup, "ttfb": [], "total": [], "delta": []}
     begun = time.perf_counter()
-    await asyncio.gather(*(worker(host, port, payload, state) for _ in range(concurrency)))
+    await asyncio.gather(*(worker(host, port, payload, state, context) for _ in range(concurrency)))
     elapsed = time.perf_counter() - begun
     measured = len(state["total"])
     return {"concurrency": concurrency, "stream": stream, "body_kb": kb, "requests": state["seen"], "errors": state["errors"], "error_kinds": state["error_kinds"],
@@ -116,8 +118,9 @@ def main():
     parser.add_argument("--seconds", type=float, default=5.0)
     parser.add_argument("--requests", type=int, default=0, help="stop after this many requests instead of after --seconds")
     parser.add_argument("--warmup", type=int, default=20)
+    parser.add_argument("--cafile", help="trust this PEM certificate for an https url")
     args = parser.parse_args()
-    result = asyncio.run(run(args.url, args.key, args.concurrency, not args.no_stream, args.body_kb, args.seconds, args.requests, args.warmup))
+    result = asyncio.run(run(args.url, args.key, args.concurrency, not args.no_stream, args.body_kb, args.seconds, args.requests, args.warmup, args.cafile))
     json.dump(result, sys.stdout, indent=2)
     print()
     return 1 if result["errors"] or not result["measured"] else 0

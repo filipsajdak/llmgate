@@ -270,7 +270,14 @@ Measured on one Mac (Apple silicon, GCC 16.2, `RelWithDebInfo`), client and fake
 | 100 KB | 8 | 2.8 / 3.2 ms | 0.41 ms | 2,450 req/s |
 | 100 KB | 32 | 11.5 / 21 ms | 0.41 ms | 2,400 req/s |
 
-The gateway is single-threaded, so added latency under load is queueing behind other requests. For one Claude Code session (a stream or two, bodies of 50 to 200 KB) the gateway adds under a millisecond. TLS to a real upstream is not measured here. A streamed reply that ends cleanly returns its upstream connection to the pool; before that was fixed, every streamed request opened a new connection and a high request rate ran out of ephemeral ports.
+The gateway is single-threaded, so added latency under load is queueing behind other requests. For one Claude Code session (a stream or two, bodies of 50 to 200 KB) the gateway adds under a millisecond. `--tls` adds an HTTPS upstream with a self-signed certificate that the gateway verifies (it trusts `SSL_CERT_FILE`), and `--before-binary` compares a second build. A streamed reply that ends cleanly returns its upstream connection to the pool; before that was fixed, every streamed request opened a new connection and a high request rate ran out of ephemeral ports. Over TLS on this machine (2-second runs):
+
+| Streamed request, 2 KB, one at a time | Added latency p50 / p99 | CPU per request | Throughput |
+|---|---|---|---|
+| Before the pool fix | 1.35 / 1.62 ms | 0.49 ms | 680 req/s |
+| After | 0.08 / 0.10 ms | 0.14 ms | 4,790 req/s |
+
+That is the CPU cost of one TLS handshake with the default key-exchange offer, about 1.3 ms. On loopback the network adds nothing; against a real upstream each avoided handshake also saves the TCP and TLS round trips, which depend on the distance to the provider and are not measured here.
 
 Where the time goes at 100 KB (`sample` on macOS): the request body is scanned three times per request (about 0.09 ms), the usage ledger is opened, written and closed per request (about 0.035 ms), and copying the body to the upstream is the rest. Scanning once and keeping the ledger open are the two cheap wins if a shared gateway ever needs the headroom.
 

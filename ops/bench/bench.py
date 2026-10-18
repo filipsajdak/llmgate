@@ -35,19 +35,34 @@ def read_text(path):
         return ""
 
 
-def start_upstream(work, events, delay_ms):
-    port_file = work / f"upstream-{events}-{delay_ms}.port"
-    proc = subprocess.Popen([sys.executable, str(HERE / "upstream.py"), str(port_file), "--events", str(events), "--delay-ms", str(delay_ms)])
+def make_certificate(work):
+    cert, key = work / "cert.pem", work / "key.pem"
+    if not cert.exists():
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out", str(cert), "-days", "2", "-subj", "/CN=localhost",
+                        "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"], check=True, capture_output=True)
+    return cert, key
+
+
+def start_upstream(work, events, delay_ms, tls=False):
+    port_file = work / f"upstream-{events}-{delay_ms}-{int(tls)}.port"
+    command = [sys.executable, str(HERE / "upstream.py"), str(port_file), "--events", str(events), "--delay-ms", str(delay_ms)]
+    if tls:
+        cert, key = make_certificate(work)
+        command += ["--tls-cert", str(cert), "--tls-key", str(key)]
+    proc = subprocess.Popen(command)
     return proc, int(wait_for(lambda: read_text(port_file).strip(), "the upstream port"))
 
 
-def start_gateway(binary, work, upstream_port, ledger):
-    config = work / f"config-{upstream_port}-{'on' if ledger else 'off'}.jsonc"
-    config.write_text(json.dumps({"listen": "127.0.0.1:0", "upstream": {"base_url": f"http://127.0.0.1:{upstream_port}", "messages_path": "/v1/messages"},
+def start_gateway(binary, work, upstream_port, ledger, tls=False):
+    config = work / f"config-{upstream_port}-{'on' if ledger else 'off'}-{pathlib.Path(binary).parent.parent.parent.name}.jsonc"
+    scheme = "https" if tls else "http"
+    config.write_text(json.dumps({"listen": "127.0.0.1:0", "upstream": {"base_url": f"{scheme}://127.0.0.1:{upstream_port}", "messages_path": "/v1/messages"},
                                   "models": {"sonnet": "bench-sonnet"}, "static_token_env": "LLMGATE_TEST_TOKEN", "client_key_env": "LLMGATE_CLIENT_KEY",
                                   "usage": {"ledger_file": str(work / f"usage-{upstream_port}.jsonl") if ledger else ""}}))
     log = work / f"gateway-{config.stem}.log"
     env = dict(os.environ, LLMGATE_TEST_TOKEN="bench-upstream-token", LLMGATE_CLIENT_KEY=KEY)
+    if tls:
+        env["SSL_CERT_FILE"] = str(work / "cert.pem")
     proc = subprocess.Popen([str(binary), "--config", str(config)], env=env, stdout=open(log, "w"), stderr=subprocess.STDOUT)
     port = wait_for(lambda: re.search(r"listening on 127\.0\.0\.1:(\d+)", read_text(log)), "the gateway to listen")
     return proc, int(port.group(1))
@@ -91,7 +106,7 @@ def measure(label, url, pid, args, concurrency, stream, kb, warmup):
         settle_ports()
     counters = gateway_counters(url) if pid else (0, 0)
     before = process_numbers(pid) if pid else (0, 0.0)
-    result = asyncio.run(load.run(url, KEY, concurrency, stream, kb, args.seconds, 0, warmup))
+    result = asyncio.run(load.run(url, KEY, concurrency, stream, kb, args.seconds, 0, warmup, args.cafile))
     after = process_numbers(pid) if pid else (0, 0.0)
     result.update(label=label, rss_mb=round(after[0] / 1024, 1))
     if pid:
@@ -130,22 +145,31 @@ def main():
     parser.add_argument("--concurrency", type=int, nargs="+", default=[1, 8, 32])
     parser.add_argument("--body-kb", type=int, nargs="+", default=[2, 100])
     parser.add_argument("--paced", action="store_true", help="also run a paced upstream (20 ms per event) to check the gateway streams instead of buffering")
+    parser.add_argument("--tls", action="store_true", help="also run against an HTTPS upstream with a self-signed certificate (needs openssl)")
+    parser.add_argument("--before-binary", help="a second llmgate binary to compare in the TLS scenario, for example one built before a fix")
     parser.add_argument("--out", default=str(ROOT / "build/bench"))
     args = parser.parse_args()
     if not pathlib.Path(args.binary).exists():
         raise SystemExit(f"{args.binary} does not exist; build it first")
     work = pathlib.Path(tempfile.mkdtemp(prefix="llmgate-bench-"))
     procs, results = [], []
-    scenarios = [("burst", 30, 0.0, args.concurrency, args.body_kb, args.warmup)]
+    args.cafile = None
+    scenarios = [("burst", 30, 0.0, args.concurrency, args.body_kb, args.warmup, False)]
     if args.paced:
-        scenarios.append(("paced", 30, 20.0, [1, 8], [2], 1))
+        scenarios.append(("paced", 30, 20.0, [1, 8], [2], 1, False))
+    if args.tls:
+        scenarios.append(("tls", 30, 0.0, [1, 8], [2, 100], args.warmup, True))
     try:
-        for scenario, events, delay, concs, sizes, warmup in scenarios:
-            upstream, up_port = start_upstream(work, events, delay)
+        for scenario, events, delay, concs, sizes, warmup, tls in scenarios:
+            upstream, up_port = start_upstream(work, events, delay, tls)
             procs.append(upstream)
-            targets = [("direct", f"http://127.0.0.1:{up_port}/v1/messages", None)]
-            for name, ledger in (("gateway ledger off", False), ("gateway ledger on", True)):
-                gateway, gw_port = start_gateway(args.binary, work, up_port, ledger)
+            args.cafile = str(work / "cert.pem") if tls else None
+            targets = [("direct", f"{'https' if tls else 'http'}://127.0.0.1:{up_port}/v1/messages", None)]
+            variants = [("gateway", args.binary, True)] + ([("gateway before fix", args.before_binary, True)] if tls and args.before_binary else [])
+            if not tls:
+                variants = [("gateway ledger off", args.binary, False), ("gateway ledger on", args.binary, True)]
+            for name, binary, ledger in variants:
+                gateway, gw_port = start_gateway(binary, work, up_port, ledger, tls)
                 procs.append(gateway)
                 targets.append((name, f"http://127.0.0.1:{gw_port}/anthropic/v1/messages", gateway.pid))
             for conc in concs:

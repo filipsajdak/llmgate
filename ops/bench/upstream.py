@@ -2,10 +2,13 @@
 import argparse
 import asyncio
 import json
+import ssl
 
 parser = argparse.ArgumentParser(description="Fast fake Anthropic upstream for benchmarking: no logging, prebuilt replies")
 parser.add_argument("port_file")
 parser.add_argument("--events", type=int, default=30, help="content_block_delta events per streamed reply")
+parser.add_argument("--tls-cert", help="serve HTTPS with this certificate (PEM)")
+parser.add_argument("--tls-key")
 parser.add_argument("--delay-ms", type=float, default=0.0, help="pause before each event; 0 sends the whole reply in one write")
 args = parser.parse_args()
 
@@ -60,7 +63,11 @@ async def serve(reader, writer):
 
 
 async def main():
-    server = await asyncio.start_server(serve, "127.0.0.1", 0, backlog=1024)
+    context = None
+    if args.tls_cert:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(args.tls_cert, args.tls_key)
+    server = await asyncio.start_server(serve, "127.0.0.1", 0, backlog=1024, ssl=context)
     with open(args.port_file, "w") as handle:
         handle.write(str(server.sockets[0].getsockname()[1]))
     async with server:
