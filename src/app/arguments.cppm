@@ -33,7 +33,7 @@ static_assert(reflect::unique_values<command>());
 constexpr unsigned default_days = 7;
 constexpr unsigned longest_report_days = 3660;
 
-constexpr std::size_t flag_capacity = 16;
+constexpr std::size_t flag_capacity = 24;
 
 struct flag {
     char word[flag_capacity];
@@ -56,6 +56,13 @@ struct applies_to {
     }
 };
 
+enum class document { example, schema, config_table };
+static_assert(reflect::unique_values<document>());
+
+struct prints {
+    document which;
+};
+
 struct limits {
     unsigned lowest = 0;
     unsigned highest = 0;
@@ -66,6 +73,9 @@ struct options {
     [[= flag{"--config"}]] [[= operand{"PATH"}]] std::string config_path = "~/.config/llmgate/config.jsonc";
     [[= flag{"--check-config"}]] bool check_config = false;
     [[= flag{"--version"}]] bool show_version = false;
+    [[= flag{"--print-example"}]] [[= prints{document::example}]] bool print_example = false;
+    [[= flag{"--print-schema"}]] [[= prints{document::schema}]] bool print_schema = false;
+    [[= flag{"--print-config-table"}]] [[= prints{document::config_table}]] bool print_config_table = false;
     [[= flag{"--json"}]] [[= applies_to{command::env, command::usage, command::doctor, command::quota}]] bool as_json = false;
     [[= flag{"--vscode"}]] [[= applies_to{command::env, command::setup}]] [[= operand{"FILE"}]] std::optional<std::string> vscode{};
     [[= flag{"--service"}]] [[= applies_to{command::setup}]] bool service = false;
@@ -300,6 +310,20 @@ constexpr bool command_marked(command const which) {
     return marked;
 }
 
+constexpr std::optional<document> requested_document(options const& parsed) {
+    std::optional<document> found;
+    template for (constexpr auto member : detail::option_members) {
+        constexpr auto marker = reflect::annotation_of<prints>(member);
+        if constexpr (marker) {
+            static_assert(std::same_as<typename [:std::meta::type_of(member):], bool>, "a prints flag is a switch");
+            if (parsed.[:member:]) {
+                found = found.value_or(marker->which);
+            }
+        }
+    }
+    return found;
+}
+
 constexpr std::expected<options, std::string> parse(std::span<std::string const> const args) {
     detail::parse_state state{.args = args};
     for (; state.index < args.size(); ++state.index) {
@@ -398,6 +422,8 @@ static_assert(!parse(as_strings({"usage", "--days"})).has_value() && !parse(as_s
 static_assert(parse(as_strings({"doctor", "--offline", "--json"})).value().offline && parse(as_strings({"quota"})).value().which == command::quota);
 static_assert(!parse(as_strings({"doctor"})).value().offline && parse(as_strings({"doctor"})).value().which == command::doctor);
 static_assert(command_marked<tolerant>(command::statusline) && command_marked<tolerant>(command::stop) && !command_marked<tolerant>(command::serve));
+static_assert(requested_document(parse(as_strings({"--print-schema"})).value()) == document::schema && !requested_document(options{}));
+static_assert(requested_document(parse(as_strings({"--print-example", "--print-config-table"})).value()) == document::example);
 static_assert(base_url({.host = "127.0.0.1", .port = 9480}) == "http://127.0.0.1:9480/anthropic");
 static_assert(statusline_input(R"({"model":{"display_name":"Opus"},"workspace":{"current_dir":"/w/p"},"context_window":{"used_percentage":41}})").context_percent == 41);
 static_assert(counters_from(R"({"requests":7,"repairs":{"a":2,"b":1}})") == std::pair<std::uint64_t, std::uint64_t>{7, 3});
