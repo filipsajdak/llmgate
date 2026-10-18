@@ -5,6 +5,7 @@ module;
 export module llmgate.usage;
 
 import std;
+import llmgate.doc;
 import llmgate.json;
 import llmgate.jsonscan;
 import llmgate.lenient;
@@ -376,9 +377,9 @@ constexpr load_result load(std::string_view text) {
 }
 
 struct budget {
-    std::uint64_t daily_tokens = 0;
-    std::uint64_t monthly_tokens = 0;
-    unsigned warn_percent = default_warn_percent;
+    [[= reflect::doc{"Tokens allowed per UTC day; 0 means no limit."}]] std::uint64_t daily_tokens = 0;
+    [[= reflect::doc{"Tokens allowed per UTC month; 0 means no limit."}]] std::uint64_t monthly_tokens = 0;
+    [[= reflect::doc{"Percent of a budget after which the status line turns to high."}]] unsigned warn_percent = default_warn_percent;
 };
 
 enum class level { ok, warning, exhausted };

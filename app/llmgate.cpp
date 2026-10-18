@@ -7,6 +7,7 @@ import std;
 import llmgate.arguments;
 import llmgate.async;
 import llmgate.commands;
+import llmgate.config_docs;
 import llmgate.copilot;
 import llmgate.gateway;
 import llmgate.httpio;
@@ -225,6 +226,27 @@ int check_config(std::expected<gateway::config, std::string> const& settings) {
     return 0;
 }
 
+using document_printer = std::string (*)();
+
+constexpr auto printers = std::to_array<std::pair<arguments::document, document_printer>>({
+    {arguments::document::example, &config_docs::gateway_example},
+    {arguments::document::schema, &config_docs::gateway_schema},
+    {arguments::document::config_table, &config_docs::gateway_table},
+});
+
+constexpr bool printers_cover_every_document() {
+    return printers.size() == reflect::enum_count<arguments::document> &&
+           std::ranges::all_of(reflect::enum_values<arguments::document>, [](arguments::document const which) {
+               return std::ranges::count(printers, which, &std::pair<arguments::document, document_printer>::first) == 1;
+           });
+}
+static_assert(printers_cover_every_document());
+
+int print_document(arguments::document const which) {
+    std::print("{}", std::ranges::find(printers, which, &std::pair<arguments::document, document_printer>::first)->second());
+    return 0;
+}
+
 commands::context make_context(arguments::options const& parsed, std::expected<gateway::config, std::string> settings, char const* const program) {
     return {.options = parsed,
             .settings = settings ? std::move(*settings) : gateway::config{},
@@ -254,6 +276,9 @@ int main(int argc, char** argv) {
     if (parsed->show_version) {
         std::println("{}", version_text);
         return 0;
+    }
+    if (auto const which = arguments::requested_document(*parsed)) {
+        return print_document(*which);
     }
     return run(*parsed, argv[0]);
 }

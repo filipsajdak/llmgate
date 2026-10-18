@@ -1,2 +1,3 @@
 # path|rule|text fragment of the first matching line|reason. Debt entries start with 'pending:' and name the tier that removes them; anything else is a justified exception. A path ending in / covers the directory.
 app/llmgate.cpp|enum-handler-table|{arguments::command::serve, &serve_command},|handlers_cover_every_command static_asserts the table holds each command exactly once
+app/llmgate.cpp|enum-handler-table|{arguments::document::example, &config_docs::gateway_example},|printers_cover_every_document static_asserts the table holds each document exactly once

@@ -158,7 +158,7 @@ const suite arguments_suite = [] {
     "capability_the_usage_text_is_pinned"_test = [] {
         expect(usage_text ==
                "usage: llmgate [--config PATH] [serve | login | claude ARGS... | env [--json] [--vscode [FILE]] | setup [--vscode [FILE]] [--service] [--dry-run] | "
-               "statusline | status | stop | usage [--json] [--days N] | doctor [--json] [--offline] | quota [--json]] | --check-config | --version")
+               "statusline | status | stop | usage [--json] [--days N] | doctor [--json] [--offline] | quota [--json]] | --check-config | --version | --print-example | --print-schema | --print-config-table")
             << usage_text;
     };
 
