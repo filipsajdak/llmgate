@@ -14,8 +14,8 @@ claude::environment_list sample(std::string_view const key = "") {
 }
 
 std::string value_of(claude::environment_list const& list, std::string_view const name) {
-    auto const found = std::ranges::find(list, name, &claude::environment_list::value_type::first);
-    return found == list.end() ? "<missing>" : found->second;
+    auto const found = std::ranges::find(list, name, &claude::environment_variable::name);
+    return found == list.end() ? "<missing>" : found->value;
 }
 
 json::value parse_value(std::string_view const text) {
@@ -127,7 +127,24 @@ const suite claude_suite = [] {
         auto const unit = claude::systemd_unit("/bin/llmgate", "/c.jsonc");
 
         expect(plist.contains("<string>dev.llmgate</string>") && plist.contains("<string>/c.jsonc</string>") && plist.contains("<string>/l.log</string>"));
-        expect(unit.contains("ExecStart=/bin/llmgate --config /c.jsonc serve") && unit.contains("Restart=on-failure"));
+        expect(unit.contains(R"(ExecStart="/bin/llmgate" --config "/c.jsonc" serve)") && unit.contains("Restart=on-failure"));
+    };
+
+    "defect_service_files_escape_paths_that_would_break_the_file"_test = [] {
+        auto const plist = claude::launchd_plist("dev.llmgate", "/a&b/<llmgate>", "/c.jsonc", "/l.log");
+        auto const unit = claude::systemd_unit("/my apps/50%/\"x\"", "/$HOME/c.jsonc");
+
+        expect(plist.contains("<string>/a&amp;b/&lt;llmgate&gt;</string>"));
+        expect(!plist.contains("/a&b/"));
+        expect(unit.contains(R"(ExecStart="/my apps/50%%/\"x\"" --config "/$$HOME/c.jsonc" serve)"));
+    };
+
+    "capability_shell_quoting_keeps_plain_text_whole_and_survives_embedded_quotes"_test = [] {
+        expect(claude::shell_quote("") == "''");
+        expect(claude::shell_quote("plain") == "'plain'");
+        expect(claude::shell_quote("it's") == R"('it'\''s')");
+        expect(claude::shell_quote("'") == R"(''\''')");
+        expect(claude::shell_quote("a'b'c") == R"('a'\''b'\''c')");
     };
 };
 

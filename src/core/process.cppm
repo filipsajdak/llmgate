@@ -22,6 +22,7 @@ module;
 export module llmgate.process;
 
 import std;
+import llmgate.text;
 
 extern "C" char** environ;
 
@@ -49,7 +50,7 @@ export namespace llmgate::process {
 
 using std::chrono::milliseconds;
 constexpr std::size_t read_chunk = 4096;
-using header_list = std::vector<std::pair<std::string, std::string>>;
+using header_list = std::vector<text::name_value>;
 
 struct http_result {
     int status;
@@ -245,7 +246,7 @@ std::optional<std::string> receive_all(int const fd, std::chrono::steady_clock::
 std::string request_text(std::string_view const host, std::uint16_t const port, std::string_view const target, header_list const& headers) {
     std::string request = std::format("GET {} HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\n", target, host, port);
     for (auto const& [name, value] : headers) {
-        request += name + ": " + value + "\r\n";
+        std::format_to(std::back_inserter(request), "{}: {}\r\n", name, value);
     }
     request += "\r\n";
     return request;
@@ -417,14 +418,14 @@ bool wait_until(Condition&& condition, milliseconds const limit, milliseconds co
     return true;
 }
 
-inline void apply_environment(std::vector<std::pair<std::string, std::string>> const& environment) {
+inline void apply_environment(std::vector<text::name_value> const& environment) {
     for (auto const& [name, value] : environment) {
         ::setenv(name.c_str(), value.c_str(), 1);
     }
 }
 
 [[noreturn]] inline void exec_program(std::filesystem::path const& program, std::vector<std::string> const& arguments,
-                                      std::vector<std::pair<std::string, std::string>> const& environment) {
+                                      std::vector<text::name_value> const& environment) {
     apply_environment(environment);
     auto argv = make_argv(program, arguments);
     ::execv(program.c_str(), argv.pointers.data());

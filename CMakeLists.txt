@@ -75,7 +75,7 @@ llmgate_module(llmgate_lenient INTERFACE src/json/lenient.cppm LIBS llmgate_json
 llmgate_module(llmgate_usage INTERFACE src/usage/usage.cppm LIBS llmgate_doc llmgate_json llmgate_jsonscan llmgate_lenient llmgate_members llmgate_reflect llmgate_role llmgate_text)
 llmgate_module(llmgate_claude INTERFACE src/claude/profile.cppm LIBS llmgate_doc llmgate_text llmgate_json llmgate_reflect llmgate_role)
 llmgate_module(llmgate_statusline INTERFACE src/claude/statusline.cppm LIBS llmgate_text)
-llmgate_module(llmgate_process INTERFACE src/core/process.cppm)
+llmgate_module(llmgate_process INTERFACE src/core/process.cppm LIBS llmgate_text)
 llmgate_module(llmgate_arguments INTERFACE src/app/arguments.cppm LIBS llmgate_json llmgate_members llmgate_reflect llmgate_statusline llmgate_text)
 llmgate_module(llmgate_commands INTERFACE src/app/commands.cppm LIBS llmgate_usage llmgate_arguments llmgate_async llmgate_claude llmgate_copilot llmgate_doctor llmgate_gateway llmgate_json llmgate_process llmgate_proof llmgate_quota llmgate_routing llmgate_statusline llmgate_tls)
 llmgate_module(llmgate_proof INTERFACE src/core/proof.cppm LIBS OpenSSL::Crypto)
@@ -199,7 +199,7 @@ llmgate_constexpr_corpus(config_docs_corpus docs_holds config_docs)
 
 add_executable(constexpr_examples tests/constexpr/examples.cpp)
 target_compile_options(constexpr_examples PRIVATE -fno-sanitize=all)
-target_link_libraries(constexpr_examples PRIVATE llmgate_usage llmgate_quota llmgate_contracts)
+target_link_libraries(constexpr_examples PRIVATE llmgate_claude llmgate_json llmgate_usage llmgate_quota llmgate_contracts)
 add_test(NAME constexpr_examples COMMAND constexpr_examples)
 set_tests_properties(constexpr_examples PROPERTIES LABELS constexpr)
 

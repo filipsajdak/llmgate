@@ -1,3 +1,5 @@
+import llmgate.claude;
+import llmgate.json;
 import llmgate.quota;
 import llmgate.usage;
 import std;
@@ -63,6 +65,18 @@ static_assert(quota::parse(R"({"quota_snapshots":{"x":{"entitlement":10,"quota_r
 static_assert(quota::parse(R"({"quota_snapshots":{"x":{"percent_remaining":-5,"has_quota":true}}})")->quotas[0].percent_remaining == 0);
 static_assert(quota::parse(R"({"quota_snapshots":{"x":{"percent_remaining":900}}})")->quotas[0].percent_remaining == quota::full_percent);
 static_assert(quota::render(*quota::parse(R"({"copilot_plan":"a\u001b[31m","quota_snapshots":{}})")).find('\x1b') == std::string::npos);
+
+constexpr claude::environment_list sample_environment() {
+    return claude::environment({}, "u", "k", "/p");
+}
+
+static_assert(json::write(claude::merge_vscode(json::value{}, sample_environment())).contains("claudeCode.disableLoginPrompt"));
+static_assert(json::write(claude::vscode_snippet(sample_environment())).contains(R"({"name":"CLAUDE_CONFIG_DIR","value":"/p"})"));
+static_assert([] {
+    auto const once = claude::merge_vscode(json::value{}, sample_environment());
+    return json::write(once) == json::write(claude::merge_vscode(once, sample_environment()));
+}());
+static_assert(json::write(claude::vscode_snippet(sample_environment())) == json::write(claude::merge_vscode(json::value{}, sample_environment())));
 
 }  // namespace
 

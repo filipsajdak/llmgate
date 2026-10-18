@@ -6,6 +6,7 @@
 #include <boost/ut.hpp>
 
 import llmgate.process;
+import llmgate.text;
 import std;
 
 namespace {
@@ -247,7 +248,7 @@ const suite process_suite = [] {
     };
 
     "capability_the_environment_is_applied_before_an_exec"_test = [] {
-        std::vector<std::pair<std::string, std::string>> environment;
+        std::vector<llmgate::text::name_value> environment;
         environment.emplace_back("LLMGATE_PROCESS_TEST_A", "one");
         environment.emplace_back("LLMGATE_PROCESS_TEST_B", "two");
 

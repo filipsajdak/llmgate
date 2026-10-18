@@ -4,6 +4,11 @@ import std;
 
 export namespace llmgate::text {
 
+struct name_value {
+    std::string name;
+    std::string value;
+};
+
 template <std::integral T>
 constexpr std::string decimal(T const value) {
     std::array<char, 24> digits{};

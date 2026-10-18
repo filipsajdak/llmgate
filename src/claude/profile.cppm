@@ -34,7 +34,13 @@ consteval bool one_model_slot_per_role() {
 }
 static_assert(one_model_slot_per_role());
 
-using environment_list = std::vector<std::pair<std::string, std::string>>;
+using environment_variable = text::name_value;
+
+using environment_list = std::vector<environment_variable>;
+
+constexpr std::string_view vscode_variables_key = "claudeCode.environmentVariables";
+constexpr std::string_view vscode_login_prompt_key = "claudeCode.disableLoginPrompt";
+constexpr std::string_view escaped_quote = R"('\'')";
 
 constexpr std::string_view placeholder_token = "none";
 
@@ -62,38 +68,46 @@ constexpr environment_list environment(launch_config const& settings, std::strin
     return list;
 }
 
-constexpr std::string shell_quote(std::string_view const text) {
-    std::string out = "'";
-    for (auto const c : text) {
-        out += c == '\'' ? std::string{"'\\''"} : std::string(1, c);
+constexpr void append_shell_quoted(std::string& out, std::string_view const text) {
+    out += '\'';
+    bool first = true;
+    for (auto const part : text | std::views::split('\'')) {
+        if (!std::exchange(first, false)) {
+            out += escaped_quote;
+        }
+        out.append(std::string_view{part});
     }
-    out.push_back('\'');
+    out += '\'';
+}
+
+constexpr std::string shell_quote(std::string_view const text) {
+    std::string out;
+    out.reserve(text.size() + 2);
+    append_shell_quoted(out, text);
     return out;
 }
 
 constexpr std::string shell_exports(environment_list const& list) {
     std::string out;
     for (auto const& [name, value] : list) {
-        out += "export " + name + "=" + shell_quote(value) + "\n";
+        text::append_all(out, "export ", name, "=");
+        append_shell_quoted(out, value);
+        out += '\n';
     }
     return out;
 }
 
 constexpr json::value environment_object(environment_list const& list) {
-    json::object members;
-    for (auto const& [name, value] : list) {
-        members.emplace_back(name, json::make_string(value));
-    }
-    return json::value{std::move(members)};
+    return json::value{std::ranges::to<json::object>(list | std::views::transform([](environment_variable const& variable) {
+                                                         return std::pair<std::string, json::value>{variable.name, json::make_string(variable.value)};
+                                                     }))};
 }
 
 constexpr json::value vscode_snippet(environment_list const& list) {
-    json::array entries;
-    for (auto const& [name, value] : list) {
-        entries.push_back(json::make_object({{"name", json::make_string(name)}, {"value", json::make_string(value)}}));
-    }
-    return json::make_object({{"claudeCode.environmentVariables", json::value{std::move(entries)}},
-                              {"claudeCode.disableLoginPrompt", json::value{true}}});
+    json::object root;
+    root.emplace_back(vscode_variables_key, json::to_value(list));
+    root.emplace_back(vscode_login_prompt_key, json::value{true});
+    return json::value{std::move(root)};
 }
 
 constexpr auto default_denials = std::to_array<std::string_view>({
@@ -145,22 +159,25 @@ constexpr bool contains_text(json::array const& items, std::string_view const te
     });
 }
 
+constexpr std::string_view variable_name_key =
+    std::meta::identifier_of(std::meta::nonstatic_data_members_of(std::meta::dealias(^^environment_variable), std::meta::access_context::current()).front());
+
 constexpr bool has_name(json::value const& entry, std::string_view const name) {
     auto const* members = std::get_if<json::object>(&entry.data);
     if (members == nullptr) {
         return false;
     }
-    auto const found = std::ranges::find(*members, std::string_view{"name"}, &json::object::value_type::first);
+    auto const found = std::ranges::find(*members, variable_name_key, &json::object::value_type::first);
     auto const* held = found == members->end() ? nullptr : std::get_if<std::string>(&found->second.data);
     return held != nullptr && *held == name;
 }
 
-constexpr void upsert_variable(json::array& entries, std::string const& name, std::string const& value) {
-    auto const replacement = json::make_object({{"name", json::make_string(name)}, {"value", json::make_string(value)}});
-    if (auto const present = std::ranges::find_if(entries, [&name](json::value const& entry) { return has_name(entry, name); }); present != entries.end()) {
-        *present = replacement;
+constexpr void upsert_variable(json::array& entries, environment_variable const& variable) {
+    auto replacement = json::to_value(variable);
+    if (auto const present = std::ranges::find_if(entries, [&variable](json::value const& entry) { return has_name(entry, variable.name); }); present != entries.end()) {
+        *present = std::move(replacement);
     } else {
-        entries.push_back(replacement);
+        entries.push_back(std::move(replacement));
     }
 }
 
@@ -194,48 +211,83 @@ constexpr json::value merge_vscode(json::value existing, environment_list const&
         existing = json::value{json::object{}};
     }
     auto& root = std::get<json::object>(existing.data);
-    auto& entries = detail::array_member(root, "claudeCode.environmentVariables");
-    for (auto const& [name, value] : list) {
-        detail::upsert_variable(entries, name, value);
+    auto& entries = detail::array_member(root, vscode_variables_key);
+    for (auto const& variable : list) {
+        detail::upsert_variable(entries, variable);
     }
-    if (auto* flag = detail::find_member(root, "claudeCode.disableLoginPrompt")) {
+    if (auto* flag = detail::find_member(root, vscode_login_prompt_key)) {
         *flag = json::value{true};
     } else {
-        root.emplace_back("claudeCode.disableLoginPrompt", json::value{true});
+        root.emplace_back(vscode_login_prompt_key, json::value{true});
     }
     return existing;
 }
 
-constexpr std::string launchd_plist(std::string_view const label, std::string_view const binary, std::string_view const config_path,
-                                    std::string_view const log_path) {
-    std::string out = R"(<?xml version="1.0" encoding="UTF-8"?>
+constexpr std::string replaced(std::string_view const text, std::span<std::pair<char, std::string_view> const> const table) {
+    std::string out;
+    out.reserve(text.size());
+    for (auto const c : text) {
+        auto const entry = std::ranges::find(table, c, &std::pair<char, std::string_view>::first);
+        if (entry == table.end()) {
+            out += c;
+        } else {
+            out.append(entry->second);
+        }
+    }
+    return out;
+}
+
+constexpr auto xml_entities = std::to_array<std::pair<char, std::string_view>>({{'&', "&amp;"}, {'<', "&lt;"}, {'>', "&gt;"}});
+constexpr auto unit_escapes = std::to_array<std::pair<char, std::string_view>>({{'"', "\\\""}, {'\\', "\\\\"}, {'%', "%%"}, {'$', "$$"}});
+
+constexpr std::string xml_escaped(std::string_view const text) {
+    return replaced(text, xml_entities);
+}
+
+inline std::string unit_quoted(std::string_view const text) {
+    return std::format("\"{}\"", replaced(text, unit_escapes));
+}
+
+inline std::string launchd_plist(std::string_view const label, std::string_view const binary, std::string_view const config_path,
+                                 std::string_view const log_path) {
+    return std::format(R"(<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>)";
-    out += label;
-    out += "</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>";
-    out += binary;
-    out += "</string>\n    <string>--config</string>\n    <string>";
-    out += config_path;
-    out += "</string>\n    <string>serve</string>\n  </array>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n  <key>StandardOutPath</key><string>";
-    out += log_path;
-    out += "</string>\n  <key>StandardErrorPath</key><string>";
-    out += log_path;
-    out += "</string>\n</dict>\n</plist>\n";
-    return out;
+  <key>Label</key><string>{0}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{1}</string>
+    <string>--config</string>
+    <string>{2}</string>
+    <string>serve</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>{3}</string>
+  <key>StandardErrorPath</key><string>{3}</string>
+</dict>
+</plist>
+)",
+                       xml_escaped(label), xml_escaped(binary), xml_escaped(config_path), xml_escaped(log_path));
 }
 
-constexpr std::string systemd_unit(std::string_view const binary, std::string_view const config_path) {
-    std::string out = "[Unit]\nDescription=llmgate, a gateway for Claude Code\nAfter=network-online.target\n\n[Service]\nExecStart=";
-    out += binary;
-    out += " --config ";
-    out += config_path;
-    out += " serve\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n";
-    return out;
+inline std::string systemd_unit(std::string_view const binary, std::string_view const config_path) {
+    return std::format(R"([Unit]
+Description=llmgate, a gateway for Claude Code
+After=network-online.target
+
+[Service]
+ExecStart={} --config {} serve
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+)",
+                       unit_quoted(binary), unit_quoted(config_path));
 }
 
-static_assert(json::write(merge_vscode(json::value{}, environment({}, "u", "", "/p"))).contains("claudeCode.disableLoginPrompt"));
 static_assert(shell_quote("it's") == R"('it'\''s')");
 static_assert(decimal(180000) == "180000" && decimal(-5) == "-5");
 static_assert(environment(launch_config{}, "http://127.0.0.1:9480/anthropic", "", "/p").size() == 15);

@@ -118,8 +118,8 @@ std::expected<claude::environment_list, std::string> environment_for(gateway::co
 }
 
 std::string status_line_command(context const& where) {
-    return claude::shell_quote(where.binary.string()) + " --config " + claude::shell_quote(process::expand_home(where.options.config_path)) +
-           " statusline";
+    return std::format("{} --config {} statusline", claude::shell_quote(where.binary.string()),
+                       claude::shell_quote(process::expand_home(where.options.config_path)));
 }
 
 std::expected<json::value, std::string> existing_json(std::filesystem::path const& path) {
