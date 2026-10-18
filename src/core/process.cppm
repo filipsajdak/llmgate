@@ -5,6 +5,7 @@ module;
 #include <cstdlib>
 #include <csignal>
 #include <cstring>
+#include <meta>
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -23,6 +24,26 @@ export module llmgate.process;
 import std;
 
 extern "C" char** environ;
+
+namespace llmgate::commands {}
+
+namespace llmgate::process::detail {
+
+consteval bool within(std::meta::info at, std::meta::info const layer) {
+    while (at != ^^::) {
+        if (at == layer) {
+            return true;
+        }
+        at = std::meta::parent_of(at);
+    }
+    return false;
+}
+
+consteval bool may_spawn(std::meta::info const caller) {
+    return !within(caller, ^^llmgate) || within(caller, ^^llmgate::commands);
+}
+
+}  // namespace llmgate::process::detail
 
 export namespace llmgate::process {
 
@@ -315,8 +336,10 @@ inline bool gateway_alive(std::string_view const host, std::uint16_t const port)
     return answer && answer->status == 200;
 }
 
-inline std::expected<pid_t, std::error_code> start_detached(std::filesystem::path const& program, std::vector<std::string> const& arguments,
-                                                           std::filesystem::path const& log_file) {
+template <std::meta::info Caller = std::meta::current_function()>
+std::expected<pid_t, std::error_code> start_detached(std::filesystem::path const& program, std::vector<std::string> const& arguments,
+                                                    std::filesystem::path const& log_file) {
+    static_assert(detail::may_spawn(Caller), "start_detached may only be called from llmgate::commands (src/app) or from code outside llmgate");
     std::error_code ignored;
     std::filesystem::create_directories(log_file.parent_path(), ignored);
     posix_spawn_file_actions_t actions;
