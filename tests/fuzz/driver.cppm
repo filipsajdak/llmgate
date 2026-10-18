@@ -18,7 +18,8 @@ inline std::vector<std::byte> read_all(std::istream& in) {
 template <std::invocable<std::span<std::byte const>> Target>
 int run(int const argc, char** const argv, Target&& target) {
     if (argc < 2) {
-        auto const input = read_all(std::cin);
+        std::ifstream in{"/dev/stdin", std::ios::binary};
+        auto const input = read_all(in);
         target(input);
         return 0;
     }

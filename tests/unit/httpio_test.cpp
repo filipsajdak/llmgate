@@ -71,6 +71,7 @@ httpio::request_spec post(std::string body) {
 }
 
 template <class Handler>
+    requires httpio::request_handler<Handler, net::tcp_stream>
 async::task<reply> single_request(async::reactor& loop, net::listener& server, Handler& handler, httpio::request_spec spec,
                                   httpio::limits bounds = {}) {
     loop.spawn(httpio::serve(server, handler, bounds));
@@ -82,6 +83,7 @@ async::task<reply> single_request(async::reactor& loop, net::listener& server, H
 }
 
 template <class Handler>
+    requires httpio::request_handler<Handler, net::tcp_stream>
 reply run_single(Handler& handler, httpio::request_spec spec, httpio::limits bounds = {}) {
     async::reactor loop;
     auto server = net::listener::bind(loop, std::string{loopback}, 0);

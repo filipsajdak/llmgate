@@ -226,7 +226,7 @@ llmgate_constexpr_exhaustive(lenient 13)
 
 llmgate_fuzz(http_parser llmgate_http)
 llmgate_fuzz(sse_parser llmgate_properties)
-llmgate_fuzz(schedule llmgate_scenarios)
+llmgate_fuzz(schedule llmgate_scenarios llmgate_reflect)
 llmgate_fuzz(jsonscan llmgate_properties)
 llmgate_fuzz(guard llmgate_properties)
 llmgate_fuzz(json llmgate_properties)
