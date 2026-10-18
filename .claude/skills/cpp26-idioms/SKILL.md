@@ -26,7 +26,7 @@ allowed-tools: Bash, Read, Grep, Edit
 
 ## Habits that no lint can check
 
-1. **Add an enum** with the wire names as enumerators, then `static_assert` what must hold: a round trip over `enumerators_of` and, once `reflect::unique_values` exists (Tier 1 B adds it with `enum_count` and `enum_values`), that no enumerator is an alias. Derive tables from the enum, never the enum from a table.
+1. **Add an enum** with the wire names as enumerators, then `static_assert` what must hold: a round trip over `enumerators_of` and `static_assert(reflect::unique_values<E>())` so that no enumerator is an alias. Derive tables from the enum, never the enum from a table.
 2. **Structural `static_assert`s** state a property of a type once: every member is `std::uint64_t`, the handlers table has one entry per enumerator, `launch_config` has one slot per `role`. Walk `nonstatic_data_members_of` rather than listing members.
 3. **Contracts at API boundaries.** `pre`/`post` on the non-inline declaration with the body in an implementation unit (an inline function with contracts exported from a module fails to link on GCC 16.2); `contract_assert` inside bodies. Use `std::expected` for failures that callers must handle, contracts for programmer errors.
 4. **`constexpr` by default**, with a compile-time property check beside it (the `*_holds` functions plus the corpus and exhaustive targets in `CMakeLists.txt`).
@@ -36,7 +36,20 @@ allowed-tools: Bash, Read, Grep, Edit
 
 ## When a rule has a real exception
 
-Write `// Exception: <reason>` above the line, or add a justified line to `tools/cpp26_lint_allow.txt` (`path|rule|text fragment|reason`). A reason that starts `pending:` names the tier that removes the debt; a stale line fails the gate.
+Write `// Exception: <reason>` above the line, or add a justified line to `tools/cpp26_lint_allow.txt` (`path|rule|text fragment|reason`). A reason that starts `pending:` names the tier that removes the debt (none remain); a stale line fails the gate.
+
+## Layering guard (kept)
+
+`template <std::meta::info Caller = std::meta::current_function()>` on a function plus `static_assert(may_call(Caller), "...")` checks the caller's enclosing namespaces at compile time and costs nothing at run time; the error names the offending caller. The CMake import graph only says who may import a module, not who may call one of its functions: `gateway` imports `process` for `write_file_atomic` and could still call `start_detached`, which the guard forbids outside `llmgate::commands`. Limits: the function becomes a template, so its address cannot be taken (`run_and_wait` stays a plain function for that reason), and the namespace it names must be declared where the guard is written. Probes: `supported/caller_namespace_guard.cpp`, `absent/caller_namespace_guard_rejects_other_layers.cpp`.
+
+## Tried and rejected
+
+| Idea | Why not |
+|---|---|
+| `requires(may_call(Caller))` instead of the `static_assert` | GCC 16.2 prints the constraint as `std::meta::info'meta_type' not supported by direct_abstract_declarator` and "no matching function"; the `static_assert` message is readable |
+| `#include <coroutine>` beside `import std` | not needed: `import std;` alone builds the async layer on GCC 16.2 (macOS); the Linux container is the parent's check |
+| `std::println(stderr, ...)` in `contract_violation.cpp` | it formats into a `std::string` first; a violation handler must not allocate, so `fprintf` stays as a justified allowance |
+| An annotation naming a member function on the enumerator (`[[=rule{&grammar_state::on_error}]]`) | the class is declared after the enum; annotate the handler with the enumerator instead (`handles{event_type::error}`) and walk the members |
 
 ## GCC 16.2 does not do this
 
