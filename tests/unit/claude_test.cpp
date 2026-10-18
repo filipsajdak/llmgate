@@ -146,6 +146,36 @@ const suite claude_suite = [] {
         expect(claude::shell_quote("'") == R"(''\''')");
         expect(claude::shell_quote("a'b'c") == R"('a'\''b'\''c')");
     };
+
+    "capability_the_default_environment_is_exactly_the_documented_variables_in_order"_test = [] {
+        constexpr std::string_view expected = R"(export CLAUDE_CONFIG_DIR='/home/me/.claude-llmgate'
+export ANTHROPIC_BASE_URL='http://127.0.0.1:9480/anthropic'
+export ANTHROPIC_AUTH_TOKEN='none'
+export ANTHROPIC_MODEL='opusplan'
+export ANTHROPIC_DEFAULT_OPUS_MODEL='claude-opus-5-5'
+export ANTHROPIC_DEFAULT_SONNET_MODEL='claude-sonnet-5-5'
+export ANTHROPIC_DEFAULT_HAIKU_MODEL='claude-haiku-5-5'
+export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT='1'
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS='180000'
+export CLAUDE_CODE_AUTO_COMPACT_WINDOW='180000'
+export CLAUDE_CODE_AUTO_MODE_SERVER='0'
+export CLAUDE_CODE_ATTRIBUTION_HEADER='0'
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1'
+export DISABLE_TELEMETRY='1'
+export DISABLE_ERROR_REPORTING='1'
+)";
+
+        expect(claude::shell_exports(sample()) == expected);
+    };
+
+    "capability_the_profile_denies_exactly_the_secret_paths_it_documents"_test = [] {
+        constexpr std::string_view expected =
+            R"x("deny":["Read(**/.env)","Read(**/.env.*)","Read(./secrets/**)","Read(./config/credentials.json)","Read(~/.config/llmgate/**)","Read(~/.claude/**)"])x";
+
+        auto const text = json::write(claude::merge_settings(json::value{}, "medium", "llmgate statusline"));
+
+        expect(text.contains(expected)) << text;
+    };
 };
 
 }  // namespace

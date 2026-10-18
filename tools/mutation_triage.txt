@@ -19,3 +19,5 @@ src/usage/usage.cppm:550:0463bbe0 | arid | mutates the fixture of a static_asser
 src/usage/usage.cppm:555:6f55d8dd | arid | mutates the assertion of a static_assert fixture, not product code
 src/usage/usage.cppm:556:6c412fa1 | arid | mutates the assertion of a static_assert fixture, not product code
 src/claude/statusline.cppm:73:29085f9b | arid | swapped std::clamp arguments violate its precondition (lo <= hi) for any percentage above 999, which is undefined behaviour the optimiser may assume away, so no test can pin it
+src/claude/profile.cppm:79:8adf98db | equivalent | continue at the end of a loop body is the fall-through the closing brace already gives
+src/claude/profile.cppm:96:8adf98db | equivalent | continue at the end of a loop body is the fall-through the closing brace already gives
