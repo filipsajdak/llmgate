@@ -1,7 +1,6 @@
 module;
 
 #include <cerrno>
-#include <coroutine>
 #include <csignal>
 
 #include <fcntl.h>

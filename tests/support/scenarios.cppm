@@ -56,7 +56,7 @@ async::task<void> wait_until(async::reactor& loop, int const& counter, int const
     }
 }
 
-template <class Reader>
+template <net::byte_stream Reader>
 async::task<std::string> drain(Reader& reader, std::size_t const expected) {
     std::string received;
     std::array<std::byte, drain_buffer_bytes> buffer{};

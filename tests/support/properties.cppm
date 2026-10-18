@@ -561,7 +561,7 @@ constexpr bool guard_holds_for_tokens(std::span<std::size_t const> const digits)
     return guard_holds_for(wire);
 }
 
-template <class Property>
+template <std::predicate<std::span<std::size_t const>> Property>
 constexpr bool for_all_sequences(std::size_t const alphabet, std::size_t const longest, Property&& property) {
     std::vector<std::size_t> digits;
     for (std::size_t length = 0; length <= longest; ++length) {

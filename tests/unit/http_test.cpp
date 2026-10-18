@@ -30,7 +30,7 @@ std::span<std::byte const> bytes_of(std::string_view const text) {
     return std::as_bytes(std::span{text});
 }
 
-template <class Sink>
+template <std::invocable<event const&> Sink>
 std::expected<void, std::error_code> feed_all(parser& reader, std::span<std::byte const> data, Sink&& sink) {
     while (!data.empty()) {
         auto const consumed = reader.feed(data, sink);
