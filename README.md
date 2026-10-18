@@ -49,6 +49,67 @@ The launcher passes the gateway key (or a placeholder) as `ANTHROPIC_AUTH_TOKEN`
 
 `llmgate --version` prints the version.
 
+## Configuration reference
+
+Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::example{...}]]` annotations on the configuration structs in `src/gateway/config.cppm` (and on `claude::launch_config` and `usage::budget`). Three flags print documents generated from them: `llmgate --print-example` (the commented JSONC that is `config.example.jsonc`), `llmgate --print-config-table` (the table below) and `llmgate --print-schema` (JSON Schema 2020-12). After a change to an annotation run `tools/update_config_docs.sh`; the tests `llmgate_example_config_is_generated` and `llmgate_readme_config_table_is_generated` fail while either file is stale, and `constexpr_example_config` fails to build when the example no longer parses as `config` or leaves a member out.
+
+<!-- config-table:begin -->
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `listen` | string | required | Address the gateway listens on; point Claude Code at it with ANTHROPIC_BASE_URL=http://ADDRESS/anthropic. |
+| `upstream` | object | - | The single backend of an older configuration; it keeps working and acts as one provider named default. |
+| `upstream.base_url` | string | required | Base URL of the single upstream; together with the other top-level keys it acts as one provider named default. |
+| `upstream.messages_path` | string | `"/v1/messages"` | Path of the Messages endpoint on the upstream. |
+| `upstream.headers` | map of string | `{}` | Extra headers sent to the upstream on every request. |
+| `models` | map of string | `{}` | Claude Code expands aliases such as sonnet to full model names before it calls the gateway, so map full names: client model name to upstream model name. Unknown names go through unchanged. |
+| `providers` | map of object | `{}` | More than one backend: name each one here. A provider with a copilot object uses the Copilot login, one with static_token_env uses that variable. The keys upstream, models, copilot and static_token_env stay valid and act as one provider named default. |
+| `providers.<name>.base_url` | string | required | Base URL of the provider. |
+| `providers.<name>.messages_path` | string | `"/v1/messages"` | Path of the Messages endpoint on the provider. |
+| `providers.<name>.headers` | map of string | `{}` | Extra headers sent to the provider on every request. |
+| `providers.<name>.static_token_env` | string | `""` | Name of the environment variable that holds the API key sent as the bearer token. |
+| `providers.<name>.copilot` | object | none | GitHub Copilot login of this provider; used instead of static_token_env. |
+| `providers.<name>.copilot.token_file` | string | `""` | File that holds the GitHub OAuth token; run llmgate login once to write it. |
+| `providers.<name>.copilot.client_id` | string | `"Iv1.b507a08c87ecfe98"` | OAuth client id of the device login; the default is the one the VS Code Copilot extension uses. |
+| `providers.<name>.copilot.github_url` | string | `"https://github.com"` | GitHub web address used by the device login. |
+| `providers.<name>.copilot.api_url` | string | `"https://api.github.com"` | GitHub API address that exchanges the OAuth token for a Copilot token. |
+| `providers.<name>.copilot.poll_interval` | duration | none | Time between polls of the device login; absent means the interval GitHub names. |
+| `providers.<name>.models` | map of string | `{}` | Model names this provider expects: the name Claude Code sends maps to the id here; unknown names pass through unchanged. |
+| `routes` | map of array of string | `{}` | Per role (opus, sonnet, haiku, other) the providers to try in order. A role without a list uses the other list, then every provider. |
+| `fallback` | object | - | A provider that fails before any response byte reaches Claude Code (connect error, no response head in time, 5xx, 429) is retried on the next one of the role's list; after failures consecutive failures it is skipped for cooldown. |
+| `fallback.failures` | integer | `3` | Consecutive failures after which a provider is skipped. |
+| `fallback.cooldown` | duration | `"30s"` | How long a skipped provider stays skipped; then one request probes it. |
+| `time` | object | - | Time limits of the gateway. |
+| `time.connect` | duration | `"10s"` | How long a connect to a provider may take. A duration is a number with the unit ms, s, m or h. |
+| `time.response_head` | duration | `"2m"` | How long a provider may take to send the response head before the attempt counts as failed and the next provider is tried. |
+| `time.stream_idle` | duration | `"10m"` | How long a streaming response may stay silent before the gateway cuts it. |
+| `time.drain` | duration | `"10s"` | How long a stop (SIGINT or SIGTERM) lets running requests finish; a second signal exits at once. |
+| `tls_groups` | one of `post_quantum_required`, `post_quantum_preferred`, `classical_only` | `"post_quantum_preferred"` | TLS key exchange groups offered to the providers. |
+| `copilot` | object | none | GitHub Copilot device login of the default provider; run llmgate login once. |
+| `copilot.token_file` | string | `""` | File that holds the GitHub OAuth token; run llmgate login once to write it. |
+| `copilot.client_id` | string | `"Iv1.b507a08c87ecfe98"` | OAuth client id of the device login; the default is the one the VS Code Copilot extension uses. |
+| `copilot.github_url` | string | `"https://github.com"` | GitHub web address used by the device login. |
+| `copilot.api_url` | string | `"https://api.github.com"` | GitHub API address that exchanges the OAuth token for a Copilot token. |
+| `copilot.poll_interval` | duration | none | Time between polls of the device login; absent means the interval GitHub names. |
+| `static_token_env` | string | `""` | Name of the environment variable that holds the API key of the default provider. |
+| `client_key_env` | string | `""` | Name of the environment variable that holds the key clients must send; required when listen is not a loopback address. |
+| `allowed_hosts` | array of string | `[]` | Host names, besides the listen address, accepted in the Host header of a request. |
+| `claude` | object | - | What llmgate claude and llmgate env give Claude Code: model names per role, context window and profile. |
+| `claude.opus` | string | `"claude-opus-5-5"` | Model name Claude Code uses for the opus role. |
+| `claude.sonnet` | string | `"claude-sonnet-5-5"` | Model name Claude Code uses for the sonnet role. |
+| `claude.haiku` | string | `"claude-haiku-5-5"` | Model name Claude Code uses for the haiku role. |
+| `claude.model` | string | `"opusplan"` | Model Claude Code starts with: a model name or an alias such as opusplan. |
+| `claude.context_tokens` | integer | `180000` | Context window Claude Code assumes, in tokens; it also sets the auto-compact window. |
+| `claude.profile_dir` | string | `"~/.claude-llmgate"` | Directory of the separate Claude Code profile that llmgate claude uses. |
+| `claude.effort` | string | `"medium"` | Effort level written to the profile when it has none. |
+| `claude.telemetry` | boolean | `false` | Whether Claude Code keeps its telemetry on; off by default. |
+| `usage` | object | - | Usage ledger and token budgets. |
+| `usage.ledger_file` | string | `"~/.local/state/llmgate/usage.jsonl"` | File that receives one line per request; the gateway reads it back at start-up. |
+| `usage.budget` | object | - | Token budgets; 0 means no limit, and counted tokens are input + output + cache writes. |
+| `usage.budget.daily_tokens` | integer | `0` | Tokens allowed per UTC day; 0 means no limit. |
+| `usage.budget.monthly_tokens` | integer | `0` | Tokens allowed per UTC month; 0 means no limit. |
+| `usage.budget.warn_percent` | integer | `80` | Percent of a budget after which the status line turns to high. |
+<!-- config-table:end -->
+
 ## Usage ledger and budgets
 
 Every request that reaches the point of calling the upstream is written as one JSON line to `usage.ledger_file` (default `~/.local/state/llmgate/usage.jsonl`, created `0600` in a `0700` directory; an empty value turns the ledger off). A line holds the time, the model Claude Code asked for and the one the upstream answered with, the role (`opus`, `sonnet`, `haiku` or `other`), the provider that answered, the session id Claude Code sends in the request metadata, the four token counts (`input`, `output`, `cache_read`, `cache_creation`), the duration, the HTTP status and how many stream repairs were needed. It never holds prompt or response text.

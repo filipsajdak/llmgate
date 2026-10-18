@@ -294,10 +294,20 @@ constexpr std::string commented_out(std::string_view const block, std::size_t co
     return out;
 }
 
+constexpr std::string documented_text(node const& item) {
+    std::string out = item.doc;
+    bool first = true;
+    for (auto const& choice : item.choices) {
+        text::append_all(out, first ? " One of: " : ", ", choice);
+        first = false;
+    }
+    return first ? out : out + ".";
+}
+
 constexpr std::string member_block(node const& item, std::size_t const depth, bool const comma) {
     std::string line;
     text::append_all(line, indent_of(depth), jsonscan::encode_string(item.name), ": ", value_block(item, depth), comma ? "," : "");
-    return comment_block(item.doc, depth) + (item.commented ? commented_out(line, depth) : line + "\n");
+    return comment_block(documented_text(item), depth) + (item.commented ? commented_out(line, depth) : line + "\n");
 }
 
 constexpr std::size_t last_active(std::vector<node> const& members) {

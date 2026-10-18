@@ -88,6 +88,7 @@ int main() {
         expect(loaded.has_value() && loaded->listen == "127.0.0.1:1" && loaded->delta == -4 && loaded->how == mode::loud) << text;
         expect(text.contains("  // Where to listen.\n  // Second paragraph.\n"));
         expect(text.contains("    // \"pause\": \"5s\",\n"));
+        expect(text.contains("  // A choice. One of: quiet, loud.\n"));
         expect(!text.contains("scratch"));
     };
 

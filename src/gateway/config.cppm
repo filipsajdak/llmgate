@@ -78,7 +78,12 @@ struct config {
     [[= reflect::example{R"("127.0.0.1:9480")"}]] std::string listen{};
     [[= reflect::doc{"The single backend of an older configuration; it keeps working and acts as one provider named default."}]] upstream_config upstream{};
     [[= reflect::doc{"Claude Code expands aliases such as sonnet to full model names before it calls the gateway, so map full names: client model name to upstream model name. Unknown names go through unchanged."}]]
-    [[= reflect::example{R"({ "claude-opus-5-5": "claude-opus-5.5", "claude-sonnet-5-5": "claude-sonnet-5.5", "claude-haiku-5-5": "claude-haiku-5.5", "claude-haiku-4-5": "claude-haiku-4.5" })"}]]
+    [[= reflect::example{R"({
+  "claude-opus-5-5": "claude-opus-5.5",
+  "claude-sonnet-5-5": "claude-sonnet-5.5",
+  "claude-haiku-5-5": "claude-haiku-5.5",
+  "claude-haiku-4-5": "claude-haiku-4.5"
+})"}]]
     std::map<std::string, std::string> models{};
     [[= reflect::doc{"More than one backend: name each one here. A provider with a copilot object uses the Copilot login, one with static_token_env uses that variable. The keys upstream, models, copilot and static_token_env stay valid and act as one provider named default."}]]
     [[= reflect::example{R"({
