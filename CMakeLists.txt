@@ -66,7 +66,7 @@ llmgate_module(llmgate_http INTERFACE src/http/http.cppm LIBS llmgate_reflect ll
 llmgate_module(llmgate_sse INTERFACE src/sse/sse.cppm LIBS llmgate_text)
 llmgate_module(llmgate_require INTERFACE src/core/require.cppm)
 llmgate_module(llmgate_jsonscan INTERFACE src/json/scan.cppm LIBS llmgate_reflect llmgate_require)
-llmgate_module(llmgate_anthropic INTERFACE src/anthropic/guard.cppm LIBS llmgate_jsonscan llmgate_sse llmgate_reflect)
+llmgate_module(llmgate_anthropic INTERFACE src/anthropic/guard.cppm LIBS llmgate_jsonscan llmgate_members llmgate_sse llmgate_reflect)
 llmgate_module(llmgate_json INTERFACE src/json/json.cppm LIBS llmgate_reflect llmgate_members llmgate_jsonscan)
 llmgate_module(llmgate_text INTERFACE src/core/text.cppm)
 llmgate_module(llmgate_lenient INTERFACE src/json/lenient.cppm LIBS llmgate_json llmgate_members)

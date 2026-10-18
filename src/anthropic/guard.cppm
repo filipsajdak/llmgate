@@ -1,7 +1,12 @@
+module;
+
+#include <meta>
+
 export module llmgate.anthropic;
 
 import std;
 import llmgate.jsonscan;
+import llmgate.members;
 import llmgate.reflect;
 import llmgate.sse;
 
@@ -135,46 +140,50 @@ constexpr std::string with_usage(std::string_view const data) {
 
 using verdict = std::optional<std::string_view>;
 
+struct handles {
+    event_type event;
+};
+
 struct grammar_state {
     index_set open;
     bool started = false;
     bool delta = false;
     bool stopped = false;
 
-    constexpr verdict on_error(parsed const&) {
+    [[=handles{event_type::error}]] constexpr verdict on_error(parsed const&) {
         stopped = true;
         return std::nullopt;
     }
 
-    constexpr verdict on_message_start(parsed const&) {
+    [[=handles{event_type::message_start}]] constexpr verdict on_message_start(parsed const&) {
         if (std::exchange(started, true)) {
             return "second message_start";
         }
         return std::nullopt;
     }
 
-    constexpr verdict on_block_start(parsed const& event) {
+    [[=handles{event_type::content_block_start}]] constexpr verdict on_block_start(parsed const& event) {
         if (!started || !event.index || !open.insert(*event.index) || delta) {
             return "bad content_block_start";
         }
         return std::nullopt;
     }
 
-    constexpr verdict on_block_delta(parsed const& event) {
+    [[=handles{event_type::content_block_delta}]] constexpr verdict on_block_delta(parsed const& event) {
         if (!event.index || !open.contains(*event.index)) {
             return "delta outside an open block";
         }
         return std::nullopt;
     }
 
-    constexpr verdict on_block_stop(parsed const& event) {
+    [[=handles{event_type::content_block_stop}]] constexpr verdict on_block_stop(parsed const& event) {
         if (!event.index || open.erase(*event.index) == 0) {
             return "stop for a block that is not open";
         }
         return std::nullopt;
     }
 
-    constexpr verdict on_message_delta(parsed const& event) {
+    [[=handles{event_type::message_delta}]] constexpr verdict on_message_delta(parsed const& event) {
         if (!started || !open.empty() || std::exchange(delta, true)) {
             return "bad message_delta";
         }
@@ -184,7 +193,7 @@ struct grammar_state {
         return std::nullopt;
     }
 
-    constexpr verdict on_message_stop(parsed const&) {
+    [[=handles{event_type::message_stop}]] constexpr verdict on_message_stop(parsed const&) {
         if (!delta) {
             return "message_stop before message_delta";
         }
@@ -195,24 +204,32 @@ struct grammar_state {
     constexpr verdict accept(parsed const& event);
 };
 
-using grammar_rule = verdict (grammar_state::*)(parsed const&);
+consteval std::span<std::meta::info const> rule_members() {
+    return std::define_static_array(std::meta::members_of(^^grammar_state, std::meta::access_context::current()) |
+                                    std::views::filter([](std::meta::info const member) { return reflect::has_annotation<handles>(member); }));
+}
 
-constexpr auto grammar_rules = std::to_array<std::pair<event_type, grammar_rule>>({
-    {event_type::error, &grammar_state::on_error},
-    {event_type::message_start, &grammar_state::on_message_start},
-    {event_type::content_block_start, &grammar_state::on_block_start},
-    {event_type::content_block_delta, &grammar_state::on_block_delta},
-    {event_type::content_block_stop, &grammar_state::on_block_stop},
-    {event_type::message_delta, &grammar_state::on_message_delta},
-    {event_type::message_stop, &grammar_state::on_message_stop},
-});
+constexpr auto ruleless_events = std::to_array({event_type::ping, event_type::other});
+
+consteval bool rules_cover_events() {
+    auto const handled = rule_members() | std::views::transform([](std::meta::info const member) { return reflect::annotation_of<handles>(member)->event; });
+    return std::ranges::all_of(reflect::enum_values<event_type>, [&](event_type const type) {
+        return std::ranges::count(handled, type) + std::ranges::count(ruleless_events, type) == 1;
+    });
+}
+static_assert(rules_cover_events());
 
 constexpr verdict grammar_state::accept(parsed const& event) {
     if (stopped) {
         return "event after the stream ended";
     }
-    auto const rule = std::ranges::find(grammar_rules, event.type, &std::pair<event_type, grammar_rule>::first);
-    return rule == grammar_rules.end() ? std::nullopt : (this->*rule->second)(event);
+    verdict result;
+    template for (constexpr auto member : rule_members()) {
+        if (reflect::annotation_of<handles>(member)->event == event.type) {
+            result = this->[:member:](event);
+        }
+    }
+    return result;
 }
 
 }  // namespace llmgate::anthropic::detail
