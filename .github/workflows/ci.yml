@@ -73,7 +73,7 @@ jobs:
       - run: python3 tools/reflection_lint.py --self-test
       - run: python3 tools/reflection_lint.py --strict src app tests
       - run: python3 tools/cpp26_lint.py --self-test
-      - run: python3 tools/cpp26_lint.py --strict
+      - run: python3 tools/cpp26_lint.py --strict src app tests
       - run: python3 -m unittest discover -s tests/lint
 
   crap:
@@ -104,6 +104,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: CMAKE_ARGS=-DLLMGATE_CONSTEXPR_DEPTH=deep PRESET=linux ops/ci/linux.sh -L constexpr
+
+  newest-gcc:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 60
+    runs-on: ubuntu-24.04
+    container: gcc:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update && apt-get install -y --no-install-recommends ninja-build libssl-dev perl python3 python3-pip curl ca-certificates
+      - run: pip install --break-system-packages cmake
+      - run: g++ --version
+      - run: cmake --preset linux
+      - run: ctest --preset linux -L capability --output-on-failure
+      - run: ctest --preset linux -L lint --output-on-failure
 
   mutation:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
