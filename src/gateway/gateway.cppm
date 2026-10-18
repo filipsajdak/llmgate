@@ -807,6 +807,9 @@ private:
                                            httpio::response_writer<Client>& out) {
         count_failure(failure);
         if (state.streaming && state.head_sent) {
+            if (!failure && state.complete) {
+                settle_connection(index, upstream, *state.head);
+            }
             co_return co_await close_stream(state, out);
         }
         co_return co_await relay_buffered(index, upstream, state, failure, out);

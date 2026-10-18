@@ -225,7 +225,7 @@ httpio::request_spec messages_request(std::string body, std::string target = "/a
 constexpr std::int64_t fixed_time = 1760659200;
 
 constexpr std::string_view golden_statistics =
-    R"({"requests":3,"streamed":1,"upstream_failures":0,"upstream_timeouts":0,"client_disconnects":0,"refused":0,"connections_opened":2,"connections_reused":0,"budget_refused":0,"no_provider":0,"repairs":{"duplicate_message_start":2},"providers":{"default":{"attempts":2,"answered":2,"failures":0,"skipped":0,"circuit":"closed"}},"usage":{"today":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"month":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"budget":{"state":"ok","window":"daily","used":18,"limit":100,"percent":18}}})";
+    R"({"requests":3,"streamed":1,"upstream_failures":0,"upstream_timeouts":0,"client_disconnects":0,"refused":0,"connections_opened":1,"connections_reused":1,"budget_refused":0,"no_provider":0,"repairs":{"duplicate_message_start":2},"providers":{"default":{"attempts":2,"answered":2,"failures":0,"skipped":0,"circuit":"closed"}},"usage":{"today":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"month":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"budget":{"state":"ok","window":"daily","used":18,"limit":100,"percent":18}}})";
 constexpr std::string_view golden_models = R"({"data":[{"type":"model","id":"opus","display_name":"opus","created_at":"1970-01-01T00:00:00Z"}],"has_more":false})";
 constexpr std::string_view golden_error = R"({"type":"error","error":{"type":"invalid_request_error","message":"a \"q\" \n b"}})";
 
@@ -725,6 +725,29 @@ const suite gateway_suite = [] {
 
         expect(w.upstream.connections == 1);
         expect(w.gateway.counters().connections_reused == 1_u);
+    };
+
+    "capability_back_to_back_streamed_requests_reuse_one_upstream_connection"_test = [] {
+        world w;
+        w.upstream.mode = behaviour::sse_clean;
+
+        (void)w.ask(messages_request(chat("opus", true)));
+        (void)w.ask(messages_request(chat("opus", true)));
+
+        expect(w.upstream.connections == 1);
+        expect(w.gateway.counters().connections_reused == 1_u);
+    };
+
+    "limit_a_stream_cut_off_by_the_upstream_is_not_reused"_test = [] {
+        world w;
+        w.upstream.mode = behaviour::sse_truncated;
+        (void)w.ask(messages_request(chat("opus", true)));
+        w.upstream.mode = behaviour::sse_clean;
+
+        (void)w.ask(messages_request(chat("opus", true)));
+
+        expect(w.upstream.connections == 2);
+        expect(w.gateway.counters().connections_reused == 0_u);
     };
 
     "limit_an_unreachable_upstream_is_reported_as_502"_test = [] {
