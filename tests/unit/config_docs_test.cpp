@@ -56,7 +56,7 @@ bool documented(std::vector<node> const& members) {
 
 int main() {
     "capability_every_member_kind_is_described"_test = [] {
-        auto const root = describe<sample>();
+        auto const root = describe_with_defaults<sample>();
         expect(root.type == kind::object);
         expect(find(root.members, "scratch") == nullptr);
         expect(find(root.members, "plain") == nullptr && find(root.members, "renamed") != nullptr);
@@ -73,7 +73,7 @@ int main() {
     };
 
     "capability_defaults_come_from_a_value_initialised_object"_test = [] {
-        auto const root = describe<sample>();
+        auto const root = describe_with_defaults<sample>();
         expect(json::write(find(root.members, "delta")->fallback) == "-4");
         expect(json::write(find(root.members, "wait")->fallback) == R"("2s")");
         expect(json::write(find(root.members, "how")->fallback) == R"("loud")");
@@ -81,7 +81,7 @@ int main() {
     };
 
     "capability_the_example_is_a_valid_document_that_reads_back"_test = [] {
-        auto const text = example_text(describe<sample>());
+        auto const text = example_text(describe_with_defaults<sample>());
         auto const parsed = json::parse(text);
         expect(parsed.has_value()) << text;
         auto const loaded = json::read<sample>(*parsed);
@@ -93,11 +93,11 @@ int main() {
     };
 
     "capability_the_example_has_commas_only_between_shown_members"_test = [] {
-        expect(example_text(describe<ends>()).contains("  \"first\": 1\n\n  // Last.\n  // \"last\": 2,\n}"));
+        expect(example_text(describe_with_defaults<ends>()).contains("  \"first\": 1\n\n  // Last.\n  // \"last\": 2,\n}"));
     };
 
     "capability_the_table_lists_every_path_with_type_default_and_text"_test = [] {
-        auto const table = table_text(describe<sample>());
+        auto const table = table_text(describe_with_defaults<sample>());
         expect(table.starts_with("| Key | Type | Default | Description |\n|---|---|---|---|\n"));
         expect(table.contains("| `listen` | string | required | Where to listen. Second paragraph. |"));
         expect(table.contains("| `how` | one of `quiet`, `loud` | `\"loud\"` |"));
@@ -111,7 +111,7 @@ int main() {
     };
 
     "capability_the_schema_is_a_json_schema_of_the_same_members"_test = [] {
-        auto const text = schema_text(describe<sample>(), "sample");
+        auto const text = schema_text(describe_with_defaults<sample>(), "sample");
         auto const parsed = json::parse(text, {.jsonc = false});
         expect(parsed.has_value()) << text;
         expect(json::text_at(*parsed, {"$schema"}) == "https://json-schema.org/draft/2020-12/schema");
@@ -149,7 +149,7 @@ int main() {
     };
 
     "capability_the_gateway_configuration_documents_every_member"_test = [] {
-        auto const root = describe<gateway::config>();
+        auto const root = describe_with_defaults<gateway::config>();
         auto const example = gateway_example();
         expect(every_key_is_shown(root, example));
         expect(!keys_of(root).empty());
@@ -158,5 +158,35 @@ int main() {
         expect(parsed.has_value() && json::read<gateway::config>(*parsed).has_value());
         expect(gateway_table().contains("| `time.drain` | duration | `\"10s\"` |"));
         expect(json::parse(gateway_schema(), {.jsonc = false}).has_value());
+    };
+
+    "capability_the_type_only_description_has_the_same_keys_and_no_defaults"_test = [] {
+        auto const bare = describe<sample>();
+        expect(keys_of(bare) == keys_of(describe_with_defaults<sample>()));
+        expect(!has_default(*find(bare.members, "delta")) && has_default(*find(describe_with_defaults<sample>().members, "delta")));
+    };
+
+    "capability_a_document_conforms_exactly_when_the_reader_accepts_it"_test = [] {
+        auto const shape = describe<sample>();
+        for (auto const text : {R"({"listen":"x"})", R"({"listen":"x","verbose":true,"delta":-1,"ratio":2,"wait":"5s","how":"quiet"})",
+                                R"({"listen":"x","maybe":null,"names":["a"],"parts":{"p":{"retries":2}}})", R"({})", R"({"listen":"x","other":1})",
+                                R"({"listen":1})", R"({"listen":"x","how":"loud!"})", R"({"listen":"x","nested":{"retries":-1}})",
+                                R"({"listen":"x","names":[1]})", R"({"listen":"x","parts":[]})", R"({"listen":"x","verbose":"yes"})",
+                                R"({"listen":"x","wait":5})", R"({"listen":"x","delta":1.5})", R"([])", R"({"listen":"x","maybe":{"retries":1}})"}) {
+            auto const parsed = json::parse(text);
+            expect(parsed.has_value()) << text;
+            expect(conforms(*parsed, shape) == json::read<sample>(*parsed).has_value()) << text;
+        }
+    };
+
+    "capability_the_example_shows_every_default_it_does_not_override"_test = [] {
+        auto const parsed = json::parse(gateway_example());
+        auto const loaded = json::read<gateway::config>(*parsed);
+        auto const read_back = json::to_value(*loaded);
+        auto const defaults = json::to_value(gateway::config{});
+        for (auto const name : {"fallback", "time", "tls_groups", "claude", "usage"}) {
+            expect(json::write(*json::at(read_back, {name})) == json::write(*json::at(defaults, {name}))) << name;
+        }
+        expect(conforms(*parsed, describe<gateway::config>()));
     };
 }

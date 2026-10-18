@@ -65,41 +65,41 @@ constexpr bool has_default(node const& item) {
 namespace llmgate::config_docs::detail {
 
 template <class T>
-constexpr node shape_of(T const& defaults);
+constexpr node shape_of(T const* defaults);
 
 template <class T>
 struct shaper;
 
 template <>
 struct shaper<bool> {
-    static constexpr node make(bool const&) { return {.type = kind::flag}; }
+    static constexpr node make(bool const*) { return {.type = kind::flag}; }
 };
 
 template <std::integral T>
     requires(!std::same_as<T, bool>)
 struct shaper<T> {
-    static constexpr node make(T const&) { return {.type = kind::whole, .non_negative = std::is_unsigned_v<T>}; }
+    static constexpr node make(T const*) { return {.type = kind::whole, .non_negative = std::is_unsigned_v<T>}; }
 };
 
 template <std::floating_point T>
 struct shaper<T> {
-    static constexpr node make(T const&) { return {.type = kind::real}; }
+    static constexpr node make(T const*) { return {.type = kind::real}; }
 };
 
 template <>
 struct shaper<std::chrono::milliseconds> {
-    static constexpr node make(std::chrono::milliseconds const&) { return {.type = kind::span}; }
+    static constexpr node make(std::chrono::milliseconds const*) { return {.type = kind::span}; }
 };
 
 template <>
 struct shaper<std::string> {
-    static constexpr node make(std::string const&) { return {.type = kind::text}; }
+    static constexpr node make(std::string const*) { return {.type = kind::text}; }
 };
 
 template <class T>
     requires std::is_enum_v<T>
 struct shaper<T> {
-    static constexpr node make(T const&) {
+    static constexpr node make(T const*) {
         node made{.type = kind::choice};
         for (auto const value : reflect::enum_values<T>) {
             made.choices.emplace_back(reflect::enum_string(value));
@@ -109,9 +109,25 @@ struct shaper<T> {
 };
 
 template <class Item>
+class fresh_defaults {
+public:
+    constexpr explicit fresh_defaults(bool const wanted) {
+        if (wanted) {
+            held_.emplace();
+        }
+    }
+
+    constexpr Item const* get() const { return held_ ? &*held_ : nullptr; }
+
+private:
+    std::optional<Item> held_;
+};
+
+template <class Item>
 struct shaper<std::optional<Item>> {
-    static constexpr node make(std::optional<Item> const& value) {
-        auto made = shape_of(value.value_or(Item{}));
+    static constexpr node make(std::optional<Item> const* defaults) {
+        fresh_defaults<Item> const empty{defaults != nullptr && !defaults->has_value()};
+        auto made = shape_of(defaults != nullptr && defaults->has_value() ? &**defaults : empty.get());
         made.optional = true;
         return made;
     }
@@ -119,18 +135,20 @@ struct shaper<std::optional<Item>> {
 
 template <class Item>
 struct shaper<std::vector<Item>> {
-    static constexpr node make(std::vector<Item> const&) {
+    static constexpr node make(std::vector<Item> const* defaults) {
+        fresh_defaults<Item> const element{defaults != nullptr};
         node made{.type = kind::list};
-        made.element.emplace_back(shape_of(Item{}));
+        made.element.emplace_back(shape_of(element.get()));
         return made;
     }
 };
 
 template <class Item>
 struct shaper<std::map<std::string, Item>> {
-    static constexpr node make(std::map<std::string, Item> const&) {
+    static constexpr node make(std::map<std::string, Item> const* defaults) {
+        fresh_defaults<Item> const element{defaults != nullptr};
         node made{.type = kind::table};
-        made.element.emplace_back(shape_of(Item{}));
+        made.element.emplace_back(shape_of(element.get()));
         return made;
     }
 };
@@ -145,32 +163,32 @@ consteval std::string_view wire_name() {
     return {std::define_static_string(wire), wire.size()};
 }
 
-template <std::meta::info field, class T>
-constexpr void keep_default(node& made, T const& value) {
-    if (made.type == kind::object) {
-        return;
+template <class Member>
+constexpr void keep_default(node& made, Member const* value) {
+    if (value != nullptr && made.type != kind::object) {
+        made.fallback = json::to_value(*value);
     }
-    made.fallback = json::to_value(value);
 }
 
 template <class T, std::meta::info field>
-constexpr node member_node(T const& defaults) {
+constexpr node member_node(T const* defaults) {
     static_assert(!reflect::has_annotation<json::flatten_t>(field), "a flattened member has no key to document");
     static_assert(reflect::has_annotation<reflect::doc>(field), "a documented member needs [[=reflect::doc{...}]]");
     constexpr auto note = reflect::annotation_of<reflect::doc>(field).value_or(reflect::doc{""});
     constexpr auto sample = reflect::annotation_of<reflect::example>(field).value_or(reflect::example{""});
-    auto made = shape_of(defaults.[:field:]);
+    auto const* const member = defaults == nullptr ? nullptr : &defaults->[:field:];
+    auto made = shape_of(member);
     made.name = wire_name<field>();
     made.doc = std::string_view{note.text};
     made.example = std::string_view{sample.text};
     made.required = reflect::has_annotation<json::required_t>(field);
     made.commented = reflect::has_annotation<reflect::commented_t>(field);
-    keep_default<field>(made, defaults.[:field:]);
+    keep_default(made, member);
     return made;
 }
 
 template <class T, std::meta::info field>
-constexpr void add_member(std::vector<node>& out, T const& defaults) {
+constexpr void add_member(std::vector<node>& out, T const* defaults) {
     if constexpr (!reflect::has_annotation<json::skip_t>(field)) {
         out.emplace_back(member_node<T, field>(defaults));
     }
@@ -178,7 +196,7 @@ constexpr void add_member(std::vector<node>& out, T const& defaults) {
 
 template <described_member T>
 struct shaper<T> {
-    static constexpr node make(T const& defaults) {
+    static constexpr node make(T const* defaults) {
         static constexpr auto fields = std::define_static_array(std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::current()));
         node made{.type = kind::object};
         template for (constexpr auto field : fields) {
@@ -189,7 +207,7 @@ struct shaper<T> {
 };
 
 template <class T>
-constexpr node shape_of(T const& defaults) {
+constexpr node shape_of(T const* defaults) {
     return shaper<T>::make(defaults);
 }
 
@@ -499,13 +517,96 @@ constexpr json::value schema_of(node const& item) {
     return json::value{std::move(out)};
 }
 
+template <class Alternative>
+constexpr bool holds(json::value const& item) {
+    return std::holds_alternative<Alternative>(item.data);
+}
+
+constexpr bool whole_conforms(json::value const& item, node const& shape) {
+    auto const* const number = std::get_if<std::int64_t>(&item.data);
+    return number != nullptr && (!shape.non_negative || *number >= 0);
+}
+
+constexpr bool choice_conforms(json::value const& item, node const& shape) {
+    auto const* const name = std::get_if<std::string>(&item.data);
+    return name != nullptr && std::ranges::contains(shape.choices, *name);
+}
+
+constexpr bool scalar_conforms(json::value const& item, node const& shape) {
+    switch (shape.type) {
+        case kind::flag:
+            return holds<bool>(item);
+        case kind::whole:
+            return whole_conforms(item, shape);
+        case kind::real:
+            return holds<double>(item) || holds<std::int64_t>(item);
+        case kind::choice:
+            return choice_conforms(item, shape);
+        default:
+            return holds<std::string>(item);
+    }
+}
+
+constexpr bool conforms_to(json::value const& item, node const& shape);
+
+constexpr bool object_conforms(json::value const& item, std::vector<node> const& shapes) {
+    auto const* const members = std::get_if<json::object>(&item.data);
+    if (members == nullptr) {
+        return false;
+    }
+    auto const present = [&](node const& shape) {
+        return std::ranges::contains(*members, shape.name, &json::object::value_type::first);
+    };
+    return std::ranges::all_of(shapes, [&](node const& shape) { return !shape.required || present(shape); }) &&
+           std::ranges::all_of(*members, [&](auto const& entry) {
+               auto const found = std::ranges::find(shapes, entry.first, &node::name);
+               return found != shapes.end() && conforms_to(entry.second, *found);
+           });
+}
+
+constexpr bool list_conforms(json::value const& item, node const& shape) {
+    auto const* const items = std::get_if<json::array>(&item.data);
+    return items != nullptr && std::ranges::all_of(*items, [&](json::value const& each) { return conforms_to(each, shape.element.front()); });
+}
+
+constexpr bool table_conforms(json::value const& item, node const& shape) {
+    auto const* const members = std::get_if<json::object>(&item.data);
+    return members != nullptr && std::ranges::all_of(*members, [&](auto const& entry) { return conforms_to(entry.second, shape.element.front()); });
+}
+
+constexpr bool conforms_to(json::value const& item, node const& shape) {
+    if (shape.optional && holds<std::nullptr_t>(item)) {
+        return true;
+    }
+    switch (shape.type) {
+        case kind::object:
+            return object_conforms(item, shape.members);
+        case kind::list:
+            return list_conforms(item, shape);
+        case kind::table:
+            return table_conforms(item, shape);
+        default:
+            return scalar_conforms(item, shape);
+    }
+}
+
 }  // namespace llmgate::config_docs::detail
 
 export namespace llmgate::config_docs {
 
 template <class T>
 constexpr node describe() {
-    return detail::shape_of(T{});
+    return detail::shape_of<T>(nullptr);
+}
+
+template <class T>
+constexpr node describe_with_defaults() {
+    T const defaults{};
+    return detail::shape_of(&defaults);
+}
+
+constexpr bool conforms(json::value const& item, node const& root) {
+    return detail::conforms_to(item, root);
 }
 
 constexpr std::string comment_text(std::string_view const words) {
@@ -552,15 +653,15 @@ constexpr bool every_key_is_shown(node const& root, std::string_view const examp
 }
 
 inline std::string gateway_example() {
-    return example_text(describe<gateway::config>());
+    return example_text(describe_with_defaults<gateway::config>());
 }
 
 inline std::string gateway_table() {
-    return table_text(describe<gateway::config>());
+    return table_text(describe_with_defaults<gateway::config>());
 }
 
 inline std::string gateway_schema() {
-    return schema_text(describe<gateway::config>(), "llmgate configuration");
+    return schema_text(describe_with_defaults<gateway::config>(), "llmgate configuration");
 }
 
 }  // namespace llmgate::config_docs
