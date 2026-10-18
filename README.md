@@ -279,6 +279,8 @@ The gateway is single-threaded, so added latency under load is queueing behind o
 
 That is the CPU cost of one TLS handshake with the default key-exchange offer, about 1.3 ms. On loopback the network adds nothing; against a real upstream each avoided handshake also saves the TCP and TLS round trips, which depend on the distance to the provider and are not measured here.
 
+`python3 ops/bench/soak.py --minutes 10` runs a hostile mix against the gateway (full streams, non-streamed requests, clients that vanish mid-stream, half-sent requests, malformed bodies and wrong keys), samples memory and open file descriptors every few seconds, and fails if descriptors do not return to the idle count plus the pool's idle limit, if the gateway exits non-zero on SIGTERM, or if a sanitizer reports anything. Measured 2026-10-18: 72,692 requests in 10 minutes on the host (memory flat at 9 to 15 MB, descriptors back to 23 = 15 idle + 8 pooled), and 30,308 requests in 5 minutes under `linux-asan` with LeakSanitizer (memory flat at 49 MB with `ASAN_OPTIONS=quarantine_size_mb=1`; with the default 256 MB quarantine ASan itself holds the freed memory and RSS climbs to 400 MB, which is not a leak). Run it in the container with `--cap-add SYS_PTRACE --security-opt seccomp=unconfined` and `--binary build/linux-asan/llmgate`.
+
 Where the time goes at 100 KB (`sample` on macOS): the request body is scanned three times per request (about 0.09 ms), the usage ledger is opened, written and closed per request (about 0.035 ms), and copying the body to the upstream is the rest. Scanning once and keeping the ledger open are the two cheap wins if a shared gateway ever needs the headroom.
 
 ## Design decisions
