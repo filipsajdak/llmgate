@@ -1,4 +1,2 @@
 # path|rule|text fragment of the first matching line|reason. Debt entries start with 'pending:' and name the tier that removes them; anything else is a justified exception. A path ending in / covers the directory.
-src/anthropic/guard.cppm|enum-handler-table|{event_type::error, &grammar_state::on_error},|pending: Tier 3 H annotates the event_type enumerators and static_asserts the table is exhaustive
 app/llmgate.cpp|enum-handler-table|{arguments::command::serve, &serve_command},|handlers_cover_every_command static_asserts the table holds each command exactly once
-tests/fuzz/schedule/harness.cpp|enum-modulo|% scenario_count|pending: Tier 3 H replaces scenario_count with reflect::enum_count
