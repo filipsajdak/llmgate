@@ -6,6 +6,7 @@ import llmgate.arguments;
 import llmgate.statusline;
 import llmgate.usage;
 import llmgate.claude;
+import llmgate.config_docs;
 import llmgate.doctor;
 import llmgate.quota;
 import llmgate.reflect;
@@ -696,6 +697,37 @@ constexpr bool gateway_wire_holds(std::string_view const text) {
     auto const known_path = std::ranges::any_of(routing::route_table, [&](routing::route_entry const& item) { return item.where.target() == routing::path_of(text); });
     return back.has_value() && back->type == "error" && back->error.type == text && back->error.message == text && jsonscan::top_level_members(body).has_value() &&
            (routing::route_of("GET", text) == routing::route::unknown_path) != known_path && route_table_answers(text);
+}
+
+constexpr std::size_t unescaped_pipes(std::string_view const row) {
+    std::size_t count = 0;
+    for (std::size_t at = 0; at < row.size(); ++at) {
+        count += row[at] == '|' && (at == 0 || row[at - 1] != '\\');
+    }
+    return count;
+}
+
+constexpr std::size_t table_columns = 4;
+
+constexpr bool comment_lines_hold(std::string_view const text) {
+    auto const lines = config_docs::comment_text(text);
+    return std::ranges::all_of(lines | std::views::split('\n') | std::views::take(std::ranges::count(lines, '\n')),
+                               [](auto const line) { return std::string_view{line}.starts_with("//"); });
+}
+
+constexpr bool table_row_holds(std::string_view const table) {
+    constexpr std::size_t table_lines = 3;
+    auto const row = table.substr(table.rfind('\n', table.size() - 2) + 1);
+    return std::ranges::count(table, '\n') == table_lines && unescaped_pipes(row) == table_columns + 1;
+}
+
+constexpr bool docs_holds(std::string_view const text) {
+    config_docs::node leaf{.name = "k", .doc = std::string{text}, .fallback = json::value{std::string{text}}};
+    config_docs::node root{.type = config_docs::kind::object, .members = {leaf}};
+    auto const example = json::parse(config_docs::example_text(root));
+    auto const schema = json::parse(config_docs::schema_text(root, "t"), {.jsonc = false});
+    return example && json::text_at(*example, {"k"}) == text && schema && json::text_at(*schema, {"properties", "k", "description"}) == text &&
+           json::text_at(*schema, {"properties", "k", "default"}) == text && comment_lines_hold(text) && table_row_holds(config_docs::table_text(root));
 }
 
 }  // namespace llmgate::properties
