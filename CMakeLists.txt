@@ -69,6 +69,7 @@ llmgate_module(llmgate_jsonscan INTERFACE src/json/scan.cppm LIBS llmgate_reflec
 llmgate_module(llmgate_anthropic INTERFACE src/anthropic/guard.cppm LIBS llmgate_jsonscan llmgate_sse llmgate_reflect)
 llmgate_module(llmgate_json INTERFACE src/json/json.cppm LIBS llmgate_reflect llmgate_members llmgate_jsonscan)
 llmgate_module(llmgate_text INTERFACE src/core/text.cppm)
+llmgate_module(llmgate_format INTERFACE src/format/format.cppm LIBS llmgate_json llmgate_members llmgate_reflect)
 llmgate_module(llmgate_lenient INTERFACE src/json/lenient.cppm LIBS llmgate_json llmgate_members)
 llmgate_module(llmgate_usage INTERFACE src/usage/usage.cppm LIBS llmgate_json llmgate_jsonscan llmgate_lenient llmgate_members llmgate_reflect llmgate_role llmgate_text)
 llmgate_module(llmgate_claude INTERFACE src/claude/profile.cppm LIBS llmgate_text llmgate_json llmgate_reflect llmgate_role)
@@ -142,6 +143,12 @@ llmgate_test(schedule_test unit llmgate_scenarios)
 add_library(llmgate_properties)
 target_sources(llmgate_properties PUBLIC FILE_SET CXX_MODULES BASE_DIRS tests/support FILES tests/support/properties.cppm)
 target_link_libraries(llmgate_properties PUBLIC llmgate_flags llmgate_usage llmgate_arguments llmgate_statusline llmgate_claude llmgate_routing llmgate_selection llmgate_role llmgate_reflect llmgate_json llmgate_jsonscan llmgate_anthropic llmgate_sse llmgate_doctor llmgate_quota)
+
+add_library(llmgate_ut_print)
+target_sources(llmgate_ut_print PUBLIC FILE_SET CXX_MODULES BASE_DIRS tests/support FILES tests/support/ut_print.cppm)
+target_link_libraries(llmgate_ut_print PUBLIC llmgate_flags llmgate_format)
+
+llmgate_test(format_test unit llmgate_format llmgate_json llmgate_ut_print)
 
 add_library(llmgate_fuzz_driver)
 target_sources(llmgate_fuzz_driver PUBLIC FILE_SET CXX_MODULES BASE_DIRS tests/fuzz FILES tests/fuzz/driver.cppm)

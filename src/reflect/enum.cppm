@@ -82,12 +82,18 @@ constexpr std::optional<E> enum_from_name(std::string_view const name) noexcept 
     return match == table.end() ? std::nullopt : std::optional<E>{match->value};
 }
 
+constexpr char module_marker = '@';
+
+consteval std::string_view without_module(std::string_view const display) {
+    return display.substr(0, display.find(module_marker));
+}
+
 template <class E>
     requires std::is_enum_v<E>
 class enum_category final : public std::error_category {
 public:
     char const* name() const noexcept override {
-        static constexpr char const* qualified = std::define_static_string(std::meta::display_string_of(^^E));
+        static constexpr char const* qualified = std::define_static_string(without_module(std::meta::display_string_of(^^E)));
         return qualified;
     }
     std::string message(int const value) const override {
@@ -102,4 +108,20 @@ std::error_code make_code(E const value) noexcept {
     return {static_cast<int>(value), category};
 }
 
+struct error_enum_t {};
+inline constexpr error_enum_t error_enum{};
+
+template <class E>
+concept error_enum_type = std::is_enum_v<E> && !std::meta::annotations_of_with_type(^^E, ^^error_enum_t).empty();
+
+template <error_enum_type E>
+std::error_code make_error_code(E const value) noexcept {
+    return make_code(value);
+}
+
 }  // namespace llmgate::reflect
+
+export namespace std {
+template <llmgate::reflect::error_enum_type E>
+struct is_error_code_enum<E> : true_type {};
+}  // namespace std

@@ -9,21 +9,10 @@ import llmgate.reflect;
 
 export namespace llmgate::http {
 
-enum class errc { malformed_message = 1, head_too_large, truncated_message, connection_closed, invalid_header };
+enum class [[=reflect::error_enum]] errc { malformed_message = 1, head_too_large, truncated_message, connection_closed, invalid_header };
 static_assert(reflect::unique_values<errc>() && reflect::starts_at_one<errc>());
 
-}  // namespace llmgate::http
-
-export namespace std {
-template <>
-struct is_error_code_enum<llmgate::http::errc> : true_type {};
-}  // namespace std
-
-export namespace llmgate::http {
-
-std::error_code make_error_code(errc const value) noexcept {
-    return reflect::make_code(value);
-}
+using reflect::make_error_code;
 
 enum class kind { request, response };
 

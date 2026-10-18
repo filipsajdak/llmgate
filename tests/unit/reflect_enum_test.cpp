@@ -11,6 +11,9 @@ using namespace llmgate::reflect;
 enum class stop_reason { end_turn, max_tokens, tool_use };
 enum class coded { first = 1, second };
 enum class aliased { a, b, c = b };
+enum class [[=error_enum]] fault { broken = 1, lost };
+
+using llmgate::reflect::make_error_code;
 
 const suite enum_names = [] {
     "capability_enum_name_returns_the_enumerator_identifier"_test = [] {
@@ -47,6 +50,14 @@ const suite enum_names = [] {
 
     "capability_enum_name_is_usable_at_compile_time"_test = [] {
         static_assert(enum_name(stop_reason::max_tokens) == "max_tokens");
+    };
+
+    "capability_annotated_enum_converts_to_an_error_code_with_the_enumerator_name"_test = [] {
+        static_assert(std::is_error_code_enum_v<fault> && !std::is_error_code_enum_v<coded>);
+        std::error_code const code = fault::lost;
+        expect(code == fault::lost && code != fault::broken);
+        expect(code.message() == "lost");
+        expect(std::string_view{code.category().name()}.ends_with("::fault"));
     };
 };
 

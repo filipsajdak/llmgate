@@ -11,7 +11,7 @@ import llmgate.reflect;
 
 export namespace llmgate::tls {
 
-enum class errc {
+enum class [[=reflect::error_enum]] errc {
     context_failed = 1,
     connection_failed,
     handshake_failed,
@@ -129,16 +129,9 @@ std::string drain_errors() {
 
 }  // namespace llmgate::tls::detail
 
-export namespace std {
-template <>
-struct is_error_code_enum<llmgate::tls::errc> : true_type {};
-}  // namespace std
-
 export namespace llmgate::tls {
 
-std::error_code make_error_code(errc const value) noexcept {
-    return reflect::make_code(value);
-}
+using reflect::make_error_code;
 
 class client_context {
 public:
