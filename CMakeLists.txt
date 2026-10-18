@@ -196,6 +196,14 @@ target_link_libraries(constexpr_examples PRIVATE llmgate_usage llmgate_quota llm
 add_test(NAME constexpr_examples COMMAND constexpr_examples)
 set_tests_properties(constexpr_examples PROPERTIES LABELS constexpr)
 
+add_executable(constexpr_example_config tests/constexpr/example_config.cpp)
+target_compile_options(constexpr_example_config PRIVATE -fno-sanitize=all)
+target_compile_definitions(constexpr_example_config PRIVATE LLMGATE_EXAMPLE_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/config.example.jsonc")
+set_source_files_properties(tests/constexpr/example_config.cpp PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/config.example.jsonc)
+target_link_libraries(constexpr_example_config PRIVATE llmgate_config_docs llmgate_contracts)
+add_test(NAME constexpr_example_config COMMAND constexpr_example_config)
+set_tests_properties(constexpr_example_config PROPERTIES LABELS constexpr)
+
 set(LLMGATE_CONSTEXPR_DEPTH shallow CACHE STRING "Bounds of the compile-time exhaustive checks: shallow or deep")
 if(LLMGATE_CONSTEXPR_DEPTH STREQUAL deep)
   set(exhaustive_lengths LLMGATE_ROUTING_LENGTH=4 LLMGATE_CONFIG_LENGTH=4 LLMGATE_JSON_LENGTH=4 LLMGATE_SSE_LENGTH=5 LLMGATE_GUARD_FULL_LENGTH=3 LLMGATE_GUARD_CORE_LENGTH=5 LLMGATE_USAGE_LENGTH=3 LLMGATE_SELECTION_LENGTH=4 LLMGATE_QUOTA_LENGTH=4 LLMGATE_DOCTOR_LENGTH=3 LLMGATE_WRITER_LENGTH=3 LLMGATE_WIRE_LENGTH=4 LLMGATE_LENIENT_LENGTH=3 LLMGATE_DOCS_LENGTH=4)
