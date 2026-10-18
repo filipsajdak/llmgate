@@ -257,6 +257,23 @@ MemorySanitizer is not available: it needs clang, which cannot compile `<meta>`.
 
 Requires GCC 16.2 (`/opt/homebrew/bin/g++-16`), CMake 4.4+, Ninja. Clang cannot compile `<meta>`.
 
+## Performance
+
+`python3 ops/bench/bench.py [--paced]` starts a fast fake upstream and the gateway (usage ledger on and off), drives streamed Messages requests at several concurrencies and body sizes, and prints requests per second, time to first byte, time to first delta, total latency (p50, p95, p99), CPU per request, memory and upstream connection reuse next to a direct-to-upstream baseline. `--paced` adds an upstream that sends an event every 20 ms, which shows that the gateway streams instead of buffering. Results are saved as JSON under `build/bench/`.
+
+Measured on one Mac (Apple silicon, GCC 16.2, `RelWithDebInfo`), client and fake upstream on the same machine, plain HTTP, ledger on:
+
+| Body | Concurrent streams | Added latency p50 / p99 | CPU per request | Throughput |
+|---|---|---|---|---|
+| 2 KB | 1 | 0.10 / 0.13 ms | 0.14 ms | 4,800 req/s |
+| 100 KB | 1 | 0.47 / 0.53 ms | 0.42 ms | 1,640 req/s |
+| 100 KB | 8 | 2.8 / 3.2 ms | 0.41 ms | 2,450 req/s |
+| 100 KB | 32 | 11.5 / 21 ms | 0.41 ms | 2,400 req/s |
+
+The gateway is single-threaded, so added latency under load is queueing behind other requests. For one Claude Code session (a stream or two, bodies of 50 to 200 KB) the gateway adds under a millisecond. TLS to a real upstream is not measured here. A streamed reply that ends cleanly returns its upstream connection to the pool; before that was fixed, every streamed request opened a new connection and a high request rate ran out of ephemeral ports.
+
+Where the time goes at 100 KB (`sample` on macOS): the request body is scanned three times per request (about 0.09 ms), the usage ledger is opened, written and closed per request (about 0.035 ms), and copying the body to the upstream is the rest. Scanning once and keeping the ledger open are the two cheap wins if a shared gateway ever needs the headroom.
+
 ## Design decisions
 
 | Topic | Decision |
