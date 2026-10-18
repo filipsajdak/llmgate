@@ -10,7 +10,7 @@ Clean-room C++26 gateway (GCC 16.2, named modules, `import std`, `-freflection`)
 - **Layers.** A function only one layer may call takes `template <std::meta::info Caller = std::meta::current_function()>` and a `static_assert` on the caller's enclosing namespaces (`process::start_detached`, callable from `llmgate::commands` only).
 - **Concepts.** A template parameter that is called, awaited or used as a stream or sink is constrained (`std::invocable`, `net::byte_stream`, a `requires` clause).
 - **Modules only.** `import std;` in every `.cppm` and `.cpp`; the global module fragment holds C, POSIX, OpenSSL, `<meta>` and `<contracts>` headers only.
-- **Text.** `std::format`, `std::print`, `std::println` at run time; `text::append_all` in constexpr code. No iostream, no `printf`, no chains of `+=` or `push_back`.
+- **Text.** `std::format`, `std::print`, `std::println` at run time; `text::append_all` in constexpr code. No iostream, no `printf`, no chains of `+=` or `push_back`, no `std::string(1, c)` or `a + b + c` temporaries: append each part once (`text::append_all`, `format_to`, or a `std::views::split` that appends each segment). A name/value pair is `text::name_value`, never `std::pair<std::string, std::string>`.
 - **constexpr by default**, with a compile-time check beside it (`*_holds`, corpus and exhaustive targets). **Structural `static_assert`s** state each type property once. **Contracts** guard API boundaries; `std::expected` carries expected failures.
 - **Braced construction** (designated initializers, initializer lists), views and moves instead of copies, named constants instead of magic numbers, `std::chrono` for durations (mp-units adoption is still open, so do not introduce it piecemeal).
 - Skill `cpp26-idioms` has the replacements.
