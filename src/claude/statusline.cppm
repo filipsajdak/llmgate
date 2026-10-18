@@ -65,12 +65,14 @@ constexpr std::string_view level_of(int const percent) {
 }
 
 constexpr std::string usage_line(snapshot const& now) {
-    std::string line = "usage today " + text::compact(now.today_tokens);
+    std::string line;
+    text::append_all(line, "usage today ", text::compact(now.today_tokens));
     if (now.budget_limit == 0) {
-        return line + " tokens";
+        line += " tokens";
+        return line;
     }
-    line += "/" + text::compact(now.budget_limit) + " " + now.budget_window;
-    line += " [" + bar(now.budget_percent) + "] " + decimal(static_cast<std::uint64_t>(std::clamp(now.budget_percent, 0, 999))) + "%";
+    text::append_all(line, "/", text::compact(now.budget_limit), " ", now.budget_window, " [", bar(now.budget_percent), "] ",
+                     decimal(static_cast<std::uint64_t>(std::clamp(now.budget_percent, 0, 999))), "%");
     if (now.budget_state == "exhausted") {
         line += " EXHAUSTED";
     } else if (now.budget_state == "warning") {
@@ -83,9 +85,10 @@ constexpr std::string gateway_part(snapshot const& now) {
     if (!now.gateway_up) {
         return " | gateway DOWN";
     }
-    std::string part = " | gateway ok | " + decimal(now.requests) + " req";
+    std::string part;
+    text::append_all(part, " | gateway ok | ", decimal(now.requests), " req");
     if (now.repairs > 0) {
-        part += " | " + decimal(now.repairs) + " repaired";
+        text::append_all(part, " | ", decimal(now.repairs), " repaired");
     }
     return part;
 }

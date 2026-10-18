@@ -126,8 +126,7 @@ std::string url_encode(std::string_view const text) {
 std::string form(std::initializer_list<std::pair<std::string_view, std::string_view>> const fields) {
     std::string body;
     for (auto const& [name, value] : fields) {
-        body += body.empty() ? "" : "&";
-        body += url_encode(name) + "=" + url_encode(value);
+        std::format_to(std::back_inserter(body), "{}{}={}", body.empty() ? "" : "&", url_encode(name), url_encode(value));
     }
     return body;
 }

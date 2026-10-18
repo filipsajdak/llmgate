@@ -124,17 +124,24 @@ constexpr std::string describe(allowance const& item) {
     if (!item.has_quota) {
         return title + ": not included in this plan";
     }
-    return title + ": " + text::decimal(item.remaining) + " of " + text::decimal(item.entitlement) + " left (" + text::decimal(item.percent_remaining) + "%)" +
-           (is_low(item) ? " - low" : "");
+    std::string line;
+    text::append_all(line, title, ": ", text::decimal(item.remaining), " of ", text::decimal(item.entitlement), " left (", text::decimal(item.percent_remaining), "%)",
+                     is_low(item) ? " - low" : "");
+    return line;
 }
 
 constexpr std::string render(summary const& found) {
-    std::string out = "plan: " + (found.plan.empty() ? std::string{"unknown"} : found.plan) + (found.sku.empty() ? "" : " (" + found.sku + ")") + "\n";
+    std::string out;
+    text::append_all(out, "plan: ", found.plan.empty() ? std::string_view{"unknown"} : std::string_view{found.plan});
+    if (!found.sku.empty()) {
+        text::append_all(out, " (", found.sku, ")");
+    }
+    out += '\n';
     if (!found.reset_date.empty()) {
-        out += "resets: " + found.reset_date + "\n";
+        text::append_all(out, "resets: ", found.reset_date, "\n");
     }
     for (auto const& item : found.quotas) {
-        out += describe(item) + "\n";
+        text::append_all(out, describe(item), "\n");
     }
     return out;
 }

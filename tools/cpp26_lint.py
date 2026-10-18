@@ -28,6 +28,10 @@ BESIDE_IMPORT_STD = frozenset({"meta", "contracts"})
 INCLUDE = re.compile(r"^[ \t]*#[ \t]*include[ \t]*<([^>]+)>", re.MULTILINE)
 LEGACY_IO = re.compile(r"#[ \t]*include[ \t]*<iostream>|\bstd::(?:cout|cerr|clog|cin)\b|(?<![\w.])(?:std::|::)?v?[fs]?n?printf\s*\(")
 APPEND_STATEMENT = re.compile(r"(\w+)\s*(?:\+=|\.push_back\s*\()[^;]*;")
+PER_CHARACTER_STRING = re.compile(r"\bstd::string\s*[({]\s*1\s*,")
+CONCAT_APPEND = re.compile(r"\w+\s*\+=\s*([^;]*);")
+BINARY_PLUS = re.compile(r"(?<!\+)\+(?![+=])")
+MIN_CONCAT_OPERATORS = 2
 CONTROL_HEADER = re.compile(r"^(?:else\b\s*)?(?:if|for|while|switch|catch|do|try|else)\b")
 FUNCTION_TAIL = re.compile(r"\)\s*(?:const\b|noexcept\b(?:\s*\([^)]*\))?|override\b|final\b|mutable\b|&&?|->[^{;]*|requires\b[^{;]*|\s)*$")
 CONSTEXPR_WORD = re.compile(r"\b(?:constexpr|consteval)\b")
@@ -48,6 +52,7 @@ RULES = {
     "std-include": "#include of a standard header in a module-based project; use import std; (C and POSIX headers stay in the global module fragment)",
     "legacy-io": "iostream, printf and std::cout are legacy I/O; use std::print or std::println for output and std::format for text",
     "append-chain": "a run of += or push_back on one variable builds text or a container step by step; state it once: std::format or format_to at run time, text::append_all in constexpr code, a braced list for a container",
+    "string-temporary": "a temporary string per character or per '+' operand allocates for nothing; append each part once: text::append_all in constexpr code, std::format_to at run time, a string_view segment append in a loop",
     "comment": "comments are for rules that are broken: only a line starting '// Exception: <reason>' or a '}  // namespace x' closer is allowed; put contract text in the doc comment's home (name, type, test, requirement, commit)",
 }
 lint_common.ADVICE.update(RULES)
@@ -226,6 +231,15 @@ def template_findings(path, source, all_blocks):
             yield Finding(path, source.line(start.start()), "unconstrained-template", head)
 
 
+def temporary_findings(path, source):
+    for match in PER_CHARACTER_STRING.finditer(source.skeleton):
+        yield Finding(path, source.line(match.start()), "string-temporary", source.text_at(match.start()))
+    for match in CONCAT_APPEND.finditer(source.skeleton):
+        right = match.group(1)
+        if '"' in right and len(BINARY_PLUS.findall(right)) >= MIN_CONCAT_OPERATORS:
+            yield Finding(path, source.line(match.start()), "string-temporary", source.text_at(match.start()))
+
+
 def scan_text(path, text):
     source = cpp_source.scan(text)
     all_blocks = blocks(source.skeleton)
@@ -233,6 +247,7 @@ def scan_text(path, text):
     yield from include_findings(path, source)
     yield from legacy_io_findings(path, source)
     yield from append_findings(path, source, all_blocks)
+    yield from temporary_findings(path, source)
     yield from template_findings(path, source, all_blocks)
 
 
@@ -249,8 +264,11 @@ FIXTURES = {
     "std-include": "module;\n#include <vector>\nexport module m;\n",
     "legacy-io": 'void f() {\n  std::cout << 1;\n}\n',
     "append-chain": "std::string render(int a) {\n  std::string out;\n  out += \"a\";\n  out += \"b\";\n  out += \"c\";\n  return out;\n}\n",
+    "string-temporary": 'void f(std::string& out, char c) {\n  out += c == 1 ? std::string(1, c) : std::string{1, c};\n}\n',
     "comment": "int a;  // why\n",
 }
+CONCAT_CHAIN = 'void f(std::string& out, std::string const& name) {\n  out += "export " + name + "=" + "x";\n}\n'
+SINGLE_CONCAT = 'void f(std::string& out, std::string const& name, int n) {\n  out += name + "x";\n  total += n + 1 + 2;\n  ++count;\n}\n'
 CLEAN = "\n".join(
     [
         "module;",
@@ -327,6 +345,8 @@ def self_test():
     failures += expect("type utility template", scan_text("c.cppm", UTILITY_TEMPLATE), set())
     failures += expect("push_back chain", scan_text("c.cppm", PUSH_CHAIN), {"append-chain"})
     failures += expect("printf", scan_text("c.cppm", PRINTF), {"legacy-io"})
+    failures += expect("concat chain", scan_text("c.cppm", CONCAT_CHAIN), {"string-temporary"})
+    failures += expect("single concat and arithmetic", scan_text("c.cppm", SINGLE_CONCAT), set())
     return failures
 
 

@@ -260,10 +260,13 @@ constexpr std::string lowest_summary(quota::summary const& found) {
     std::string out;
     for (auto const& item : found.quotas) {
         if (quota::is_low(item)) {
-            out += (out.empty() ? "" : ", ") + item.name + " " + text::decimal(item.percent_remaining) + "% left";
+            text::append_all(out, out.empty() ? "" : ", ", item.name, " ", text::decimal(item.percent_remaining), "% left");
         }
     }
-    return out + (found.reset_date.empty() ? "" : "; resets " + found.reset_date);
+    if (!found.reset_date.empty()) {
+        text::append_all(out, "; resets ", found.reset_date);
+    }
+    return out;
 }
 
 constexpr std::optional<finding> quota_finding(facts const& seen) {
@@ -333,13 +336,13 @@ constexpr int exit_code(std::span<finding const> const findings) {
 constexpr std::string render_text(std::span<finding const> const findings) {
     std::string out;
     for (auto const& item : findings) {
-        out += label_of(item.status) + "  " + item.check + ": " + item.detail + "\n";
+        text::append_all(out, label_of(item.status), "  ", item.check, ": ", item.detail, "\n");
         if (item.status != status::pass) {
-            out += "      fix: " + item.remedy + "\n";
+            text::append_all(out, "      fix: ", item.remedy, "\n");
         }
     }
-    out += text::decimal(count_of(findings, status::pass)) + " pass, " + text::decimal(count_of(findings, status::warn)) + " warn, " +
-           text::decimal(count_of(findings, status::fail)) + " fail\n";
+    text::append_all(out, text::decimal(count_of(findings, status::pass)), " pass, ", text::decimal(count_of(findings, status::warn)), " warn, ",
+                     text::decimal(count_of(findings, status::fail)), " fail\n");
     return out;
 }
 
