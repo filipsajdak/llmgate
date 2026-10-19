@@ -227,6 +227,14 @@ httpio::request_spec messages_request(std::string body, std::string target = "/a
     return {.method = "POST", .target = std::move(target), .host = "localhost", .fields = std::move(fields), .body = std::move(body)};
 }
 
+httpio::request_spec control_request(std::string body, std::string_view const key) {
+    auto request = messages_request(body, "/llmgate/control", "");
+    if (!key.empty()) {
+        request.fields.add("x-llmgate-proof", proof::hmac_sha256_hex(key, proof::identity_message("scope-a/control", body)));
+    }
+    return request;
+}
+
 constexpr std::int64_t fixed_time = 1760659200;
 
 constexpr std::string_view golden_statistics =
@@ -757,6 +765,48 @@ const suite gateway_suite = [] {
         auto const& first = d.first.seen.at(0).headers;
         expect(first.at("Authorization") == "Bearer token-a");
         expect(!first.contains("anthropic-workspace-id"));
+    };
+
+    "capability_the_control_endpoint_applies_a_signed_command_and_the_route_view_reports_it"_test = [] {
+        world w{"upstream-token", "", std::nullopt, "identity-k"};
+        auto const command = std::string{R"({"action":"use","role":"opus","provider":"default","upstream":"claude-opus-upstream"})"};
+
+        auto const applied = w.ask(control_request(command, "identity-k"));
+        auto request = messages_request("");
+        request.method = "GET";
+        request.target = "/llmgate/route?role=opus&requested=opus";
+        auto const view = w.ask(std::move(request)).body;
+
+        expect(applied.status == 200);
+        expect(view.contains(R"("via":"global_remap")") && view.contains(R"json("providers":["default"])json"));
+    };
+
+    "limit_a_control_command_with_a_wrong_or_missing_proof_is_refused_and_changes_nothing"_test = [] {
+        world w{"upstream-token", "", std::nullopt, "identity-k"};
+        auto const command = std::string{R"({"action":"use","role":"opus","provider":"default","upstream":"claude-opus-upstream"})"};
+        auto unsigned_request = control_request(command, "identity-k");
+        unsigned_request.fields = messages_request("").fields;
+
+        expect(w.ask(control_request(command, "other-key")).status == 401);
+        expect(w.ask(std::move(unsigned_request)).status == 401);
+        auto request = messages_request("");
+        request.method = "GET";
+        request.target = "/llmgate/route?role=opus&requested=opus";
+        expect(w.ask(std::move(request)).body.contains(R"("via":"config")"));
+    };
+
+    "limit_a_gateway_without_an_identity_key_has_no_control_endpoint"_test = [] {
+        world w;
+
+        expect(w.ask(control_request(R"({"action":"clear"})", "")).status == 403);
+    };
+
+    "limit_a_rejected_control_command_reports_why_with_status_400"_test = [] {
+        world w{"upstream-token", "", std::nullopt, "identity-k"};
+
+        auto const answer = w.ask(control_request(R"({"action":"use","role":"opus","provider":"ghost","upstream":"x"})", "identity-k"));
+
+        expect(answer.status == 400 && answer.body.contains("ghost"));
     };
 
     "capability_a_picked_target_goes_to_exactly_that_provider_with_its_upstream_model"_test = [] {

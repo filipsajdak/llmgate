@@ -37,6 +37,8 @@ enum class route {
     models [[= endpoint{"GET", "/anthropic/v1/models"}]],
     health [[= endpoint{"GET", "/healthz"}]],
     statistics [[= endpoint{"GET", "/llmgate/stats"}]],
+    control [[= endpoint{"POST", "/llmgate/control"}]],
+    route_view [[= endpoint{"GET", "/llmgate/route"}]],
     unknown_path,
     wrong_method,
 };

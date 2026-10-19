@@ -101,6 +101,47 @@ const suite control_suite = [] {
         expect(resolved("claude-sonnet-5-5", "sonnet", "", pins).source == via::config);
     };
 
+    "capability_a_use_command_pins_the_role_globally_or_for_one_session"_test = [] {
+        overrides pins;
+
+        expect(apply(pins, R"({"action":"use","role":"sonnet","provider":"anthropic","upstream":"claude-sonnet-5-5"})", targets()).empty());
+        expect(apply(pins, R"({"action":"use","role":"opus","provider":"copilot","upstream":"claude-opus-5.5","session":"s9"})", targets()).empty());
+
+        expect(pins.global.at("sonnet").provider == "anthropic");
+        expect(pins.session.at("s9").at("opus").upstream == "claude-opus-5.5" && !pins.global.contains("opus"));
+    };
+
+    "capability_a_clear_command_removes_one_pin_or_all_of_a_scope"_test = [] {
+        overrides pins;
+        pins.global["sonnet"] = {.provider = "anthropic", .upstream = "claude-sonnet-5-5"};
+        pins.global["opus"] = {.provider = "copilot", .upstream = "claude-opus-5.5"};
+
+        expect(apply(pins, R"({"action":"clear","role":"sonnet"})", targets()).empty());
+        expect(!pins.global.contains("sonnet") && pins.global.contains("opus"));
+        expect(apply(pins, R"({"action":"clear"})", targets()).empty());
+        expect(pins.global.empty());
+    };
+
+    "limit_a_command_naming_an_unknown_role_target_or_action_changes_nothing"_test = [] {
+        overrides pins;
+
+        expect(apply(pins, R"({"action":"use","role":"gpt","provider":"copilot","upstream":"claude-opus-5.5"})", targets()).contains("gpt"));
+        expect(apply(pins, R"({"action":"use","role":"opus","provider":"ghost","upstream":"x"})", targets()).contains("ghost"));
+        expect(apply(pins, R"({"action":"dance"})", targets()).contains("dance"));
+        expect(apply(pins, "not json", targets()).contains("JSON"));
+        expect(pins.global.empty() && pins.session.empty());
+    };
+
+    "limit_the_session_pins_stay_within_their_bound_dropping_the_oldest"_test = [] {
+        overrides pins;
+        for (std::size_t n = 0; n < max_sessions + 3; ++n) {
+            expect(apply(pins, std::format(R"({{"action":"use","role":"opus","provider":"copilot","upstream":"claude-opus-5.5","session":"s{}"}})", n), targets()).empty());
+        }
+
+        expect(pins.session.size() == max_sessions);
+        expect(!pins.session.contains("s0") && pins.session.contains(std::format("s{}", max_sessions + 2)));
+    };
+
     "limit_a_pin_must_name_a_listed_target"_test = [] {
         expect(pin_problem({.provider = "copilot", .upstream = "claude-sonnet-5.5"}, targets()).empty());
         expect(pin_problem({.provider = "copilot", .upstream = "nope"}, targets()).contains("nope"));

@@ -16,6 +16,7 @@ import llmgate.members;
 import llmgate.net;
 import llmgate.proof;
 import llmgate.reflect;
+import llmgate.role;
 import llmgate.routing;
 import llmgate.selection;
 import llmgate.shutdown;
@@ -270,6 +271,13 @@ std::string models_json(std::set<std::string> const& aliases, std::span<control:
     return json::write(json::to_value(listing));
 }
 
+struct route_report {
+    std::string role{};
+    std::string via{};
+    std::vector<std::string> providers{};
+    std::optional<std::string> upstream{};
+};
+
 struct planned {
     std::size_t index = 0;
     std::optional<std::string> upstream{};
@@ -473,6 +481,7 @@ public:
         : proxy{loop, std::move(settings), std::move(access), single(credentials), tls_context} {}
 
     void use_overrides(control::overrides book) { overrides_ = std::move(book); }
+    void persist_overrides_with(std::function<void(control::overrides const&)> sink) { persist_overrides_ = std::move(sink); }
 
     bool uses_credential_endpoint() const {
         return std::ranges::any_of(providers_, [](detail::provider_runtime const& item) { return item.creds->endpoint().has_value(); });
@@ -501,6 +510,10 @@ public:
         if (which == routing::route::count_tokens) {
             co_return co_await estimate_tokens(incoming, out);
         }
+        if (which == routing::route::control) {
+            auto answer = apply_control(incoming);
+            co_return co_await respond(out, answer.status, std::move(answer.body));
+        }
         if (auto body = json_body(which, incoming.head.target)) {
             co_return co_await respond(out, 200, std::move(*body));
         }
@@ -517,6 +530,7 @@ private:
         switch (which) {
             case routing::route::models: return detail::models_json(alias_names(), targets_);
             case routing::route::health: return health_body(target);
+            case routing::route::route_view: return route_body(target);
             case routing::route::statistics: return detail::stats_json(counters_, usage::summary_json(ledger_, settings_.usage.budget, clock_()), providers_object());
             default: return std::nullopt;
         }
@@ -549,6 +563,39 @@ private:
             items.push_back(detail::provider_member(item.name, counters_.providers.at(item.name), selection::state_of(item.circuit, breaker_, breaker_clock_())));
         }
         return items;
+    }
+
+    routing::reply_body apply_control(httpio::request const& incoming) {
+        if (access_.identity_key.empty()) {
+            return routing::error_reply(403, "permission_error", "the control endpoint needs an identity key");
+        }
+        auto const sent = incoming.head.fields.find("x-llmgate-proof").value_or("");
+        auto const expected = proof::hmac_sha256_hex(access_.identity_key, proof::identity_message(std::format("{}/control", access_.identity_scope), incoming.body));
+        if (!routing::secrets_equal(sent, expected)) {
+            return routing::error_reply(401, "authentication_error", "invalid or missing control proof");
+        }
+        auto changed = overrides_;
+        if (auto problem = control::apply(changed, incoming.body, targets_); !problem.empty()) {
+            return routing::error_reply(400, "invalid_request_error", problem);
+        }
+        overrides_ = std::move(changed);
+        if (persist_overrides_) {
+            persist_overrides_(overrides_);
+        }
+        return {.status = 200, .body = R"({"status":"ok"})"};
+    }
+
+    std::string route_body(std::string_view const target) const {
+        auto const requested = routing::query_value(target, "requested");
+        auto const role = std::string{roles::name_of(roles::of(requested.empty() ? routing::query_value(target, "role") : requested))};
+        auto const chosen = control::resolve({.requested = requested, .role = role, .session = routing::query_value(target, "session")}, targets_, overrides_,
+                                             selection::order_for(routes_, role, declared_));
+        detail::route_report report{.role = role, .via = std::string{reflect::enum_name(chosen.source)}};
+        for (auto const& item : chosen.steps) {
+            report.providers.push_back(item.provider);
+            report.upstream = item.upstream;
+        }
+        return json::write(json::to_value(report));
     }
 
     std::string health_body(std::string_view const target) const {
@@ -967,6 +1014,7 @@ private:
     std::vector<selection::role_route> routes_;
     std::vector<control::target> targets_;
     control::overrides overrides_;
+    std::function<void(control::overrides const&)> persist_overrides_;
     std::vector<std::string> declared_;
     net::connection_pool<net::any_stream> pool_;
     stats counters_;

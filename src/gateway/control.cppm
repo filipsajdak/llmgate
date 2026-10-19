@@ -3,6 +3,7 @@ module;
 export module llmgate.control;
 
 import std;
+import llmgate.json;
 import llmgate.role;
 import llmgate.text;
 
@@ -56,9 +57,12 @@ struct pin {
 
 using pins = std::map<std::string, pin, std::less<>>;
 
+constexpr std::size_t max_sessions = 256;
+
 struct overrides {
     pins global{};
     std::map<std::string, pins, std::less<>> session{};
+    std::deque<std::string> order{};
 };
 
 enum class via { config, global_remap, session_remap, picked };
@@ -126,6 +130,75 @@ constexpr std::string pin_problem(pin const& wanted, std::span<target const> con
         text::append_all(out, wanted.provider, " does not offer the model ", wanted.upstream);
     }
     return out;
+}
+
+struct command {
+    std::string action{};
+    std::string role{};
+    std::string provider{};
+    std::string upstream{};
+    std::string session{};
+};
+
+constexpr void remember(overrides& book, std::string const& session) {
+    std::erase(book.order, session);
+    book.order.push_back(session);
+    while (book.session.size() > max_sessions) {
+        auto const oldest = book.order.empty() ? book.session.begin()->first : book.order.front();
+        book.session.erase(oldest);
+        std::erase(book.order, oldest);
+    }
+}
+
+constexpr std::string use(overrides& book, command const& what, std::span<target const> const known) {
+    if (!roles::from_name(what.role)) {
+        return std::format("{} is not a role ({})", what.role, roles::list_text());
+    }
+    pin const wanted{.provider = what.provider, .upstream = what.upstream};
+    if (auto problem = pin_problem(wanted, known); !problem.empty()) {
+        return problem;
+    }
+    if (what.session.empty()) {
+        book.global[what.role] = wanted;
+    } else {
+        book.session[what.session][what.role] = wanted;
+        remember(book, what.session);
+    }
+    return {};
+}
+
+constexpr std::string clear(overrides& book, command const& what) {
+    auto const scope = [&](pins& mine) {
+        if (what.role.empty()) {
+            mine.clear();
+        } else {
+            mine.erase(what.role);
+        }
+    };
+    if (what.session.empty()) {
+        scope(book.global);
+    } else if (auto const found = book.session.find(what.session); found != book.session.end()) {
+        scope(found->second);
+        if (found->second.empty()) {
+            book.session.erase(found);
+            std::erase(book.order, what.session);
+        }
+    }
+    return {};
+}
+
+constexpr std::string apply(overrides& book, std::string_view const text, std::span<target const> const known) {
+    auto const what = json::read_text<command>(text);
+    if (!what) {
+        return std::format("the command is not valid JSON of the expected shape: {}", what.error().message);
+    }
+    if (what->action == "use") {
+        return use(book, *what, known);
+    }
+    if (what->action == "clear") {
+        return clear(book, *what);
+    }
+    return std::format("unknown action {}", what->action);
 }
 
 static_assert(id_of("claude-sonnet-5.5", "copilot") == "claude-sonnet-5.5@copilot");
