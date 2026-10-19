@@ -12,7 +12,8 @@
     "base_url": "https://api.githubcopilot.com",
     // Path of the Messages endpoint on the upstream.
     "messages_path": "/v1/messages",
-    // Extra headers sent to the upstream on every request.
+    // Extra headers sent to the upstream on every request. With a copilot login the gateway also sends
+    // Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here.
     "headers": { "Editor-Version": "vscode/1.99.0", "Copilot-Integration-Id": "vscode-chat" }
   },
 

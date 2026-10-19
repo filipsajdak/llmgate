@@ -30,12 +30,14 @@ struct upstream_config {
     [[= json::required]] [[= reflect::doc{"Base URL of the single upstream; together with the other top-level keys it acts as one provider named default."}]]
     [[= reflect::example{R"("https://api.githubcopilot.com")"}]] std::string base_url{};
     [[= reflect::doc{"Path of the Messages endpoint on the upstream."}]] std::string messages_path = "/v1/messages";
-    [[= reflect::doc{"Extra headers sent to the upstream on every request."}]]
+    [[= reflect::doc{"Extra headers sent to the upstream on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here."}]]
     [[= reflect::example{R"({ "Editor-Version": "vscode/1.99.0", "Copilot-Integration-Id": "vscode-chat" })"}]]
     std::map<std::string, std::string> headers{};
 };
 
 constexpr std::string_view vscode_copilot_client_id = "Iv1.b507a08c87ecfe98";
+constexpr std::string_view vscode_editor_version = "vscode/1.99.0";
+constexpr std::string_view vscode_integration_id = "vscode-chat";
 
 struct copilot_config {
     [[= reflect::doc{"File that holds the GitHub OAuth token; run llmgate login once to write it."}]]
@@ -51,7 +53,7 @@ struct copilot_config {
 struct provider_config {
     [[= json::required]] [[= reflect::doc{"Base URL of the provider."}]] [[= reflect::example{R"("https://api.anthropic.com")"}]] std::string base_url{};
     [[= reflect::doc{"Path of the Messages endpoint on the provider."}]] std::string messages_path = "/v1/messages";
-    [[= reflect::doc{"Extra headers sent to the provider on every request."}]] std::map<std::string, std::string> headers{};
+    [[= reflect::doc{"Extra headers sent to the provider on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here."}]] std::map<std::string, std::string> headers{};
     [[= reflect::doc{"Name of the environment variable that holds the API key sent as the bearer token."}]]
     [[= reflect::example{R"("ANTHROPIC_UPSTREAM_KEY")"}]] std::string static_token_env{};
     [[= reflect::doc{"GitHub Copilot login of this provider; used instead of static_token_env."}]] std::optional<copilot_config> copilot{};

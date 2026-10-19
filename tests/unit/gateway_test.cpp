@@ -648,6 +648,41 @@ const suite gateway_suite = [] {
         expect(headers.at("Editor-Version") == "test/1.0");
     };
 
+    "capability_a_provider_with_a_copilot_login_gets_the_editor_headers_it_needs"_test = [] {
+        duo d{[](gateway::config& built) {
+            built.providers["a"].headers.clear();
+            built.providers["a"].copilot = gateway::copilot_config{};
+        }};
+
+        (void)d.chat_with("opus");
+
+        auto const& headers = d.first.seen.at(0).headers;
+        expect(headers.at("Editor-Version") == "vscode/1.99.0");
+        expect(headers.at("Copilot-Integration-Id") == "vscode-chat");
+    };
+
+    "limit_a_configured_editor_header_wins_over_the_default_whatever_its_case"_test = [] {
+        duo d{[](gateway::config& built) {
+            built.providers["a"].headers = {{"editor-version", "mine/9"}};
+            built.providers["a"].copilot = gateway::copilot_config{};
+        }};
+
+        (void)d.chat_with("opus");
+
+        auto const& headers = d.first.seen.at(0).headers;
+        expect(headers.at("editor-version") == "mine/9");
+        expect(!headers.contains("Editor-Version"));
+        expect(headers.at("Copilot-Integration-Id") == "vscode-chat");
+    };
+
+    "limit_a_provider_without_a_copilot_login_gets_no_copilot_headers"_test = [] {
+        world w;
+
+        (void)w.ask(messages_request(chat("opus", false)));
+
+        expect(!w.upstream.seen.at(0).headers.contains("Copilot-Integration-Id"));
+    };
+
     "capability_a_clean_stream_passes_through_event_for_event"_test = [] {
         world w;
         w.upstream.mode = behaviour::sse_clean;

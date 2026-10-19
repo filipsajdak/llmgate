@@ -78,8 +78,7 @@ struct stored_token {
 constexpr seconds refresh_margin{300};
 constexpr milliseconds github_limit = std::chrono::seconds{15};
 constexpr milliseconds slow_down_step = std::chrono::seconds{5};
-constexpr std::string_view editor_version = "vscode/1.99.0";
-constexpr std::string_view integration_id = "vscode-chat";
+constexpr std::string_view editor_version = gateway::vscode_editor_version;
 constexpr std::string_view user_target = "/copilot_internal/user";
 constexpr std::string_view device_grant = "urn:ietf:params:oauth:grant-type:device_code";
 

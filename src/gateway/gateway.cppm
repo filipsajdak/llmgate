@@ -174,7 +174,11 @@ namespace llmgate::gateway::detail {
 
 constexpr std::string_view user_agent = "llmgate/0.0";
 
-http::header_map upstream_headers(httpio::request const& incoming, std::map<std::string, std::string> const& extra, std::string_view const token) {
+constexpr auto copilot_client_headers = std::to_array<std::pair<std::string_view, std::string_view>>(
+    {{"Editor-Version", vscode_editor_version}, {"Copilot-Integration-Id", vscode_integration_id}});
+
+http::header_map upstream_headers(httpio::request const& incoming, std::map<std::string, std::string> const& extra, bool const copilot_client,
+                                  std::string_view const token) {
     static constexpr auto passed = std::to_array<std::string_view>({"content-type", "accept", "anthropic-version", "anthropic-beta"});
     http::header_map fields;
     for (auto const name : passed) {
@@ -184,6 +188,13 @@ http::header_map upstream_headers(httpio::request const& incoming, std::map<std:
     }
     for (auto const& [name, content] : extra) {
         fields.add(name, content);
+    }
+    if (copilot_client) {
+        for (auto const& [name, content] : copilot_client_headers) {
+            if (!fields.find(name)) {
+                fields.add(std::string{name}, std::string{content});
+            }
+        }
     }
     fields.add("Authorization", std::format("Bearer {}", token));
     fields.add("User-Agent", std::string{user_agent});
@@ -671,7 +682,7 @@ private:
         co_return httpio::request_spec{.method = "POST",
                                        .target = chosen.url->base_path + chosen.settings.messages_path,
                                        .host = chosen.url->host,
-                                       .fields = detail::upstream_headers(incoming, chosen.settings.headers, *token),
+                                       .fields = detail::upstream_headers(incoming, chosen.settings.headers, chosen.settings.copilot.has_value(), *token),
                                        .body = std::move(prepared->body)};
     }
 

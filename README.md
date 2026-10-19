@@ -60,12 +60,12 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `upstream` | object | - | The single backend of an older configuration; it keeps working and acts as one provider named default. |
 | `upstream.base_url` | string | required | Base URL of the single upstream; together with the other top-level keys it acts as one provider named default. |
 | `upstream.messages_path` | string | `"/v1/messages"` | Path of the Messages endpoint on the upstream. |
-| `upstream.headers` | map of string | `{}` | Extra headers sent to the upstream on every request. |
+| `upstream.headers` | map of string | `{}` | Extra headers sent to the upstream on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here. |
 | `models` | map of string | `{}` | Claude Code expands aliases such as sonnet to full model names before it calls the gateway, so map full names: client model name to upstream model name. Unknown names go through unchanged. |
 | `providers` | map of object | `{}` | More than one backend: name each one here. A provider with a copilot object uses the Copilot login, one with static_token_env uses that variable. The keys upstream, models, copilot and static_token_env stay valid and act as one provider named default. |
 | `providers.<name>.base_url` | string | required | Base URL of the provider. |
 | `providers.<name>.messages_path` | string | `"/v1/messages"` | Path of the Messages endpoint on the provider. |
-| `providers.<name>.headers` | map of string | `{}` | Extra headers sent to the provider on every request. |
+| `providers.<name>.headers` | map of string | `{}` | Extra headers sent to the provider on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here. |
 | `providers.<name>.static_token_env` | string | `""` | Name of the environment variable that holds the API key sent as the bearer token. |
 | `providers.<name>.copilot` | object | none | GitHub Copilot login of this provider; used instead of static_token_env. |
 | `providers.<name>.copilot.token_file` | string | `""` | File that holds the GitHub OAuth token; run llmgate login once to write it. |
@@ -267,7 +267,7 @@ LLMGATE_REAL=1 LLMGATE_GHE_HOST=your-company.ghe.com tests/e2e/real_run.sh
 
 - It refuses to run without `LLMGATE_REAL=1`, because it sends requests to a real service, and without a host. A host ending in `.ghe.com` gets `https://api.HOST` for the API and `https://copilot-api.HOST` as the Copilot base URL until the token exchange names the real one; any other host is treated as GitHub Enterprise Server (`https://HOST/api/v3`). Override with `LLMGATE_GITHUB_URL`, `LLMGATE_GITHUB_API_URL` and `LLMGATE_COPILOT_BASE_URL`.
 - The model's tools are scoped: Read at its default (the working directory, the invented sample), edits accepted only inside it, and Bash limited to `python3 test_mathlib.py`. Anything else it tries is denied and shows up as an error in the turn, not as a command on your machine.
-- `LLMGATE_TOKEN_FILE=/path/outside/the/repo/token.json` keeps the login between runs (the script then skips `llmgate login` and never deletes the file; it refuses a path inside the repository). `LLMGATE_COPILOT_HEADERS=1` adds `Editor-Version` and `Copilot-Integration-Id` to the provider, as the example configuration does.
+- `LLMGATE_TOKEN_FILE=/path/outside/the/repo/token.json` keeps the login between runs (the script then skips `llmgate login` and never deletes the file; it refuses a path inside the repository). `LLMGATE_COPILOT_HEADERS=1` sets `Editor-Version` and `Copilot-Integration-Id` explicitly in the config (the gateway sends them by default for a Copilot provider; this is for checking that path).
 - It stops at `llmgate login` until you authorise the printed code in a browser. The token lives in a temporary 0600 file, the profile and state in a temporary home, and everything is deleted on exit; your own `~/.config/llmgate` and `~/.claude-llmgate` are not touched.
 - The account needs Copilot with Claude models enabled. `claude-sonnet-5-5` is mapped to `claude-sonnet-5.5` (and likewise for opus and haiku); change the ids in the script if the account serves others.
 - `tests/e2e/real_run_rehearsal.sh` runs the same script against a fake GitHub and the scripted tool-use upstream, so the script itself is tested without any account (needs the real `claude` CLI).
