@@ -257,6 +257,20 @@ MemorySanitizer is not available: it needs clang, which cannot compile `<meta>`.
 
 Requires GCC 16.2 (`/opt/homebrew/bin/g++-16`), CMake 4.4+, Ninja. Clang cannot compile `<meta>`.
 
+## Trying it against a real Copilot
+
+`tests/e2e/real_run.sh` runs one Claude Code turn with tool use (read a file, fix a bug, run a test, in an invented Python sample created in a temporary directory) through `llmgate claude` to the Copilot Claude models, and writes `build/realrun/report.md`: exit status, tool calls seen, stream repairs by kind, upstream failures, connection reuse, tokens, the model requested against the model served, and the doctor summary. The report holds no host name, token or response text.
+
+```bash
+LLMGATE_REAL=1 LLMGATE_GHE_HOST=your-company.ghe.com tests/e2e/real_run.sh
+```
+
+- It refuses to run without `LLMGATE_REAL=1`, because it sends requests to a real service, and without a host. A host ending in `.ghe.com` gets `https://api.HOST` for the API and `https://copilot-api.HOST` as the Copilot base URL until the token exchange names the real one; any other host is treated as GitHub Enterprise Server (`https://HOST/api/v3`). Override with `LLMGATE_GITHUB_URL`, `LLMGATE_GITHUB_API_URL` and `LLMGATE_COPILOT_BASE_URL`.
+- The model's tools are scoped: Read at its default (the working directory, the invented sample), edits accepted only inside it, and Bash limited to `python3 test_mathlib.py`. Anything else it tries is denied and shows up as an error in the turn, not as a command on your machine.
+- It stops at `llmgate login` until you authorise the printed code in a browser. The token lives in a temporary 0600 file, the profile and state in a temporary home, and everything is deleted on exit; your own `~/.config/llmgate` and `~/.claude-llmgate` are not touched.
+- The account needs Copilot with Claude models enabled. `claude-sonnet-5-5` is mapped to `claude-sonnet-5.5` (and likewise for opus and haiku); change the ids in the script if the account serves others.
+- `tests/e2e/real_run_rehearsal.sh` runs the same script against a fake GitHub and the scripted tool-use upstream, so the script itself is tested without any account (needs the real `claude` CLI).
+
 ## Performance
 
 `python3 ops/bench/bench.py [--paced]` starts a fast fake upstream and the gateway (usage ledger on and off), drives streamed Messages requests at several concurrencies and body sizes, and prints requests per second, time to first byte, time to first delta, total latency (p50, p95, p99), CPU per request, memory and upstream connection reuse next to a direct-to-upstream baseline. `--paced` adds an upstream that sends an event every 20 ms, which shows that the gateway streams instead of buffering. Results are saved as JSON under `build/bench/`.

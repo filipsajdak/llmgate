@@ -1,10 +1,12 @@
 import json
+import os
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 LOG = sys.argv[2]
 DEFECT = sys.argv[3] if len(sys.argv) > 3 else "none"
+TOOL_COMMAND = os.environ.get("FAKE_TOOL_COMMAND", "echo tool-ran")
 TEXT = "Tool finished: all good" if DEFECT == "tool" else "Hello from the fake upstream"
 
 
@@ -40,7 +42,7 @@ def tool_events(model):
         ("message_start", start),
         ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "toolu_fake1", "name": "Bash", "input": {}}}),
         delta('{"command":'),
-        delta('"echo tool-ran"}'),
+        delta(json.dumps(TOOL_COMMAND) + "}"),
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
         ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {"output_tokens": 12}}),
         ("message_stop", {"type": "message_stop"}),
