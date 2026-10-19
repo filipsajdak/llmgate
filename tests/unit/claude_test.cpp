@@ -50,6 +50,13 @@ const suite claude_suite = [] {
         expect(value_of(sample("local-secret"), "ANTHROPIC_AUTH_TOKEN") == "local-secret");
     };
 
+    "capability_login_credential_mode_sends_no_gateway_token_so_claude_keeps_its_own_login"_test = [] {
+        auto const list = claude::environment({.credential = claude::credential_mode::login}, "u", "local-secret", "/p");
+
+        expect(value_of(list, "ANTHROPIC_AUTH_TOKEN") == "<missing>");
+        expect(value_of(list, "ANTHROPIC_BASE_URL") == "u");
+    };
+
     "limit_shell_exports_quote_values_so_they_cannot_inject_commands"_test = [] {
         claude::environment_list list;
         list.emplace_back("A", "x'; rm -rf ~; echo '");

@@ -61,11 +61,13 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `upstream.base_url` | string | required | Base URL of the single upstream; together with the other top-level keys it acts as one provider named default. |
 | `upstream.messages_path` | string | `"/v1/messages"` | Path of the Messages endpoint on the upstream. |
 | `upstream.headers` | map of string | `{}` | Extra headers sent to the upstream on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here. |
+| `upstream.forward_credentials` | boolean | `false` | Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen. |
 | `models` | map of string | `{}` | Claude Code expands aliases such as sonnet to full model names before it calls the gateway, so map full names: client model name to upstream model name. Unknown names go through unchanged. |
 | `providers` | map of object | `{}` | More than one backend: name each one here. A provider with a copilot object uses the Copilot login, one with static_token_env uses that variable. The keys upstream, models, copilot and static_token_env stay valid and act as one provider named default. |
 | `providers.<name>.base_url` | string | required | Base URL of the provider. |
 | `providers.<name>.messages_path` | string | `"/v1/messages"` | Path of the Messages endpoint on the provider. |
 | `providers.<name>.headers` | map of string | `{}` | Extra headers sent to the provider on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here. |
+| `providers.<name>.forward_credentials` | boolean | `false` | Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen. |
 | `providers.<name>.static_token_env` | string | `""` | Name of the environment variable that holds the API key sent as the bearer token. |
 | `providers.<name>.copilot` | object | none | GitHub Copilot login of this provider; used instead of static_token_env. |
 | `providers.<name>.copilot.token_file` | string | `""` | File that holds the GitHub OAuth token; run llmgate login once to write it. |
@@ -102,6 +104,7 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `claude.profile_dir` | string | `"~/.claude-llmgate"` | Directory of the separate Claude Code profile that llmgate claude uses. |
 | `claude.effort` | string | `"medium"` | Effort level written to the profile when it has none. |
 | `claude.telemetry` | boolean | `false` | Whether Claude Code keeps its telemetry on; off by default. |
+| `claude.credential` | one of `gateway`, `login` | `"gateway"` | Credential Claude Code presents to the gateway: gateway sends the gateway key (or a placeholder) as ANTHROPIC_AUTH_TOKEN; login sends none, so Claude Code keeps using its own saved login or API key, which a provider with forward_credentials passes on. |
 | `usage` | object | - | Usage ledger and token budgets. |
 | `usage.ledger_file` | string | `"~/.local/state/llmgate/usage.jsonl"` | File that receives one line per request; the gateway reads it back at start-up. |
 | `usage.budget` | object | - | Token budgets; 0 means no limit, and counted tokens are input + output + cache writes. |
@@ -160,6 +163,20 @@ One gateway can sit in front of several backends. Name each under `providers`, t
 - `llmgate login` logs in with the top-level `copilot` key, else with the first provider (alphabetically) that has a `copilot.token_file`; two Copilot providers with different token files need a login each, by listing them one at a time.
 
 The selection logic (circuit breaker, role route order) is a constexpr module, `src/gateway/selection.cppm`, with unit tests, a corpus replay, a bounded exhaustive check and an AFL++ harness like the other pure modules.
+
+## Using a Claude subscription or an API key held by Claude Code
+
+Anthropic's gateway guide says that with only `ANTHROPIC_BASE_URL` set, Claude Code keeps using its saved claude.ai login (or API key) and a gateway must forward the credential and the `anthropic-beta` value (which carries the OAuth capability) unchanged. A provider with `forward_credentials` does exactly that, so llmgate never sees, stores or refreshes a subscription token:
+
+```jsonc
+"providers": { "anthropic": { "base_url": "https://api.anthropic.com", "forward_credentials": true } },
+"claude": { "credential": "login" }
+```
+
+- The client's `Authorization` and `x-api-key` headers and every `anthropic-*` header reach that provider unchanged; no gateway token is attached. Every other provider still gets only its own credential, so a fallback from an Anthropic provider to Copilot never hands Copilot your Anthropic login.
+- `claude.credential: "login"` makes `llmgate claude` and `llmgate env` leave `ANTHROPIC_AUTH_TOKEN` unset, so Claude Code does not replace its own login with the gateway placeholder. Run `llmgate claude` once and sign in with `/login` inside the dedicated profile (`~/.claude-llmgate`); your normal `~/.claude` is not touched.
+- The gateway refuses to start a forwarding provider together with `client_key_env` (the same header cannot carry both the gateway key and the login) or on a non-loopback listen address; `llmgate --check-config` says so.
+- One Claude subscription account is one Claude Code profile. Anthropic's terms do not allow a gateway to collect, store or intermediate subscription credentials, so llmgate does not hold subscription tokens and cannot switch between two subscription accounts inside a running session; `/login` in Claude Code does that by hand.
 
 ## Stopping, doctor and quota
 

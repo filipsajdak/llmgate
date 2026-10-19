@@ -33,6 +33,7 @@ struct upstream_config {
     [[= reflect::doc{"Extra headers sent to the upstream on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here."}]]
     [[= reflect::example{R"({ "Editor-Version": "vscode/1.99.0", "Copilot-Integration-Id": "vscode-chat" })"}]]
     std::map<std::string, std::string> headers{};
+    [[= reflect::doc{"Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen."}]] [[= reflect::commented]] bool forward_credentials = false;
 };
 
 constexpr std::string_view vscode_copilot_client_id = "Iv1.b507a08c87ecfe98";
@@ -54,6 +55,7 @@ struct provider_config {
     [[= json::required]] [[= reflect::doc{"Base URL of the provider."}]] [[= reflect::example{R"("https://api.anthropic.com")"}]] std::string base_url{};
     [[= reflect::doc{"Path of the Messages endpoint on the provider."}]] std::string messages_path = "/v1/messages";
     [[= reflect::doc{"Extra headers sent to the provider on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here."}]] std::map<std::string, std::string> headers{};
+    [[= reflect::doc{"Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen."}]] [[= reflect::commented]] bool forward_credentials = false;
     [[= reflect::doc{"Name of the environment variable that holds the API key sent as the bearer token."}]]
     [[= reflect::example{R"("ANTHROPIC_UPSTREAM_KEY")"}]] std::string static_token_env{};
     [[= reflect::doc{"GitHub Copilot login of this provider; used instead of static_token_env."}]] std::optional<copilot_config> copilot{};

@@ -709,6 +709,55 @@ const suite gateway_suite = [] {
         expect(w.gateway.counters().repair_examples.at("unparseable_event") == "event=note data=hello");
     };
 
+    "capability_a_forwarding_provider_gets_the_clients_credentials_and_the_next_provider_does_not"_test = [] {
+        duo d{[](gateway::config& built) {
+            built.providers["a"].forward_credentials = true;
+            built.providers["a"].headers.clear();
+        }};
+        d.first.mode = behaviour::server_error;
+        auto spec = messages_request(chat("opus", false), "/anthropic/v1/messages", "");
+        spec.fields.add("Authorization", "Bearer client-login");
+        spec.fields.add("anthropic-workspace-id", "ws-1");
+
+        auto const answer = d.ask(std::move(spec));
+
+        expect(answer.status == 200);
+        auto const& first = d.first.seen.at(0).headers;
+        expect(first.at("Authorization") == "Bearer client-login");
+        expect(first.at("anthropic-workspace-id") == "ws-1");
+        expect(first.at("anthropic-beta") == "tools-2024");
+        auto const& second = d.second.seen.at(0).headers;
+        expect(second.at("Authorization") == "Bearer token-b");
+        expect(!second.contains("anthropic-workspace-id"));
+    };
+
+    "capability_a_forwarding_provider_passes_an_api_key_header_and_adds_no_token_of_its_own"_test = [] {
+        duo d{[](gateway::config& built) {
+            built.providers["a"].forward_credentials = true;
+            built.providers["a"].headers.clear();
+        }};
+        auto spec = messages_request(chat("opus", false), "/anthropic/v1/messages", "sk-ant-client");
+
+        (void)d.ask(std::move(spec));
+
+        auto const& first = d.first.seen.at(0).headers;
+        expect(first.at("x-api-key") == "sk-ant-client");
+        expect(!first.contains("Authorization"));
+    };
+
+    "limit_without_forwarding_the_clients_authorization_never_reaches_the_upstream"_test = [] {
+        duo d;
+        auto spec = messages_request(chat("opus", false), "/anthropic/v1/messages", "");
+        spec.fields.add("Authorization", "Bearer client-login");
+        spec.fields.add("anthropic-workspace-id", "ws-1");
+
+        (void)d.ask(std::move(spec));
+
+        auto const& first = d.first.seen.at(0).headers;
+        expect(first.at("Authorization") == "Bearer token-a");
+        expect(!first.contains("anthropic-workspace-id"));
+    };
+
     "capability_a_clean_stream_passes_through_event_for_event"_test = [] {
         world w;
         w.upstream.mode = behaviour::sse_clean;

@@ -187,6 +187,44 @@ const suite commands_suite = [] {
         expect(policy->client_key == "secret-key");
     };
 
+    "limit_a_forwarding_provider_is_refused_with_a_client_key"_test = [] {
+        sandbox box;
+        gateway::config settings;
+        settings.providers["anthropic"] = {.base_url = "https://api.anthropic.com", .forward_credentials = true};
+        settings.client_key_env = key_variable;
+        ::setenv(key_variable.data(), "secret-key", 1);
+
+        auto const policy = commands::make_policy(settings, "127.0.0.1", 9480);
+        ::unsetenv(key_variable.data());
+
+        expect(!policy.has_value());
+        expect(policy.error().contains("anthropic") && policy.error().contains("client_key_env"));
+    };
+
+    "limit_a_forwarding_provider_is_refused_on_a_non_loopback_listen"_test = [] {
+        sandbox box;
+        gateway::config settings;
+        settings.providers["anthropic"] = {.base_url = "https://api.anthropic.com", .forward_credentials = true};
+        settings.client_key_env = key_variable;
+        ::setenv(key_variable.data(), "secret-key", 1);
+
+        auto const policy = commands::make_policy(settings, "0.0.0.0", 9480);
+        ::unsetenv(key_variable.data());
+
+        expect(!policy.has_value());
+        expect(policy.error().contains("anthropic"));
+    };
+
+    "capability_a_forwarding_provider_is_allowed_on_loopback_without_a_key"_test = [] {
+        sandbox box;
+        gateway::config settings;
+        settings.providers["anthropic"] = {.base_url = "https://api.anthropic.com", .forward_credentials = true};
+
+        auto const policy = commands::make_policy(settings, "127.0.0.1", 9480);
+
+        expect(policy.has_value());
+    };
+
     "limit_an_identity_key_that_cannot_be_stored_fails_the_policy"_test = [] {
         sandbox box;
         std::filesystem::create_directories(box.root / "state");

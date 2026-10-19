@@ -15,6 +15,8 @@ export namespace llmgate::claude {
 
 using text::decimal;
 
+enum class credential_mode { gateway, login };
+
 struct launch_config {
     [[= reflect::doc{"Model name Claude Code uses for the opus role."}]] std::string opus = "claude-opus-5-5";
     [[= reflect::doc{"Model name Claude Code uses for the sonnet role."}]] std::string sonnet = "claude-sonnet-5-5";
@@ -24,6 +26,8 @@ struct launch_config {
     [[= reflect::doc{"Directory of the separate Claude Code profile that llmgate claude uses."}]] std::string profile_dir = "~/.claude-llmgate";
     [[= reflect::doc{"Effort level written to the profile when it has none."}]] std::string effort = "medium";
     [[= reflect::doc{"Whether Claude Code keeps its telemetry on; off by default."}]] bool telemetry = false;
+    [[= reflect::doc{"Credential Claude Code presents to the gateway: gateway sends the gateway key (or a placeholder) as ANTHROPIC_AUTH_TOKEN; login sends none, so Claude Code keeps using its own saved login or API key, which a provider with forward_credentials passes on."}]]
+    credential_mode credential = credential_mode::gateway;
 };
 
 consteval bool one_model_slot_per_role() {
@@ -60,6 +64,9 @@ constexpr environment_list environment(launch_config const& settings, std::strin
         {"CLAUDE_CODE_AUTO_MODE_SERVER", "0"},
         {"CLAUDE_CODE_ATTRIBUTION_HEADER", "0"},
     };
+    if (settings.credential == credential_mode::login) {
+        std::erase_if(list, [](environment_variable const& item) { return item.name == "ANTHROPIC_AUTH_TOKEN"; });
+    }
     if (!settings.telemetry) {
         list.emplace_back("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
         list.emplace_back("DISABLE_TELEMETRY", "1");

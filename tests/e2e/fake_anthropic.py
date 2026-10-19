@@ -72,6 +72,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("content-length", 0))
         body = self.rfile.read(length)
+        required = os.environ.get("FAKE_REQUIRE_AUTHORIZATION")
+        if required and self.headers.get("authorization") != required:
+            self.record(body, {"rejected": "authorization"})
+            refusal = json.dumps({"type": "error", "error": {"type": "authentication_error", "message": "invalid bearer token"}}).encode()
+            self.send_response(401)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(refusal)))
+            self.end_headers()
+            self.wfile.write(refusal)
+            return
         try:
             request = json.loads(body)
         except ValueError:

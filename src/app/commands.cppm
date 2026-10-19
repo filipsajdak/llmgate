@@ -791,6 +791,21 @@ std::expected<std::optional<std::string>, std::string> configured_client_key(gat
     return key;
 }
 
+std::optional<std::string> forwarding_conflict(gateway::config const& settings, std::string const& host, bool const has_key) {
+    auto const providers = gateway::effective_providers(settings);
+    auto const forwarding = std::ranges::find_if(providers, [](auto const& entry) { return entry.second.forward_credentials; });
+    if (forwarding == providers.end()) {
+        return std::nullopt;
+    }
+    if (has_key) {
+        return std::format("provider {} forwards the client's credentials, which cannot also carry the gateway key: remove client_key_env", forwarding->first);
+    }
+    if (!routing::is_loopback_host(host)) {
+        return std::format("provider {} forwards the client's credentials, so the gateway must listen on a loopback address, not {}", forwarding->first, host);
+    }
+    return std::nullopt;
+}
+
 outcome require_key_off_loopback(std::string const& host, bool const has_key) {
     if (!routing::is_loopback_host(host) && !has_key) {
         return std::unexpected{std::format("{} is not a loopback address: set client_key_env to require a client key", host)};
@@ -813,6 +828,9 @@ inline std::expected<gateway::access_policy, std::string> make_policy(gateway::c
     auto const key = detail::configured_client_key(settings);
     if (!key) {
         return std::unexpected{key.error()};
+    }
+    if (auto const conflict = detail::forwarding_conflict(settings, host, key->has_value())) {
+        return std::unexpected{*conflict};
     }
     if (auto const open = detail::require_key_off_loopback(host, key->has_value()); !open) {
         return std::unexpected{open.error()};

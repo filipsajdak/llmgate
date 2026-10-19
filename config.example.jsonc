@@ -15,6 +15,11 @@
     // Extra headers sent to the upstream on every request. With a copilot login the gateway also sends
     // Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here.
     "headers": { "Editor-Version": "vscode/1.99.0", "Copilot-Integration-Id": "vscode-chat" }
+    // Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to
+    // this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a
+    // gateway credential. For an Anthropic provider only; refused together with client_key_env or a
+    // non-loopback listen.
+    // "forward_credentials": false,
   },
 
   // Claude Code expands aliases such as sonnet to full model names before it calls the gateway, so map
@@ -109,7 +114,11 @@
     // Effort level written to the profile when it has none.
     "effort": "medium",
     // Whether Claude Code keeps its telemetry on; off by default.
-    "telemetry": false
+    "telemetry": false,
+    // Credential Claude Code presents to the gateway: gateway sends the gateway key (or a placeholder) as
+    // ANTHROPIC_AUTH_TOKEN; login sends none, so Claude Code keeps using its own saved login or API key,
+    // which a provider with forward_credentials passes on. One of: gateway, login.
+    "credential": "gateway"
   },
 
   // Usage ledger and token budgets.

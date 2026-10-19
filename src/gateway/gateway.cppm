@@ -84,6 +84,9 @@ std::string config_problem(config const& settings) {
         if (auto const parsed = routing::parse_url(item.base_url); !parsed) {
             return "provider " + name + ": " + parsed.error();
         }
+        if (item.forward_credentials && !settings.client_key_env.empty()) {
+            return "provider " + name + " forwards the client's credentials, which cannot also carry the gateway key: remove client_key_env";
+        }
     }
     return selection::route_problem(role_routes(settings), provider_names(providers));
 }
@@ -180,13 +183,36 @@ constexpr std::string_view user_agent = "llmgate/0.0";
 constexpr auto copilot_client_headers = std::to_array<std::pair<std::string_view, std::string_view>>(
     {{"Editor-Version", vscode_editor_version}, {"Copilot-Integration-Id", vscode_integration_id}});
 
+constexpr unsigned char ascii_case_bit = 0x20;
+constexpr std::string_view anthropic_header_prefix = "anthropic-";
+
+constexpr bool is_anthropic_header(std::string_view const name) noexcept {
+    return name.size() > anthropic_header_prefix.size() &&
+           std::ranges::equal(name.substr(0, anthropic_header_prefix.size()), anthropic_header_prefix,
+                              [](char const given, char const wanted) { return (static_cast<unsigned char>(given) | ascii_case_bit) == static_cast<unsigned char>(wanted); });
+}
+
+static_assert(is_anthropic_header("anthropic-beta") && is_anthropic_header("Anthropic-Workspace-Id") && !is_anthropic_header("anthropic-") && !is_anthropic_header("x-anthropic-beta"));
+
 http::header_map upstream_headers(httpio::request const& incoming, std::map<std::string, std::string> const& extra, bool const copilot_client,
-                                  std::string_view const token) {
+                                  bool const forward_credentials, std::string_view const token) {
     static constexpr auto passed = std::to_array<std::string_view>({"content-type", "accept", "anthropic-version", "anthropic-beta"});
     http::header_map fields;
     for (auto const name : passed) {
         if (auto const found = incoming.head.fields.find(name)) {
             fields.add(std::string{name}, std::string{*found});
+        }
+    }
+    if (forward_credentials) {
+        for (auto const& [lookup, sent_as] : std::to_array<std::pair<std::string_view, std::string_view>>({{"authorization", "Authorization"}, {"x-api-key", "x-api-key"}})) {
+            if (auto const found = incoming.head.fields.find(lookup)) {
+                fields.add(std::string{sent_as}, std::string{*found});
+            }
+        }
+        for (auto const& field : incoming.head.fields.all()) {
+            if (is_anthropic_header(field.name) && !fields.find(field.name)) {
+                fields.add(field.name, field.value);
+            }
         }
     }
     for (auto const& [name, content] : extra) {
@@ -199,7 +225,9 @@ http::header_map upstream_headers(httpio::request const& incoming, std::map<std:
             }
         }
     }
-    fields.add("Authorization", std::format("Bearer {}", token));
+    if (!forward_credentials) {
+        fields.add("Authorization", std::format("Bearer {}", token));
+    }
     fields.add("User-Agent", std::string{user_agent});
     return fields;
 }
@@ -675,10 +703,14 @@ private:
         if (!prepared) {
             co_return std::unexpected{detail::refused(std::move(prepared.error()), detail::health::neutral)};
         }
-        auto token = co_await chosen.creds->bearer();
-        if (!token) {
-            co_return std::unexpected{detail::refused(
-                routing::error_reply(401, "authentication_error", "no upstream credential: run llmgate login (" + token.error().message() + ")"), detail::health::neutral)};
+        std::string token;
+        if (!chosen.settings.forward_credentials) {
+            auto bearer = co_await chosen.creds->bearer();
+            if (!bearer) {
+                co_return std::unexpected{detail::refused(
+                    routing::error_reply(401, "authentication_error", "no upstream credential: run llmgate login (" + bearer.error().message() + ")"), detail::health::neutral)};
+            }
+            token = std::move(*bearer);
         }
         if (auto const dynamic = chosen.creds->endpoint()) {
             if (auto parsed = detail::parsed_url(*dynamic)) {
@@ -688,7 +720,7 @@ private:
         co_return httpio::request_spec{.method = "POST",
                                        .target = chosen.url->base_path + chosen.settings.messages_path,
                                        .host = chosen.url->host,
-                                       .fields = detail::upstream_headers(incoming, chosen.settings.headers, chosen.settings.copilot.has_value(), *token),
+                                       .fields = detail::upstream_headers(incoming, chosen.settings.headers, chosen.settings.copilot.has_value(), chosen.settings.forward_credentials, token),
                                        .body = std::move(prepared->body)};
     }
 
