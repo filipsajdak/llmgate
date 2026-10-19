@@ -376,14 +376,3 @@ Most kills come from the `static_assert`s in the modules; the new tests in `test
 | `fuzz` | AFL++ with ASan and UBSan for 60 seconds on each of the ten harnesses |
 
 A nightly schedule (02:17 UTC) and manual dispatch add `newest-gcc` (configures on the `gcc:latest` Docker Hub image, the newest released GCC, with no secrets, then runs `ctest -L capability` and `ctest -L lint`, so a compiler release that adds or drops a reflection feature shows up the next morning; the pinned `gcc:16.2` stays the compiler of record), `constexpr-deep` (`-DLLMGATE_CONSTEXPR_DEPTH=deep` through `CMAKE_ARGS`), the mutation run on `usage` and `statusline` (advisory, summary on the job page), and fuzzing for 15 minutes per harness. `tests/e2e/claude_through_gateway.sh` needs the real `claude` CLI and a built `build/host/llmgate`, so it stays a manual check.
-
-## Publishing
-
-There is no remote yet. Nothing below needs a secret: the workflow uses only the automatic `GITHUB_TOKEN` (read-only `contents`), fetches ut and llhttp from public URLs, and never calls Copilot or Anthropic.
-
-```bash
-gh repo create filipsajdak/llmgate --private --description "Claude Code gateway, C++26" --source . --remote origin   # or an organisation instead of filipsajdak
-git push -u origin main
-```
-
-Then check the first run: the macOS jobs need `/opt/homebrew/bin/g++-16`, which the `gcc` formula provides only while it is GCC 16, and `ubuntu-24.04-arm` runners are free for public repositories only. Make the repository public only after reading `config.example.jsonc` and the history for anything private. Add branch protection requiring `linux`, `macos`, `e2e`, `lint` and `crap` once `crap` is green.
