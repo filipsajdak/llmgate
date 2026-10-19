@@ -111,6 +111,25 @@ check sh -c "grep -q 'plan: individual (free_limited_copilot)' '$work/quota.out'
 label="quota --json carries the numbers"
 check sh -c "'$binary' --config '$config' quota --json | python3 -c \"import json, sys; d = json.load(sys.stdin); q = {x['name']: x for x in d['quotas']}; assert q['chat']['remaining'] == 196 and q['chat']['entitlement'] == 200 and d['reset_date'] == '2026-11-01'\""
 
+main_config="$config"
+config="$work/providers.jsonc"
+cat > "$config" <<JSON
+{
+  "listen": "127.0.0.1:$port",
+  "claude": { "profile_dir": "$work/profile" },
+  "usage": { "ledger_file": "$work/usage.jsonl" },
+  "providers": { "default": { "base_url": "http://127.0.0.1:1",
+    "copilot": { "token_file": "$work/config/llmgate/token.json", "github_url": "http://127.0.0.1:$github_port", "api_url": "http://127.0.0.1:$github_port" } } }
+}
+JSON
+doctor
+label="a Copilot login under providers is found: the token file and the exchange are checked and no credential is reported missing"
+check sh -c "[ $rc -eq 0 ] && grep -q 'PASS  copilot-login' '$work/doctor.out' && grep -q 'PASS  copilot-exchange' '$work/doctor.out' && ! grep -q 'no upstream credential' '$work/doctor.out'"
+"$binary" --config "$config" quota > "$work/quota.out" 2>&1 || true
+label="quota reads the Copilot login under providers"
+check sh -c "grep -q 'plan: individual' '$work/quota.out'"
+config="$main_config"
+
 echo low > "$work/github.mode"
 doctor
 label="a low quota is a WARN with a remedy and does not fail the run"

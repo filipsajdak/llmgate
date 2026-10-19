@@ -505,6 +505,19 @@ std::expected<quota::summary, std::string> fetch_quota(async::reactor& loop, tls
     return std::move(*parsed);
 }
 
+bool has_token_file(gateway::provider_config const& provider) {
+    return provider.copilot && !provider.copilot->token_file.empty();
+}
+
+std::optional<gateway::copilot_config> copilot_target(gateway::config const& settings) {
+    for (auto const& entry : gateway::effective_providers(settings)) {
+        if (has_token_file(entry.second)) {
+            return entry.second.copilot;
+        }
+    }
+    return std::nullopt;
+}
+
 void probe_network(gateway::config const& settings, doctor::facts& seen) {
     async::reactor loop;
     auto tls_context = tls::client_context::make(settings.tls_groups);
@@ -512,11 +525,15 @@ void probe_network(gateway::config const& settings, doctor::facts& seen) {
         seen.exchange = doctor::exchange_state::unreachable;
         return;
     }
-    seen.exchange = exchange_of(loop.run(copilot::check_login(loop, *tls_context, *settings.copilot)));
+    auto const target = copilot_target(settings);
+    if (!target) {
+        return;
+    }
+    seen.exchange = exchange_of(loop.run(copilot::check_login(loop, *tls_context, *target)));
     if (seen.exchange != doctor::exchange_state::accepted) {
         return;
     }
-    auto found = fetch_quota(loop, *tls_context, *settings.copilot);
+    auto found = fetch_quota(loop, *tls_context, *target);
     seen.quota = found ? doctor::quota_state::read : doctor::quota_state::unavailable;
     seen.quota_summary = found ? std::optional{std::move(*found)} : std::nullopt;
 }
@@ -538,8 +555,8 @@ bool claude_on_path() {
 }
 
 void describe_credential(context const& where, doctor::facts& seen) {
-    auto const& copilot_settings = where.settings.copilot;
-    seen.copilot_configured = copilot_settings && !copilot_settings->token_file.empty();
+    auto const copilot_settings = copilot_target(where.settings);
+    seen.copilot_configured = copilot_settings.has_value();
     if (seen.copilot_configured) {
         auto const path = process::expand_home(copilot_settings->token_file);
         seen.token = file_fact_of(path);
@@ -622,9 +639,9 @@ inline int run_doctor(context const& where) {
 }
 
 inline int run_quota(context const& where) {
-    auto const& copilot_settings = where.settings.copilot;
-    if (!copilot_settings || copilot_settings->token_file.empty()) {
-        std::println(stderr, "llmgate: quota needs the copilot block with token_file in the configuration");
+    auto const copilot_settings = detail::copilot_target(where.settings);
+    if (!copilot_settings) {
+        std::println(stderr, "llmgate: quota needs a Copilot login: a copilot block with token_file, at the top level or under a provider");
         return exit_failure;
     }
     async::reactor loop;
@@ -787,10 +804,6 @@ std::vector<std::string> allowed_hosts_for(gateway::config const& settings, std:
     return hosts;
 }
 
-bool has_token_file(gateway::provider_config const& provider) {
-    return provider.copilot && !provider.copilot->token_file.empty();
-}
-
 }  // namespace llmgate::commands::detail
 
 export namespace llmgate::commands {
@@ -815,12 +828,7 @@ inline std::expected<gateway::access_policy, std::string> make_policy(gateway::c
 }
 
 inline std::optional<gateway::copilot_config> copilot_login_target(gateway::config const& settings) {
-    for (auto const& entry : gateway::effective_providers(settings)) {
-        if (detail::has_token_file(entry.second)) {
-            return entry.second.copilot;
-        }
-    }
-    return std::nullopt;
+    return detail::copilot_target(settings);
 }
 
 }  // namespace llmgate::commands
