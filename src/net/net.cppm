@@ -7,6 +7,7 @@ module;
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -94,13 +95,14 @@ bool would_block(int const error) noexcept {
     return error == EAGAIN || error == EWOULDBLOCK;
 }
 
-std::error_code make_nonblocking(int const fd) noexcept {
+std::error_code prepare_tcp_socket(int const fd) noexcept {
     auto const flags = ::fcntl(fd, F_GETFL, 0);
     if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
         return last_error();
     }
-#ifdef SO_NOSIGPIPE
     int const enabled = 1;
+    ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &enabled, sizeof enabled);
+#ifdef SO_NOSIGPIPE
     ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof enabled);
 #endif
     return {};
@@ -190,7 +192,7 @@ async::task<std::expected<unique_fd, std::error_code>> connect_candidate(async::
     if (!socket) {
         co_return std::unexpected{last_error()};
     }
-    if (auto const error = make_nonblocking(raw(socket))) {
+    if (auto const error = prepare_tcp_socket(raw(socket))) {
         co_return std::unexpected{error};
     }
     if (::connect(raw(socket), candidate.ai_addr, candidate.ai_addrlen) == 0) {
@@ -296,7 +298,7 @@ public:
         }
         int const enabled = 1;
         ::setsockopt(raw(socket), SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof enabled);
-        if (auto const error = detail::make_nonblocking(raw(socket))) {
+        if (auto const error = detail::prepare_tcp_socket(raw(socket))) {
             return std::unexpected{error};
         }
         if (::bind(raw(socket), reinterpret_cast<sockaddr const*>(&local), sizeof local) < 0 ||
@@ -313,7 +315,7 @@ public:
         for (;;) {
             auto client = adopt(::accept(raw(socket_), nullptr, nullptr));
             if (client) {
-                if (auto const error = detail::make_nonblocking(raw(client))) {
+                if (auto const error = detail::prepare_tcp_socket(raw(client))) {
                     co_return std::unexpected{error};
                 }
                 co_return tcp_stream{*reactor_, std::move(client)};

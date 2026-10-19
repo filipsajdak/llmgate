@@ -1,4 +1,6 @@
 #include <fcntl.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -135,6 +137,21 @@ async::task<void> until_readable(async::reactor& loop, int const fd) {
 }
 
 const suite net_suite = [] {
+    "capability_both_ends_of_a_connection_disable_nagle"_test = [] {
+        async::reactor loop;
+        auto server = net::listener::bind(loop, std::string{loopback}, 0);
+        auto pair = loop.run(connect_pair(loop, *server));
+
+        auto const nodelay = [](int const fd) {
+            int value = 0;
+            socklen_t size = sizeof value;
+            return ::getsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, &size) == 0 && value != 0;
+        };
+
+        expect(nodelay(pair.client.descriptor()));
+        expect(nodelay(pair.accepted.descriptor()));
+    };
+
     "capability_a_returned_connection_is_taken_again"_test = [] {
         async::reactor loop;
         auto server = net::listener::bind(loop, std::string{loopback}, 0);
