@@ -5,7 +5,7 @@ import llmgate.reflect;
 
 export namespace llmgate::roles {
 
-enum class role { opus, sonnet, haiku, other };
+enum class role { opus, sonnet, haiku, fable, other };
 static_assert(reflect::unique_values<role>() && reflect::enum_values<role>.back() == role::other);
 
 constexpr role fallback = role::other;

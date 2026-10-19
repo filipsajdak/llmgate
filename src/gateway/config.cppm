@@ -97,7 +97,7 @@ struct config {
   "anthropic": { "base_url": "https://api.anthropic.com", "static_token_env": "ANTHROPIC_UPSTREAM_KEY" }
 })"}]]
     [[= reflect::commented]] std::map<std::string, provider_config> providers{};
-    [[= reflect::doc{"Per role (opus, sonnet, haiku, other) the providers to try in order. A role without a list uses the other list, then every provider."}]]
+    [[= reflect::doc{"Per role (opus, sonnet, haiku, fable, other) the providers to try in order. A role without a list uses the other list, then every provider."}]]
     [[= reflect::example{R"({ "opus": ["anthropic", "copilot"], "sonnet": ["copilot", "anthropic"], "other": ["copilot"] })"}]]
     [[= reflect::commented]] std::map<std::string, std::vector<std::string>> routes{};
     [[= reflect::doc{"A provider that fails before any response byte reaches Claude Code (connect error, no response head in time, 5xx, 429) is retried on the next one of the role's list; after failures consecutive failures it is skipped for cooldown."}]]

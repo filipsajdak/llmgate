@@ -65,6 +65,7 @@ const suite usage_suite = [] {
         expect(role_of("claude-OPUS-5-5") == "opus");
         expect(role_of("claude-sonnet-5.5") == "sonnet");
         expect(role_of("claude-haiku-5-5") == "haiku");
+        expect(role_of("claude-fable-5-1") == "fable");
         expect(role_of("gpt-4o") == "other");
     };
 

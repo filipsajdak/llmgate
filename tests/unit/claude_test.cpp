@@ -29,6 +29,7 @@ const suite claude_suite = [] {
         expect(value_of(list, "ANTHROPIC_BASE_URL") == "http://127.0.0.1:9480/anthropic");
         expect(value_of(list, "ANTHROPIC_MODEL") == "opusplan");
         expect(value_of(list, "ANTHROPIC_DEFAULT_SONNET_MODEL") == "claude-sonnet-5-5");
+        expect(value_of(list, "ANTHROPIC_DEFAULT_FABLE_MODEL") == "claude-fable-5-1");
         expect(value_of(list, "CLAUDE_CONFIG_DIR") == "/home/me/.claude-llmgate");
         expect(value_of(list, "CLAUDE_CODE_AUTO_MODE_SERVER") == "0");
     };
@@ -162,6 +163,7 @@ export ANTHROPIC_MODEL='opusplan'
 export ANTHROPIC_DEFAULT_OPUS_MODEL='claude-opus-5-5'
 export ANTHROPIC_DEFAULT_SONNET_MODEL='claude-sonnet-5-5'
 export ANTHROPIC_DEFAULT_HAIKU_MODEL='claude-haiku-5-5'
+export ANTHROPIC_DEFAULT_FABLE_MODEL='claude-fable-5-1'
 export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT='1'
 export CLAUDE_CODE_MAX_CONTEXT_TOKENS='180000'
 export CLAUDE_CODE_AUTO_COMPACT_WINDOW='180000'

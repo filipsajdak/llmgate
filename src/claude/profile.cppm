@@ -7,6 +7,7 @@ export module llmgate.claude;
 import std;
 import llmgate.doc;
 import llmgate.json;
+import llmgate.members;
 import llmgate.reflect;
 import llmgate.role;
 import llmgate.text;
@@ -21,6 +22,7 @@ struct launch_config {
     [[= reflect::doc{"Model name Claude Code uses for the opus role."}]] std::string opus = "claude-opus-5-5";
     [[= reflect::doc{"Model name Claude Code uses for the sonnet role."}]] std::string sonnet = "claude-sonnet-5-5";
     [[= reflect::doc{"Model name Claude Code uses for the haiku role."}]] std::string haiku = "claude-haiku-5-5";
+    [[= reflect::doc{"Model name Claude Code uses for the fable role."}]] std::string fable = "claude-fable-5-1";
     [[= reflect::doc{"Model Claude Code starts with: a model name or an alias such as opusplan."}]] std::string model = "opusplan";
     [[= reflect::doc{"Context window Claude Code assumes, in tokens; it also sets the auto-compact window."}]] std::int64_t context_tokens = 180000;
     [[= reflect::doc{"Directory of the separate Claude Code profile that llmgate claude uses."}]] std::string profile_dir = "~/.claude-llmgate";
@@ -48,22 +50,45 @@ constexpr std::string_view escaped_quote = R"('\'')";
 
 constexpr std::string_view placeholder_token = "none";
 
-constexpr environment_list environment(launch_config const& settings, std::string_view const gateway_url, std::string_view const client_key,
-                                       std::string_view const expanded_profile_dir) {
-    environment_list list{
+constexpr environment_list connection_variables(launch_config const& settings, std::string_view const gateway_url, std::string_view const client_key,
+                                                std::string_view const expanded_profile_dir) {
+    return {
         {"CLAUDE_CONFIG_DIR", std::string{expanded_profile_dir}},
         {"ANTHROPIC_BASE_URL", std::string{gateway_url}},
         {"ANTHROPIC_AUTH_TOKEN", std::string{client_key.empty() ? placeholder_token : client_key}},
         {"ANTHROPIC_MODEL", settings.model},
-        {"ANTHROPIC_DEFAULT_OPUS_MODEL", settings.opus},
-        {"ANTHROPIC_DEFAULT_SONNET_MODEL", settings.sonnet},
-        {"ANTHROPIC_DEFAULT_HAIKU_MODEL", settings.haiku},
+    };
+}
+
+constexpr std::string upper_ascii(std::string_view const text) {
+    return std::ranges::to<std::string>(text | std::views::transform([](char const c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c; }));
+}
+
+constexpr environment_list default_model_variables(launch_config const& settings) {
+    environment_list out;
+    template for (constexpr auto family : std::define_static_array(roles::named_families())) {
+        constexpr auto member = *reflect::member_named(^^launch_config, roles::name_of(family));
+        std::string name;
+        text::append_all(name, "ANTHROPIC_DEFAULT_", upper_ascii(roles::name_of(family)), "_MODEL");
+        out.emplace_back(std::move(name), settings.[:member:]);
+    }
+    return out;
+}
+
+constexpr environment_list behaviour_variables(launch_config const& settings) {
+    return {
         {"CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT", "1"},
         {"CLAUDE_CODE_MAX_CONTEXT_TOKENS", decimal(settings.context_tokens)},
         {"CLAUDE_CODE_AUTO_COMPACT_WINDOW", decimal(settings.context_tokens)},
         {"CLAUDE_CODE_AUTO_MODE_SERVER", "0"},
         {"CLAUDE_CODE_ATTRIBUTION_HEADER", "0"},
     };
+}
+
+constexpr environment_list environment(launch_config const& settings, std::string_view const gateway_url, std::string_view const client_key,
+                                       std::string_view const expanded_profile_dir) {
+    auto list = std::ranges::to<environment_list>(std::views::join(std::array<environment_list, 3>{
+        connection_variables(settings, gateway_url, client_key, expanded_profile_dir), default_model_variables(settings), behaviour_variables(settings)}));
     if (settings.credential == credential_mode::login) {
         std::erase_if(list, [](environment_variable const& item) { return item.name == "ANTHROPIC_AUTH_TOKEN"; });
     }
@@ -297,8 +322,8 @@ WantedBy=default.target
 
 static_assert(shell_quote("it's") == R"('it'\''s')");
 static_assert(decimal(180000) == "180000" && decimal(-5) == "-5");
-static_assert(environment(launch_config{}, "http://127.0.0.1:9480/anthropic", "", "/p").size() == 15);
-static_assert(environment(launch_config{.telemetry = true}, "u", "k", "/p").size() == 12);
+static_assert(environment(launch_config{}, "http://127.0.0.1:9480/anthropic", "", "/p").size() == 16);
+static_assert(environment(launch_config{.telemetry = true}, "u", "k", "/p").size() == 13);
 static_assert(json::write(merge_settings(json::value{}, "medium", "llmgate statusline")) == json::write(merge_settings(merge_settings(json::value{}, "medium", "llmgate statusline"), "medium", "llmgate statusline")));
 
 }  // namespace llmgate::claude

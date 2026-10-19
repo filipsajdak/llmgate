@@ -40,10 +40,10 @@ const suite enum_round_trips = [] {
     };
 
     "capability_the_role_enum_drives_matching_and_the_validation_message"_test = [] {
-        expect(roles::list_text() == "opus, sonnet, haiku or other");
+        expect(roles::list_text() == "opus, sonnet, haiku, fable or other");
         expect(roles::of("claude-OPUS-5-5") == roles::role::opus && roles::of("gpt-4o") == roles::role::other);
         expect(selection::route_problem(std::vector<selection::role_route>{{.role = "gpt", .providers = {"a"}}}, std::vector<std::string>{"a"}) ==
-               "routes.gpt is not a role (opus, sonnet, haiku or other)");
+               "routes.gpt is not a role (opus, sonnet, haiku, fable or other)");
     };
 };
 

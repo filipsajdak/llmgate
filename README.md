@@ -76,7 +76,7 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `providers.<name>.copilot.api_url` | string | `"https://api.github.com"` | GitHub API address that exchanges the OAuth token for a Copilot token. |
 | `providers.<name>.copilot.poll_interval` | duration | none | Time between polls of the device login; absent means the interval GitHub names. |
 | `providers.<name>.models` | map of string | `{}` | Model names this provider expects: the name Claude Code sends maps to the id here; unknown names pass through unchanged. |
-| `routes` | map of array of string | `{}` | Per role (opus, sonnet, haiku, other) the providers to try in order. A role without a list uses the other list, then every provider. |
+| `routes` | map of array of string | `{}` | Per role (opus, sonnet, haiku, fable, other) the providers to try in order. A role without a list uses the other list, then every provider. |
 | `fallback` | object | - | A provider that fails before any response byte reaches Claude Code (connect error, no response head in time, 5xx, 429) is retried on the next one of the role's list; after failures consecutive failures it is skipped for cooldown. |
 | `fallback.failures` | integer | `3` | Consecutive failures after which a provider is skipped. |
 | `fallback.cooldown` | duration | `"30s"` | How long a skipped provider stays skipped; then one request probes it. |
@@ -99,6 +99,7 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `claude.opus` | string | `"claude-opus-5-5"` | Model name Claude Code uses for the opus role. |
 | `claude.sonnet` | string | `"claude-sonnet-5-5"` | Model name Claude Code uses for the sonnet role. |
 | `claude.haiku` | string | `"claude-haiku-5-5"` | Model name Claude Code uses for the haiku role. |
+| `claude.fable` | string | `"claude-fable-5-1"` | Model name Claude Code uses for the fable role. |
 | `claude.model` | string | `"opusplan"` | Model Claude Code starts with: a model name or an alias such as opusplan. |
 | `claude.context_tokens` | integer | `180000` | Context window Claude Code assumes, in tokens; it also sets the auto-compact window. |
 | `claude.profile_dir` | string | `"~/.claude-llmgate"` | Directory of the separate Claude Code profile that llmgate claude uses. |

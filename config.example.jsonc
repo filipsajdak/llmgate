@@ -41,8 +41,8 @@
   //   "anthropic": { "base_url": "https://api.anthropic.com", "static_token_env": "ANTHROPIC_UPSTREAM_KEY" }
   // },
 
-  // Per role (opus, sonnet, haiku, other) the providers to try in order. A role without a list uses the
-  // other list, then every provider.
+  // Per role (opus, sonnet, haiku, fable, other) the providers to try in order. A role without a list
+  // uses the other list, then every provider.
   // "routes": { "opus": ["anthropic", "copilot"], "sonnet": ["copilot", "anthropic"], "other": ["copilot"] },
 
   // A provider that fails before any response byte reaches Claude Code (connect error, no response head
@@ -105,6 +105,8 @@
     "sonnet": "claude-sonnet-5-5",
     // Model name Claude Code uses for the haiku role.
     "haiku": "claude-haiku-5-5",
+    // Model name Claude Code uses for the fable role.
+    "fable": "claude-fable-5-1",
     // Model Claude Code starts with: a model name or an alias such as opusplan.
     "model": "opusplan",
     // Context window Claude Code assumes, in tokens; it also sets the auto-compact window.

@@ -11,6 +11,7 @@ import llmgate.claude;
 import llmgate.http;
 import llmgate.httpio;
 import llmgate.json;
+import llmgate.members;
 import llmgate.net;
 import llmgate.proof;
 import llmgate.reflect;
@@ -25,14 +26,7 @@ export import llmgate.config;
 
 export namespace llmgate::gateway {
 
-consteval std::optional<std::meta::info> member_named(std::meta::info const owner, std::string_view const name) {
-    for (auto const member : std::meta::nonstatic_data_members_of(owner, std::meta::access_context::current())) {
-        if (std::meta::identifier_of(member) == name) {
-            return member;
-        }
-    }
-    return std::nullopt;
-}
+using reflect::member_named;
 
 provider_config legacy_provider(config const& settings) {
     provider_config out;
