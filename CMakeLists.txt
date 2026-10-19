@@ -285,6 +285,8 @@ add_test(NAME llmgate_login_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2
 set_tests_properties(llmgate_login_flow PROPERTIES LABELS e2e TIMEOUT 120)
 add_test(NAME llmgate_doctor_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/doctor_flow.sh $<TARGET_FILE:llmgate>)
 set_tests_properties(llmgate_doctor_flow PROPERTIES LABELS e2e TIMEOUT 120)
+add_test(NAME llmgate_tool_turn_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/tool_turn_flow.sh $<TARGET_FILE:llmgate>)
+set_tests_properties(llmgate_tool_turn_flow PROPERTIES LABELS e2e TIMEOUT 120)
 add_test(NAME llmgate_reflection_lint_self_test COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/reflection_lint.py --self-test)
 add_test(NAME llmgate_reflection_lint COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/reflection_lint.py --strict --root ${CMAKE_CURRENT_SOURCE_DIR} src app tests)
 set_tests_properties(llmgate_reflection_lint_self_test llmgate_reflection_lint PROPERTIES LABELS lint)

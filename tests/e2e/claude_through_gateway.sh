@@ -3,6 +3,14 @@ set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 binary=${LLMGATE_BINARY:-$root/build/host/llmgate}
 defect=${1:-none}
+prompt="Say hello"
+tool_flags=""
+expected="Hello from the fake upstream"
+if [ "$defect" = tool ]; then
+  prompt="Run the command echo tool-ran with the Bash tool, then say it finished."
+  tool_flags="--allowedTools Bash"
+  expected="Tool finished: all good"
+fi
 work=$(mktemp -d)
 trap 'kill $upstream_pid $gateway_pid 2>/dev/null || true; rm -rf "$work"' EXIT
 
@@ -29,7 +37,7 @@ gateway_port=$(sed -n 's/.*listening on 127.0.0.1:\([0-9]*\).*/\1/p' "$work/gate
 echo "gateway :$gateway_port -> fake upstream :$upstream_port (defect: $defect)"
 ANTHROPIC_BASE_URL="http://127.0.0.1:$gateway_port/anthropic" ANTHROPIC_API_KEY=local-client-key \
   CLAUDE_CONFIG_DIR="$work/claude" DISABLE_TELEMETRY=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1 \
-  claude -p "Say hello" --model sonnet --no-session-persistence --output-format text > "$work/claude.out" 2> "$work/claude.err" || true
+  claude -p "$prompt" --model sonnet --no-session-persistence --output-format text $tool_flags > "$work/claude.out" 2> "$work/claude.err" || true
 
 echo "--- claude printed:"; cat "$work/claude.out"
 echo "--- claude stderr:"; head -5 "$work/claude.err"
@@ -48,4 +56,13 @@ echo "no key:        $(curl -s -o /dev/null -w '%{http_code}' -X POST "http://12
 echo "spoofed Host:  $(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' -H 'x-api-key: local-client-key' "http://127.0.0.1:$gateway_port/anthropic/v1/models")"
 echo "right key:     $(curl -s -o /dev/null -w '%{http_code}' -H 'x-api-key: local-client-key' "http://127.0.0.1:$gateway_port/anthropic/v1/models")"
 echo "--- gateway stats:"; curl -s -H 'x-api-key: local-client-key' "http://127.0.0.1:$gateway_port/llmgate/stats"; echo
-grep -q "Hello from the fake upstream" "$work/claude.out"
+grep -q "$expected" "$work/claude.out"
+if [ "$defect" = tool ]; then
+  python3 - "$work/upstream.log" <<'PY'
+import json, sys
+entries = [json.loads(line) for line in open(sys.argv[1])]
+answered = [e for e in entries if e.get("has_tool_result")]
+print(f"requests that answered a tool call: {len(answered)}")
+sys.exit(0 if answered else 1)
+PY
+fi

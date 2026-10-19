@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 LOG = sys.argv[2]
 DEFECT = sys.argv[3] if len(sys.argv) > 3 else "none"
-TEXT = "Hello from the fake upstream"
+TEXT = "Tool finished: all good" if DEFECT == "tool" else "Hello from the fake upstream"
 
 
 def sse(name, data):
@@ -32,26 +32,48 @@ def stream_events(model):
     return events
 
 
+def tool_events(model):
+    start = {"type": "message_start", "message": {"id": "msg_fake_tool", "type": "message", "role": "assistant", "model": model,
+             "content": [], "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 9, "output_tokens": 1}}}
+    delta = lambda text: ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": text}})
+    return [
+        ("message_start", start),
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "toolu_fake1", "name": "Bash", "input": {}}}),
+        delta('{"command":'),
+        delta('"echo tool-ran"}'),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {"output_tokens": 12}}),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+
+
+def answers_a_tool(request):
+    messages = [m for m in request.get("messages") or [] if isinstance(m, dict) and m.get("role") != "system"]
+    last = messages[-1].get("content") if messages else None
+    return isinstance(last, list) and any(isinstance(block, dict) and block.get("type") == "tool_result" for block in last)
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, *args):
         pass
 
-    def record(self, body):
+    def record(self, body, extra=None):
         entry = {"method": self.command, "path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()},
-                 "body": body.decode(errors="replace")[:2000]}
+                 "body": body.decode(errors="replace")[:2000], **(extra or {})}
         with open(LOG, "a") as handle:
             handle.write(json.dumps(entry) + "\n")
 
     def do_POST(self):
         length = int(self.headers.get("content-length", 0))
         body = self.rfile.read(length)
-        self.record(body)
         try:
             request = json.loads(body)
         except ValueError:
             request = {}
+        has_result = answers_a_tool(request)
+        self.record(body, {"tools": len(request.get("tools") or []), "has_tool_result": has_result})
         model = request.get("model", "unknown")
         if request.get("stream"):
             self.send_response(200)
@@ -59,7 +81,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("cache-control", "no-cache")
             self.send_header("transfer-encoding", "chunked")
             self.end_headers()
-            for name, data in stream_events(model):
+            wants_tool = DEFECT == "tool" and request.get("tools") and not has_result
+            for name, data in (tool_events(model) if wants_tool else stream_events(model)):
                 if DEFECT == "unclosed_block" and name == "content_block_stop":
                     continue
                 chunk = sse(name, data)
