@@ -8,5 +8,5 @@ case "$preset" in
   *) relax="" ;;
 esac
 docker build -q -t "$image" "$root/ops/ci" >/dev/null
-docker run --rm $relax --cap-add SYS_PTRACE --user "$(id -u):$(id -g)" -e HOME=/tmp -e PRESET="$preset" -e CMAKE_ARGS="${CMAKE_ARGS:-}" -v "$root:/src" -w /src "$image" \
+docker run --rm $relax --cap-add SYS_PTRACE --user "$(id -u):$(id -g)" -e HOME=/tmp -e PRESET="$preset" -e CMAKE_ARGS="${CMAKE_ARGS:-}" -e CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-4}" -v "$root:/src" -w /src "$image" \
   sh -c 'git config --global --add safe.directory "*" && cmake --preset "$PRESET" $CMAKE_ARGS && cmake --build --preset "$PRESET" && ctest --preset "$PRESET" "$@"' sh "$@"
