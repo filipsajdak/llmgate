@@ -23,4 +23,13 @@ if [ -e "$work/denied-marker" ]; then
 fi
 grep -q "refused by the permission scope: [1-9]" "$work/report/report.md"
 echo "ok   a write outside the sample was refused and counted"
+python3 - "$work/upstream.log" <<'PY'
+import json, sys
+entries = [json.loads(line) for line in open(sys.argv[1]) if json.loads(line)["method"] == "POST"]
+missing = [e["path"] for e in entries if e["headers"].get("editor-version") != "vscode/1.99.0" or e["headers"].get("copilot-integration-id") != "vscode-chat"]
+if not entries or missing:
+    print("FAIL a Copilot request went upstream without the editor headers", file=sys.stderr)
+    sys.exit(1)
+print(f"ok   all {len(entries)} requests carried Editor-Version and Copilot-Integration-Id with no headers in the configuration")
+PY
 echo "rehearsal: the real-run script passes against fakes"
