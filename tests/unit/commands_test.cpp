@@ -4,6 +4,7 @@
 
 import llmgate.arguments;
 import llmgate.commands;
+import llmgate.control;
 import llmgate.gateway;
 import llmgate.process;
 import std;
@@ -233,6 +234,50 @@ const suite commands_suite = [] {
         auto const policy = commands::make_policy(gateway::config{}, "127.0.0.1", 9480);
 
         expect(!policy.has_value());
+    };
+
+    "capability_use_words_become_a_control_command_for_a_role_or_a_clear"_test = [] {
+        control::overrides pins;
+        std::vector<control::target> const known{{.id = "claude-x@copilot", .provider = "copilot", .upstream = "claude-x"}};
+
+        auto const use = commands::control_body({"opus", "claude-x@copilot"}, "s1");
+        auto const clear = commands::control_body({"opus", "clear"}, "");
+        auto const everything = commands::control_body({"clear"}, "");
+
+        expect(use.has_value() && control::apply(pins, *use, known).empty());
+        expect(pins.session.at("s1").at("opus").provider == "copilot" && pins.global.empty());
+        pins.global["opus"] = {.provider = "copilot", .upstream = "claude-x"};
+        pins.global["haiku"] = {.provider = "copilot", .upstream = "claude-x"};
+        expect(clear.has_value() && control::apply(pins, *clear, known).empty());
+        expect(!pins.global.contains("opus") && pins.global.contains("haiku"));
+        expect(everything.has_value() && control::apply(pins, *everything, known).empty() && pins.global.empty());
+    };
+
+    "capability_overrides_are_saved_privately_and_read_back_by_the_next_gateway"_test = [] {
+        sandbox box;
+        control::overrides pins;
+        pins.global["opus"] = {.provider = "copilot", .upstream = "claude-opus-5.5"};
+
+        commands::overrides_sink()(pins);
+        auto const loaded = commands::read_overrides();
+
+        expect(loaded.global == pins.global);
+        expect((std::filesystem::status(commands::overrides_file()).permissions() & (std::filesystem::perms::group_all | std::filesystem::perms::others_all)) == std::filesystem::perms::none);
+    };
+
+    "limit_a_missing_or_damaged_overrides_file_reads_as_no_overrides"_test = [] {
+        sandbox box;
+        expect(commands::read_overrides().global.empty());
+        std::filesystem::create_directories(commands::overrides_file().parent_path());
+        std::ofstream{commands::overrides_file()} << "{ not json";
+
+        expect(commands::read_overrides().global.empty());
+    };
+
+    "limit_use_refuses_the_wrong_number_of_words"_test = [] {
+        expect(!commands::control_body({}, "").has_value());
+        expect(!commands::control_body({"opus"}, "").has_value());
+        expect(!commands::control_body({"opus", "a", "b"}, "").has_value());
     };
 
     "capability_the_login_target_is_the_first_provider_with_a_token_file"_test = [] {

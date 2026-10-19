@@ -15,6 +15,7 @@ import std;
 import llmgate.arguments;
 import llmgate.async;
 import llmgate.claude;
+import llmgate.control;
 import llmgate.copilot;
 import llmgate.doctor;
 import llmgate.gateway;
@@ -657,6 +658,109 @@ inline int run_quota(context const& where) {
     }
     std::print("{}", where.options.as_json ? quota::to_json(*found) : quota::render(*found));
     return 0;
+}
+
+inline std::filesystem::path overrides_file() {
+    return detail::state_directory() / "overrides.json";
+}
+
+inline control::overrides read_overrides() {
+    auto loaded = control::load_pins(detail::read_file(overrides_file()).value_or(std::string{}));
+    if (!loaded) {
+        std::println(stderr, "llmgate: ignoring the damaged overrides file {}: {}", overrides_file().string(), loaded.error());
+        return {};
+    }
+    return std::move(*loaded);
+}
+
+inline std::function<void(control::overrides const&)> overrides_sink() {
+    return [](control::overrides const& book) {
+        constexpr mode_t overrides_mode = 0600;
+        if (auto const written = process::write_file_atomic(overrides_file(), control::save_pins(book), overrides_mode, true); !written) {
+            std::println(stderr, "llmgate: cannot save the overrides {}: {}", overrides_file().string(), written.error().message());
+        }
+    };
+}
+
+inline std::expected<std::string, std::string> control_body(std::vector<std::string> const& words, std::string_view const session) {
+    constexpr std::string_view clear_word = "clear";
+    control::command what{.session = std::string{session}};
+    if (words.size() == 1 && words.front() == clear_word) {
+        what.action = clear_word;
+    } else if (words.size() == 2 && words.back() == clear_word) {
+        what = {.action = std::string{clear_word}, .role = words.front(), .session = std::string{session}};
+    } else if (words.size() == 2) {
+        what = {.action = "use", .role = words.front(), .target = words.back(), .session = std::string{session}};
+    } else {
+        return std::unexpected{std::string{"use needs ROLE TARGET, ROLE clear, or clear"}};
+    }
+    return json::write(json::to_value(what));
+}
+
+struct control_call {
+    arguments::gateway_address address;
+    process::header_list headers;
+    std::string body;
+};
+
+inline std::expected<control_call, std::string> prepare_control_call(context const& where) {
+    auto const address = detail::address_of(where.settings);
+    if (!address) {
+        return std::unexpected{address.error()};
+    }
+    auto body = control_body(where.options.passthrough, where.options.session);
+    if (!body) {
+        return std::unexpected{std::move(body.error())};
+    }
+    auto const key = identity_key();
+    if (!key) {
+        return std::unexpected{key.error()};
+    }
+    auto headers = detail::key_headers(where.settings);
+    headers.emplace_back("x-llmgate-proof", proof::hmac_sha256_hex(*key, proof::identity_message(std::format("{}:{}/control", address->host, address->port), *body)));
+    return control_call{.address = *address, .headers = std::move(headers), .body = std::move(*body)};
+}
+
+inline int run_use(context const& where) {
+    auto const call = prepare_control_call(where);
+    if (!call) {
+        std::println(stderr, "llmgate: {}", call.error());
+        return exit_failure;
+    }
+    auto const answer = gateway_verified(call->address) ? process::http_post(call->address.host, call->address.port, "/llmgate/control", call->headers, call->body, statusline_limit * 5) : std::nullopt;
+    if (!answer || answer->status != 200) {
+        std::println(stderr, "llmgate: the gateway refused or did not answer: {}", answer ? answer->body : std::string{"down"});
+        return exit_failure;
+    }
+    std::println("ok");
+    return 0;
+}
+
+inline int show_from_gateway(context const& where, std::string const& target) {
+    auto const address = detail::address_of(where.settings);
+    if (!address) {
+        std::println(stderr, "llmgate: {}", address.error());
+        return exit_failure;
+    }
+    auto const answer = gateway_verified(*address) ? process::http_get(address->host, address->port, target, detail::key_headers(where.settings), statusline_limit * 5) : std::nullopt;
+    if (!answer || answer->status != 200) {
+        std::println(stderr, "llmgate: the gateway is down ({}:{})", address->host, address->port);
+        return exit_failure;
+    }
+    std::println("{}", answer->body);
+    return 0;
+}
+
+inline int run_targets(context const& where) {
+    return show_from_gateway(where, "/anthropic/v1/models");
+}
+
+inline int run_route(context const& where) {
+    auto const& words = where.options.passthrough;
+    std::string target = "/llmgate/route?requested=";
+    target += words.empty() ? std::string{} : words.front();
+    target += "&session=" + where.options.session;
+    return show_from_gateway(where, target);
 }
 
 inline int run_status(context const& where) {

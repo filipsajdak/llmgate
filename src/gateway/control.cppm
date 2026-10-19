@@ -137,6 +137,7 @@ struct command {
     std::string role{};
     std::string provider{};
     std::string upstream{};
+    std::string target{};
     std::string session{};
 };
 
@@ -154,7 +155,14 @@ constexpr std::string use(overrides& book, command const& what, std::span<target
     if (!roles::from_name(what.role)) {
         return std::format("{} is not a role ({})", what.role, roles::list_text());
     }
-    pin const wanted{.provider = what.provider, .upstream = what.upstream};
+    pin wanted{.provider = what.provider, .upstream = what.upstream};
+    if (!what.target.empty()) {
+        auto const named = std::ranges::find(known, what.target, &target::id);
+        if (named == known.end()) {
+            return std::format("{} is not a listed target", what.target);
+        }
+        wanted = {.provider = named->provider, .upstream = named->upstream};
+    }
     if (auto problem = pin_problem(wanted, known); !problem.empty()) {
         return problem;
     }
@@ -199,6 +207,39 @@ constexpr std::string apply(overrides& book, std::string_view const text, std::s
         return clear(book, *what);
     }
     return std::format("unknown action {}", what->action);
+}
+
+struct saved_pin {
+    std::string role{};
+    std::string provider{};
+    std::string upstream{};
+};
+
+struct saved_pins {
+    std::vector<saved_pin> pins{};
+};
+
+inline std::string save_pins(overrides const& book) {
+    saved_pins out;
+    for (auto const& [role, where] : book.global) {
+        out.pins.push_back({.role = role, .provider = where.provider, .upstream = where.upstream});
+    }
+    return json::write(json::to_value(out));
+}
+
+inline std::expected<overrides, std::string> load_pins(std::string_view const text) {
+    overrides out;
+    if (text.empty()) {
+        return out;
+    }
+    auto const read = json::read_text<saved_pins>(text);
+    if (!read) {
+        return std::unexpected{read.error().message};
+    }
+    for (auto const& item : read->pins) {
+        out.global[item.role] = {.provider = item.provider, .upstream = item.upstream};
+    }
+    return out;
 }
 
 static_assert(id_of("claude-sonnet-5.5", "copilot") == "claude-sonnet-5.5@copilot");

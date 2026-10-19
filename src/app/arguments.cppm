@@ -26,7 +26,10 @@ enum class command {
     stop [[= tolerant{}]],
     usage,
     doctor [[= tolerant{}]],
-    quota
+    quota,
+    use,
+    targets,
+    route
 };
 static_assert(reflect::unique_values<command>());
 
@@ -82,7 +85,8 @@ struct options {
     [[= flag{"--dry-run"}]] [[= applies_to{command::setup}]] bool dry_run = false;
     [[= flag{"--offline"}]] [[= applies_to{command::doctor}]] bool offline = false;
     [[= flag{"--days"}]] [[= operand{"N"}]] [[= applies_to{command::usage}]] [[= limits{1, longest_report_days}]] unsigned days = default_days;
-    [[= operand{"ARGS..."}]] [[= applies_to{command::claude}]] std::vector<std::string> passthrough{};
+    [[= flag{"--session"}]] [[= applies_to{command::use, command::route}]] [[= operand{"ID"}]] std::string session{};
+    [[= operand{"ARGS..."}]] [[= applies_to{command::claude, command::use, command::route}]] std::vector<std::string> passthrough{};
 };
 
 struct gateway_address {
@@ -210,6 +214,10 @@ constexpr step choose_command(parse_state& state, std::string_view const word) {
     return {};
 }
 
+constexpr bool takes_words(command const which) {
+    return which == command::use || which == command::route;
+}
+
 constexpr step consume(parse_state& state) {
     std::string_view const word = state.args[state.index];
     if (state.chosen && state.parsed.which == command::claude) {
@@ -218,6 +226,10 @@ constexpr step consume(parse_state& state) {
     }
     if (auto const applied = apply_flag(state, word)) {
         return *applied;
+    }
+    if (state.chosen && takes_words(state.parsed.which) && !word.starts_with("-")) {
+        state.parsed.passthrough.emplace_back(word);
+        return {};
     }
     return choose_command(state, word);
 }

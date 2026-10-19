@@ -111,6 +111,14 @@ const suite control_suite = [] {
         expect(pins.session.at("s9").at("opus").upstream == "claude-opus-5.5" && !pins.global.contains("opus"));
     };
 
+    "capability_a_use_command_may_name_a_catalogue_target_id_instead_of_provider_and_model"_test = [] {
+        overrides pins;
+
+        expect(apply(pins, R"({"action":"use","role":"opus","target":"claude-mistral-small-3.1@thor"})", targets()).empty());
+        expect(pins.global.at("opus") == pin{.provider = "thor", .upstream = "mistral-small-3.1"});
+        expect(apply(pins, R"({"action":"use","role":"opus","target":"claude-nope@thor"})", targets()).contains("claude-nope@thor"));
+    };
+
     "capability_a_clear_command_removes_one_pin_or_all_of_a_scope"_test = [] {
         overrides pins;
         pins.global["sonnet"] = {.provider = "anthropic", .upstream = "claude-sonnet-5-5"};
@@ -140,6 +148,23 @@ const suite control_suite = [] {
 
         expect(pins.session.size() == max_sessions);
         expect(!pins.session.contains("s0") && pins.session.contains(std::format("s{}", max_sessions + 2)));
+    };
+
+    "capability_global_pins_survive_a_save_and_load_and_sessions_are_not_saved"_test = [] {
+        overrides pins;
+        pins.global["sonnet"] = {.provider = "anthropic", .upstream = "claude-sonnet-5-5"};
+        pins.global["opus"] = {.provider = "copilot", .upstream = "claude-opus-5.5"};
+        pins.session["s1"]["opus"] = {.provider = "thor", .upstream = "mistral-small-3.1"};
+
+        auto const loaded = load_pins(save_pins(pins));
+
+        expect(loaded.has_value() && loaded->global == pins.global && loaded->session.empty());
+    };
+
+    "limit_a_damaged_overrides_file_is_reported_not_trusted"_test = [] {
+        expect(!load_pins("{").has_value());
+        expect(!load_pins(R"({"pins":[{"role":"opus","provider":3}]})").has_value());
+        expect(load_pins("").has_value() && load_pins("")->global.empty());
     };
 
     "limit_a_pin_must_name_a_listed_target"_test = [] {

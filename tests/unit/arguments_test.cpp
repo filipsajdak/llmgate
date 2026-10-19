@@ -42,6 +42,16 @@ const suite arguments_suite = [] {
         expect(!parsed->show_version);
     };
 
+    "capability_use_takes_a_role_and_a_target_and_an_optional_session"_test = [] {
+        auto const parsed = parse(words({"use", "opus", "claude-x@copilot", "--session", "s1"}));
+        auto const plain = parse(words({"route", "sonnet"}));
+
+        expect(parsed->which == command::use && parsed->passthrough == words({"opus", "claude-x@copilot"}));
+        expect(parsed->session == "s1");
+        expect(plain->which == command::route && plain->passthrough == words({"sonnet"}) && plain->session.empty());
+        expect(parse(words({"targets"}))->which == command::targets);
+    };
+
     "capability_setup_and_env_flags_are_read"_test = [] {
         auto const setup = parse(words({"setup", "--service", "--dry-run", "--vscode", "/tmp/s.json"}));
         auto const env = parse(words({"env", "--json"}));
@@ -158,7 +168,7 @@ const suite arguments_suite = [] {
     "capability_the_usage_text_is_pinned"_test = [] {
         expect(usage_text ==
                "usage: llmgate [--config PATH] [serve | login | claude ARGS... | env [--json] [--vscode [FILE]] | setup [--vscode [FILE]] [--service] [--dry-run] | "
-               "statusline | status | stop | usage [--json] [--days N] | doctor [--json] [--offline] | quota [--json]] | --check-config | --version | --print-example | --print-schema | --print-config-table")
+               "statusline | status | stop | usage [--json] [--days N] | doctor [--json] [--offline] | quota [--json] | use [--session ID] ARGS... | targets | route [--session ID] ARGS...] | --check-config | --version | --print-example | --print-schema | --print-config-table")
             << usage_text;
     };
 

@@ -104,6 +104,8 @@ int serve_on(async::reactor& loop, gateway::config const& settings, std::string 
     auto credentials = make_credentials(loop, tls_context, settings);
     gateway::proxy proxy{loop, settings, std::move(*policy), borrowed(credentials), tls_context};
     attach_ledger(proxy, settings);
+    proxy.use_overrides(commands::read_overrides());
+    proxy.persist_overrides_with(commands::overrides_sink());
     auto stop = shutdown::stop_signal::make();
     if (!stop || stop->install()) {
         return fail(exit_runtime, "cannot install the stop signal handlers");
@@ -202,6 +204,9 @@ constexpr auto handlers = std::to_array<std::pair<arguments::command, command_ha
     {arguments::command::usage, &commands::run_usage},
     {arguments::command::doctor, &commands::run_doctor},
     {arguments::command::quota, &commands::run_quota},
+    {arguments::command::use, &commands::run_use},
+    {arguments::command::targets, &commands::run_targets},
+    {arguments::command::route, &commands::run_route},
     {arguments::command::statusline, &statusline_command},
 });
 

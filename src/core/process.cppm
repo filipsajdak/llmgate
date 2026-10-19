@@ -243,12 +243,17 @@ std::optional<std::string> receive_all(int const fd, std::chrono::steady_clock::
     }
 }
 
-std::string request_text(std::string_view const host, std::uint16_t const port, std::string_view const target, header_list const& headers) {
-    std::string request = std::format("GET {} HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\n", target, host, port);
+std::string request_text(std::string_view const method, std::string_view const host, std::uint16_t const port, std::string_view const target,
+                         header_list const& headers, std::string_view const body) {
+    std::string request = std::format("{} {} HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\n", method, target, host, port);
     for (auto const& [name, value] : headers) {
         std::format_to(std::back_inserter(request), "{}: {}\r\n", name, value);
     }
+    if (method == "POST") {
+        std::format_to(std::back_inserter(request), "Content-Type: application/json\r\nContent-Length: {}\r\n", body.size());
+    }
     request += "\r\n";
+    request += body;
     return request;
 }
 
@@ -306,8 +311,8 @@ std::error_code write_and_rename(int const fd, std::string_view const text, std:
 
 export namespace llmgate::process {
 
-inline std::optional<http_result> http_get(std::string_view const host, std::uint16_t const port, std::string_view const target,
-                                           header_list const& headers, milliseconds const limit) {
+inline std::optional<http_result> http_exchange(std::string_view const method, std::string_view const host, std::uint16_t const port,
+                                                std::string_view const target, header_list const& headers, std::string_view const body, milliseconds const limit) {
     auto const deadline = std::chrono::steady_clock::now() + limit;
     auto const remote = detail::ipv4_address(host, port);
     if (!remote) {
@@ -315,11 +320,21 @@ inline std::optional<http_result> http_get(std::string_view const host, std::uin
     }
     detail::descriptor socket{detail::nonblocking_socket()};
     if (socket.fd < 0 || !detail::connect_by(socket.fd, *remote, deadline) ||
-        !detail::send_all(socket.fd, detail::request_text(host, port, target, headers), deadline)) {
+        !detail::send_all(socket.fd, detail::request_text(method, host, port, target, headers, body), deadline)) {
         return std::nullopt;
     }
     auto const answer = detail::receive_all(socket.fd, deadline);
     return answer ? detail::parse_response(*answer) : std::nullopt;
+}
+
+inline std::optional<http_result> http_get(std::string_view const host, std::uint16_t const port, std::string_view const target,
+                                           header_list const& headers, milliseconds const limit) {
+    return http_exchange("GET", host, port, target, headers, {}, limit);
+}
+
+inline std::optional<http_result> http_post(std::string_view const host, std::uint16_t const port, std::string_view const target,
+                                            header_list const& headers, std::string_view const body, milliseconds const limit) {
+    return http_exchange("POST", host, port, target, headers, body, limit);
 }
 
 inline bool tcp_connectable(std::string_view const host, std::uint16_t const port, milliseconds const limit) {
