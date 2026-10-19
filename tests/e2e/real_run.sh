@@ -23,6 +23,14 @@ esac
 
 work=$(mktemp -d)
 chmod 700 "$work"
+token_file=${LLMGATE_TOKEN_FILE:-$work/copilot-token.json}
+case $(cd "$(dirname "$token_file")" 2>/dev/null && pwd)/ in
+  "$root"/*) echo "refusing: LLMGATE_TOKEN_FILE must be outside the repository" >&2; exit 2 ;;
+esac
+provider_headers=""
+if [ "${LLMGATE_COPILOT_HEADERS:-}" = 1 ]; then
+  provider_headers='"headers": { "Editor-Version": "vscode/1.99.0", "Copilot-Integration-Id": "vscode-chat" },'
+fi
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
 mkdir -p "$HOME" "$report_dir"
 config="$work/llmgate.jsonc"
@@ -39,7 +47,8 @@ cat > "$config" <<JSON
   "providers": {
     "default": {
       "base_url": "$copilot_base",
-      "copilot": { "token_file": "$work/copilot-token.json", "github_url": "$github_url", "api_url": "$api_url" },
+      $provider_headers
+      "copilot": { "token_file": "$token_file", "github_url": "$github_url", "api_url": "$api_url" },
       "models": { "claude-sonnet-5-5": "claude-sonnet-5.5", "claude-opus-5-5": "claude-opus-5.5", "claude-haiku-5-5": "claude-haiku-5.5" }
     }
   },
@@ -49,8 +58,13 @@ JSON
 
 echo "== configuration"
 "$binary" --config "$config" --check-config
-echo "== login: authorise the code below in your browser"
-"$binary" --config "$config" login
+if [ -s "$token_file" ]; then
+  echo "== login: reusing the token in LLMGATE_TOKEN_FILE"
+else
+  echo "== login: authorise the code below in your browser"
+  mkdir -p "$(dirname "$token_file")"
+  "$binary" --config "$config" login
+fi
 "$binary" --config "$config" setup >/dev/null
 echo "== doctor"
 "$binary" --config "$config" doctor > "$work/doctor.txt" || true
@@ -110,6 +124,7 @@ except OSError as error:
 
 tools = collections.Counter()
 turns = results = errors = refused = 0
+error_text = ""
 for line in open(f"{work}/claude.jsonl"):
     try:
         event = json.loads(line)
@@ -127,6 +142,8 @@ for line in open(f"{work}/claude.jsonl"):
     if event.get("type") == "result":
         results += 1
         errors += bool(event.get("is_error"))
+        if event.get("is_error") and not error_text:
+            error_text = str(event.get("result", ""))
 
 ledger = []
 try:
@@ -140,6 +157,8 @@ served = sorted({(row["requested"], row["model"]) for row in ledger})
 statuses = collections.Counter(row["status"] for row in ledger)
 
 passed = claude_status == 0 and (sample_status == 0 or not sample_must_pass) and sum(tools.values()) > 0 and not stats.get("upstream_failures") and errors == 0 and results == 1
+import re
+error_text = re.sub(r"(gho_|ghu_|ghs_|tid=)[A-Za-z0-9_=;:.-]+", r"\1<redacted>", " ".join(error_text.split()))[:400]
 lines = [
     "# Real run report",
     "",
@@ -154,7 +173,7 @@ lines = [
     f"- ledger lines {len(ledger)}; statuses {dict(statuses)}; input {sum(r['input'] for r in ledger)}, output {sum(r['output'] for r in ledger)}, cache read {sum(r['cache_read'] for r in ledger)}, cache write {sum(r['cache_creation'] for r in ledger)}",
     f"- requested model -> served model: {served}",
     f"- doctor: {dict(doctor)}",
-]
+] + ([f"- error from the turn (first 400 characters, tokens redacted): {error_text}"] if error_text else [])
 open(report_path, "w").write("\n".join(lines) + "\n")
 print("\n".join(lines))
 sys.exit(0 if passed else 1)
