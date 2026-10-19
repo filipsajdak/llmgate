@@ -6,11 +6,17 @@ export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/con
 mkdir -p "$HOME"
 failures=0
 check() { if "$@"; then echo "ok   $label"; else echo "FAIL $label"; failures=$((failures + 1)); fi; }
+. "$(dirname "$0")/diagnose.sh"
+watchdog_seconds=100
+script_pid=$$
+( sleep "$watchdog_seconds"; kill -0 "$script_pid" 2>/dev/null && { echo "== watchdog: still running after $watchdog_seconds s"; kill -TERM "$script_pid"; } ) &
+watchdog_pid=$!
 cleanup() {
   status=$?
+  kill "$watchdog_pid" 2>/dev/null || true
   if [ "$status" -ne 0 ]; then
-    echo "== the script ended with status $status; the gateway log:"
-    tail -n 40 "$work/state/llmgate/gateway.log" 2>/dev/null || echo "(no gateway log)"
+    echo "== the script ended with status $status"
+    diagnose_gateway
   fi
   kill $(cat "$work/state/llmgate/gateway.pid" 2>/dev/null) 2>/dev/null || true
   kill ${github_pid:-} ${squatter_pid:-} 2>/dev/null || true
