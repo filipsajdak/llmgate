@@ -12,11 +12,14 @@ check() { elapsed=$(($(date +%s) - started)); if "$@"; then echo "ok   [${elapse
 . "$(dirname "$0")/diagnose.sh"
 watchdog_seconds=100
 script_pid=$$
-( sleep "$watchdog_seconds"; kill -0 "$script_pid" 2>/dev/null && { echo "== watchdog: still running after $watchdog_seconds s"; kill -TERM "$script_pid"; } ) &
+( sleep "$watchdog_seconds"; kill -0 "$script_pid" 2>/dev/null && kill -TERM "$script_pid" ) < /dev/null > /dev/null 2>&1 &
 watchdog_pid=$!
 cleanup() {
   status=$?
   kill "$watchdog_pid" 2>/dev/null || true
+  if [ "${timed_out:-0}" = 1 ]; then
+    echo "== watchdog: still running after $watchdog_seconds s"
+  fi
   if [ "$status" -ne 0 ]; then
     echo "== the script ended with status $status"
     diagnose_gateway
@@ -26,7 +29,8 @@ cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
-trap 'exit 143' TERM INT
+trap 'timed_out=1; exit 143' TERM
+trap 'exit 130' INT
 
 free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'; }
 port=$(free_port)
