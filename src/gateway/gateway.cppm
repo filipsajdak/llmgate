@@ -194,36 +194,48 @@ constexpr bool is_anthropic_header(std::string_view const name) noexcept {
 
 static_assert(is_anthropic_header("anthropic-beta") && is_anthropic_header("Anthropic-Workspace-Id") && !is_anthropic_header("anthropic-") && !is_anthropic_header("x-anthropic-beta"));
 
-http::header_map upstream_headers(httpio::request const& incoming, std::map<std::string, std::string> const& extra, bool const copilot_client,
-                                  bool const forward_credentials, std::string_view const token) {
-    static constexpr auto passed = std::to_array<std::string_view>({"content-type", "accept", "anthropic-version", "anthropic-beta"});
-    http::header_map fields;
-    for (auto const name : passed) {
-        if (auto const found = incoming.head.fields.find(name)) {
-            fields.add(std::string{name}, std::string{*found});
+void copy_present(http::header_map& to, http::header_map const& from, std::string_view const lookup, std::string_view const sent_as) {
+    if (auto const found = from.find(lookup)) {
+        to.add(std::string{sent_as}, std::string{*found});
+    }
+}
+
+void copy_request_headers(http::header_map& to, http::header_map const& from) {
+    for (auto const name : std::to_array<std::string_view>({"content-type", "accept", "anthropic-version", "anthropic-beta"})) {
+        copy_present(to, from, name, name);
+    }
+}
+
+void forward_client_credentials(http::header_map& to, http::header_map const& from) {
+    copy_present(to, from, "authorization", "Authorization");
+    copy_present(to, from, "x-api-key", "x-api-key");
+    for (auto const& field : from.all()) {
+        if (is_anthropic_header(field.name) && !to.find(field.name)) {
+            to.add(field.name, field.value);
         }
     }
+}
+
+void add_missing(http::header_map& to, std::span<std::pair<std::string_view, std::string_view> const> const defaults) {
+    for (auto const& [name, content] : defaults) {
+        if (!to.find(name)) {
+            to.add(std::string{name}, std::string{content});
+        }
+    }
+}
+
+http::header_map upstream_headers(httpio::request const& incoming, std::map<std::string, std::string> const& extra, bool const copilot_client,
+                                  bool const forward_credentials, std::string_view const token) {
+    http::header_map fields;
+    copy_request_headers(fields, incoming.head.fields);
     if (forward_credentials) {
-        for (auto const& [lookup, sent_as] : std::to_array<std::pair<std::string_view, std::string_view>>({{"authorization", "Authorization"}, {"x-api-key", "x-api-key"}})) {
-            if (auto const found = incoming.head.fields.find(lookup)) {
-                fields.add(std::string{sent_as}, std::string{*found});
-            }
-        }
-        for (auto const& field : incoming.head.fields.all()) {
-            if (is_anthropic_header(field.name) && !fields.find(field.name)) {
-                fields.add(field.name, field.value);
-            }
-        }
+        forward_client_credentials(fields, incoming.head.fields);
     }
     for (auto const& [name, content] : extra) {
         fields.add(name, content);
     }
     if (copilot_client) {
-        for (auto const& [name, content] : copilot_client_headers) {
-            if (!fields.find(name)) {
-                fields.add(std::string{name}, std::string{content});
-            }
-        }
+        add_missing(fields, copilot_client_headers);
     }
     if (!forward_credentials) {
         fields.add("Authorization", std::format("Bearer {}", token));
