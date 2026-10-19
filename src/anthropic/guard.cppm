@@ -55,6 +55,16 @@ constexpr std::string printable_prefix(std::string_view const text, std::size_t 
     return shown;
 }
 
+constexpr std::string_view done_marker = "[DONE]";
+
+constexpr bool is_done_marker(sse::event const& incoming) noexcept {
+    return incoming.name.empty() && incoming.data == done_marker;
+}
+
+static_assert(is_done_marker({.name = "", .data = "[DONE]", .id = {}}));
+static_assert(!is_done_marker({.name = "message_stop", .data = "[DONE]", .id = {}}));
+static_assert(!is_done_marker({.name = "", .data = "[DONE] ", .id = {}}));
+
 constexpr std::string describe_unparseable(sse::event const& incoming) {
     std::string out;
     text::append_all(out, "event=", printable_prefix(incoming.name, shown_name_chars), " data=", printable_prefix(incoming.data, shown_data_chars));
@@ -268,6 +278,9 @@ class stream_guard {
 public:
     template <output_sink Out, repair_sink Report>
     constexpr void on_event(sse::event const& incoming, Out&& out, Report&& report) {
+        if (detail::is_done_marker(incoming)) {
+            return;
+        }
         auto const parsed = detail::classify(incoming.data);
         if (!parsed) {
             report(repair{.kind = repair_kind::unparseable_event, .detail = detail::describe_unparseable(incoming)});

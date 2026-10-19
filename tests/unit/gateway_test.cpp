@@ -34,6 +34,7 @@ enum class behaviour {
     sse_usage,
     sse_clean,
     sse_done_marker,
+    sse_unparseable_event,
     sse_duplicate_start,
     sse_missing_start,
     sse_unclosed_tool_block,
@@ -136,6 +137,7 @@ struct fake_upstream {
             }
             case behaviour::sse_clean: co_return co_await script(out, {start, block, text, end_block, delta, stop});
             case behaviour::sse_done_marker: co_return co_await script(out, {start, block, text, end_block, delta, stop, {"", "[DONE]"}});
+            case behaviour::sse_unparseable_event: co_return co_await script(out, {start, block, {"note", "hello"}, text, end_block, delta, stop});
             case behaviour::sse_duplicate_start: co_return co_await script(out, {start, start, start, block, text, end_block, delta, stop});
             case behaviour::sse_missing_start: co_return co_await script(out, {block, text, end_block, delta, stop});
             case behaviour::sse_unclosed_tool_block: co_return co_await script(out, {start, block, text, delta, stop});
@@ -685,15 +687,26 @@ const suite gateway_suite = [] {
         expect(!w.upstream.seen.at(0).headers.contains("Copilot-Integration-Id"));
     };
 
-    "capability_a_done_marker_after_the_stream_is_dropped_and_explained_in_the_statistics"_test = [] {
+    "capability_a_done_marker_after_the_stream_is_dropped_without_counting_a_repair"_test = [] {
         world w;
         w.upstream.mode = behaviour::sse_done_marker;
 
         auto const answer = w.ask(messages_request(chat("opus", true)));
 
         expect(event_names(answer.body) == complete_stream);
+        expect(gateway::repair_slot(w.gateway.counters().repairs, anthropic::repair_kind::unparseable_event) == 0_u);
+        expect(w.gateway.counters().repair_examples.empty());
+    };
+
+    "capability_an_event_that_is_not_json_is_dropped_counted_and_explained_in_the_statistics"_test = [] {
+        world w;
+        w.upstream.mode = behaviour::sse_unparseable_event;
+
+        auto const answer = w.ask(messages_request(chat("opus", true)));
+
+        expect(event_names(answer.body) == complete_stream);
         expect(gateway::repair_slot(w.gateway.counters().repairs, anthropic::repair_kind::unparseable_event) == 1_u);
-        expect(w.gateway.counters().repair_examples.at("unparseable_event") == "event= data=[DONE]");
+        expect(w.gateway.counters().repair_examples.at("unparseable_event") == "event=note data=hello");
     };
 
     "capability_a_clean_stream_passes_through_event_for_event"_test = [] {
