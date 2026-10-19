@@ -8,6 +8,7 @@ import std;
 import llmgate.anthropic;
 import llmgate.async;
 import llmgate.claude;
+import llmgate.control;
 import llmgate.http;
 import llmgate.httpio;
 import llmgate.json;
@@ -245,6 +246,7 @@ struct model_entry {
     std::string id{};
     std::string display_name{};
     std::string created_at = std::string{model_epoch};
+    std::optional<std::string> description{};
 };
 
 struct model_list {
@@ -257,13 +259,22 @@ struct provider_report {
     selection::circuit circuit = selection::circuit::closed;
 };
 
-std::string models_json(std::set<std::string> const& aliases) {
+std::string models_json(std::set<std::string> const& aliases, std::span<control::target const> const targets) {
     model_list listing;
     for (auto const& alias : aliases) {
         listing.data.push_back({.id = alias, .display_name = alias});
     }
+    for (auto const& item : targets) {
+        listing.data.push_back({.id = item.id, .display_name = item.display_name, .description = std::format("served by the provider {}", item.provider)});
+    }
     return json::write(json::to_value(listing));
 }
+
+struct planned {
+    std::size_t index = 0;
+    std::optional<std::string> upstream{};
+};
+
 
 std::pair<std::string, json::value> provider_member(std::string_view const name, provider_stats const& counts, selection::circuit const state) {
     return {std::string{name}, json::to_value(provider_report{.counts = counts, .circuit = state})};
@@ -424,6 +435,19 @@ struct provider_runtime {
     selection::breaker circuit{};
 };
 
+std::vector<control::offer> offers_of(std::span<provider_runtime const> const providers) {
+    std::vector<control::offer> out;
+    for (auto const& item : providers) {
+        control::offer one{.provider = item.name};
+        for (auto const& entry : item.settings.models) {
+            one.models.push_back(entry.second);
+        }
+        one.models.append_range(item.settings.offer);
+        out.push_back(std::move(one));
+    }
+    return out;
+}
+
 }  // namespace llmgate::gateway::detail
 
 export namespace llmgate::gateway {
@@ -442,10 +466,13 @@ public:
             providers_.push_back({.name = name, .settings = std::move(item), .creds = found == credentials.end() ? &missing_ : found->second, .url = std::move(url)});
             counters_.providers[name];
         }
+        targets_ = control::catalogue(detail::offers_of(providers_));
     }
 
     proxy(async::reactor& loop, config settings, access_policy access, credential& credentials, tls::client_context const& tls_context)
         : proxy{loop, std::move(settings), std::move(access), single(credentials), tls_context} {}
+
+    void use_overrides(control::overrides book) { overrides_ = std::move(book); }
 
     bool uses_credential_endpoint() const {
         return std::ranges::any_of(providers_, [](detail::provider_runtime const& item) { return item.creds->endpoint().has_value(); });
@@ -488,7 +515,7 @@ private:
 
     std::optional<std::string> json_body(routing::route const which, std::string_view const target) const {
         switch (which) {
-            case routing::route::models: return detail::models_json(alias_names());
+            case routing::route::models: return detail::models_json(alias_names(), targets_);
             case routing::route::health: return health_body(target);
             case routing::route::statistics: return detail::stats_json(counters_, usage::summary_json(ledger_, settings_.usage.budget, clock_()), providers_object());
             default: return std::nullopt;
@@ -602,16 +629,24 @@ private:
             co_return co_await reject(out, routing::error_reply(429, "rate_limit_error", usage::refusal_message(now)));
         }
         detail::request_note note{.requested = std::move(first->requested), .session = usage::session_of(incoming.body), .began = std::chrono::steady_clock::now()};
-        auto order = provider_order(usage::role_of(note.requested));
+        auto order = plan_for(incoming, note);
         co_return co_await run_providers(incoming, out, std::move(order), std::move(note));
     }
 
-    std::vector<std::size_t> provider_order(std::string_view const role) const {
-        std::vector<std::size_t> order;
-        for (auto const& name : selection::order_for(routes_, role, declared_)) {
-            order.push_back(index_of(name));
+    std::string session_for(httpio::request const& incoming, detail::request_note const& note) const {
+        auto const header = incoming.head.fields.find("x-claude-code-session-id");
+        return header ? std::string{*header} : note.session;
+    }
+
+    std::vector<detail::planned> plan_for(httpio::request const& incoming, detail::request_note const& note) const {
+        auto const role = usage::role_of(note.requested);
+        auto const configured = selection::order_for(routes_, role, declared_);
+        auto const chosen = control::resolve({.requested = note.requested, .role = role, .session = session_for(incoming, note)}, targets_, overrides_, configured);
+        std::vector<detail::planned> steps;
+        for (auto const& item : chosen.steps) {
+            steps.push_back({.index = index_of(item.provider), .upstream = item.upstream});
         }
-        return order;
+        return steps;
     }
 
     std::size_t index_of(std::string_view const name) const {
@@ -620,15 +655,16 @@ private:
     }
 
     template <net::byte_stream Client>
-    async::task<net::result_void> run_providers(httpio::request const& incoming, httpio::response_writer<Client>& out, std::vector<std::size_t> order,
+    async::task<net::result_void> run_providers(httpio::request const& incoming, httpio::response_writer<Client>& out, std::vector<detail::planned> order,
                                                 detail::request_note note) {
         std::optional<detail::held_reply> held;
         std::size_t last = 0;
-        for (auto const index : order) {
+        for (auto const& step : order) {
+            auto const index = step.index;
             if (!admit(index)) {
                 continue;
             }
-            auto result = co_await attempt(index, incoming, out, note);
+            auto result = co_await attempt(index, step.upstream, incoming, out, note);
             settle(index, result.state);
             if (result.delivered) {
                 co_return result.client;
@@ -678,9 +714,9 @@ private:
     }
 
     template <net::byte_stream Client>
-    async::task<detail::attempt_result> attempt(std::size_t const index, httpio::request const& incoming, httpio::response_writer<Client>& out,
-                                                detail::request_note note) {
-        auto spec = co_await build_spec(index, incoming);
+    async::task<detail::attempt_result> attempt(std::size_t const index, std::optional<std::string> upstream_model, httpio::request const& incoming,
+                                                httpio::response_writer<Client>& out, detail::request_note note) {
+        auto spec = co_await build_spec(index, upstream_model, incoming);
         if (!spec) {
             co_return std::move(spec.error());
         }
@@ -700,12 +736,12 @@ private:
         return detail::refused(routing::error_reply(status, "api_error", "cannot reach the upstream: " + failure.message()), detail::health::failing);
     }
 
-    async::task<std::expected<httpio::request_spec, detail::attempt_result>> build_spec(std::size_t const index, httpio::request const& incoming) {
+    async::task<std::expected<httpio::request_spec, detail::attempt_result>> build_spec(std::size_t const index, std::optional<std::string> upstream_model, httpio::request const& incoming) {
         auto& chosen = providers_[index];
         if (!chosen.url) {
             co_return std::unexpected{detail::refused(routing::error_reply(500, "api_error", "the upstream base_url is not valid"), detail::health::neutral)};
         }
-        auto prepared = routing::prepare(incoming.body, [&chosen](std::string const& requested) { return detail::alias_of(chosen.settings.models, requested); });
+        auto prepared = routing::prepare(incoming.body, [&chosen, &upstream_model](std::string const& requested) { return upstream_model ? upstream_model : detail::alias_of(chosen.settings.models, requested); });
         if (!prepared) {
             co_return std::unexpected{detail::refused(std::move(prepared.error()), detail::health::neutral)};
         }
@@ -929,6 +965,8 @@ private:
     static_credential missing_{std::string{}};
     std::vector<detail::provider_runtime> providers_;
     std::vector<selection::role_route> routes_;
+    std::vector<control::target> targets_;
+    control::overrides overrides_;
     std::vector<std::string> declared_;
     net::connection_pool<net::any_stream> pool_;
     stats counters_;

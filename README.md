@@ -62,12 +62,14 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `upstream.messages_path` | string | `"/v1/messages"` | Path of the Messages endpoint on the upstream. |
 | `upstream.headers` | map of string | `{}` | Extra headers sent to the upstream on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here. |
 | `upstream.forward_credentials` | boolean | `false` | Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen. |
+| `upstream.offer` | array of string | `[]` | Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER. |
 | `models` | map of string | `{}` | Claude Code expands aliases such as sonnet to full model names before it calls the gateway, so map full names: client model name to upstream model name. Unknown names go through unchanged. |
 | `providers` | map of object | `{}` | More than one backend: name each one here. A provider with a copilot object uses the Copilot login, one with static_token_env uses that variable. The keys upstream, models, copilot and static_token_env stay valid and act as one provider named default. |
 | `providers.<name>.base_url` | string | required | Base URL of the provider. |
 | `providers.<name>.messages_path` | string | `"/v1/messages"` | Path of the Messages endpoint on the provider. |
 | `providers.<name>.headers` | map of string | `{}` | Extra headers sent to the provider on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here. |
 | `providers.<name>.forward_credentials` | boolean | `false` | Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen. |
+| `providers.<name>.offer` | array of string | `[]` | Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER. |
 | `providers.<name>.static_token_env` | string | `""` | Name of the environment variable that holds the API key sent as the bearer token. |
 | `providers.<name>.copilot` | object | none | GitHub Copilot login of this provider; used instead of static_token_env. |
 | `providers.<name>.copilot.token_file` | string | `""` | File that holds the GitHub OAuth token; run llmgate login once to write it. |

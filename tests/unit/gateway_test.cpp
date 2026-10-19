@@ -2,6 +2,7 @@
 
 import llmgate.anthropic;
 import llmgate.async;
+import llmgate.control;
 import llmgate.gateway;
 import llmgate.http;
 import llmgate.httpio;
@@ -230,7 +231,7 @@ constexpr std::int64_t fixed_time = 1760659200;
 
 constexpr std::string_view golden_statistics =
     R"({"requests":3,"streamed":1,"upstream_failures":0,"upstream_timeouts":0,"client_disconnects":0,"refused":0,"connections_opened":1,"connections_reused":1,"budget_refused":0,"no_provider":0,"repairs":{"duplicate_message_start":2},"repair_examples":{},"providers":{"default":{"attempts":2,"answered":2,"failures":0,"skipped":0,"circuit":"closed"}},"usage":{"today":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"month":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"budget":{"state":"ok","window":"daily","used":18,"limit":100,"percent":18}}})";
-constexpr std::string_view golden_models = R"({"data":[{"type":"model","id":"opus","display_name":"opus","created_at":"1970-01-01T00:00:00Z"}],"has_more":false})";
+constexpr std::string_view golden_models = R"json({"data":[{"type":"model","id":"opus","display_name":"opus","created_at":"1970-01-01T00:00:00Z"},{"type":"model","id":"claude-opus-upstream@default","display_name":"claude-opus-upstream (default)","created_at":"1970-01-01T00:00:00Z","description":"served by the provider default"}],"has_more":false})json";
 constexpr std::string_view golden_error = R"({"type":"error","error":{"type":"invalid_request_error","message":"a \"q\" \n b"}})";
 
 json::value canonical(json::value source) {
@@ -756,6 +757,66 @@ const suite gateway_suite = [] {
         auto const& first = d.first.seen.at(0).headers;
         expect(first.at("Authorization") == "Bearer token-a");
         expect(!first.contains("anthropic-workspace-id"));
+    };
+
+    "capability_a_picked_target_goes_to_exactly_that_provider_with_its_upstream_model"_test = [] {
+        duo d;
+
+        auto const answer = d.chat_with("claude-model-b@b");
+
+        expect(answer.status == 200);
+        expect(d.first.seen.empty());
+        expect(d.second.seen.at(0).body.contains(R"("model":"model-b")"));
+    };
+
+    "limit_a_picked_target_that_fails_is_not_replaced_by_another_provider"_test = [] {
+        duo d;
+        d.second.mode = behaviour::server_error;
+
+        auto const answer = d.chat_with("claude-model-b@b");
+
+        expect(answer.status == 502);
+        expect(d.first.seen.empty());
+    };
+
+    "capability_a_global_remap_sends_the_role_to_the_pinned_provider_without_fallback"_test = [] {
+        duo d;
+        control::overrides pins;
+        pins.global["opus"] = {.provider = "b", .upstream = "model-extra"};
+        d.gateway.use_overrides(pins);
+
+        auto const answer = d.chat_with("opus");
+
+        expect(answer.status == 200 && d.first.seen.empty());
+        expect(d.second.seen.at(0).body.contains(R"("model":"model-extra")"));
+    };
+
+    "capability_a_session_remap_follows_the_claude_code_session_header_only"_test = [] {
+        duo d;
+        control::overrides pins;
+        pins.session["session-1"]["opus"] = {.provider = "b", .upstream = "model-b"};
+        d.gateway.use_overrides(pins);
+        auto mine = messages_request(chat("opus", false), "/anthropic/v1/messages", "");
+        mine.fields.add("x-claude-code-session-id", "session-1");
+        auto other = messages_request(chat("opus", false), "/anthropic/v1/messages", "");
+        other.fields.add("x-claude-code-session-id", "session-2");
+
+        (void)d.ask(std::move(mine));
+        (void)d.ask(std::move(other));
+
+        expect(d.second.seen.size() == 1_u && d.first.seen.size() == 1_u);
+    };
+
+    "capability_the_models_endpoint_lists_every_target_with_a_claude_id_and_a_display_name"_test = [] {
+        duo d;
+        auto request = messages_request("");
+        request.method = "GET";
+        request.target = "/anthropic/v1/models";
+
+        auto const body = d.ask(std::move(request)).body;
+
+        expect(body.contains(R"("id":"claude-model-a@a")") && body.contains(R"("id":"claude-model-b@b")") && body.contains(R"("id":"claude-model-extra@b")"));
+        expect(body.contains(R"json("display_name":"model-b (b)")json"));
     };
 
     "capability_a_clean_stream_passes_through_event_for_event"_test = [] {
