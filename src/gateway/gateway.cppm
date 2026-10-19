@@ -151,6 +151,8 @@ constexpr auto& repair_slot(Counts& counts, anthropic::repair_kind const kind) {
     return *slot;
 }
 
+constexpr std::size_t repair_example_chars = 80;
+
 struct stats {
     std::uint64_t requests = 0;
     std::uint64_t streamed = 0;
@@ -163,6 +165,7 @@ struct stats {
     std::uint64_t connections_opened = 0;
     std::uint64_t connections_reused = 0;
     repair_counts repairs{};
+    std::map<std::string, std::string> repair_examples{};
     [[= json::skip]] std::map<std::string, provider_stats> providers;
 };
 
@@ -276,6 +279,9 @@ struct relay_state {
     void note(anthropic::repair const& item) {
         ++repair_slot(counters->repairs, item.kind);
         ++repairs_seen;
+        if (!item.detail.empty()) {
+            counters->repair_examples.try_emplace(std::string{reflect::enum_name(item.kind)}, item.detail.substr(0, repair_example_chars));
+        }
     }
 
     void on_chunk(std::span<std::byte const> bytes) {

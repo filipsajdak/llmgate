@@ -33,6 +33,7 @@ enum class behaviour {
     json_usage,
     sse_usage,
     sse_clean,
+    sse_done_marker,
     sse_duplicate_start,
     sse_missing_start,
     sse_unclosed_tool_block,
@@ -134,6 +135,7 @@ struct fake_upstream {
                 co_return net::result_void{};
             }
             case behaviour::sse_clean: co_return co_await script(out, {start, block, text, end_block, delta, stop});
+            case behaviour::sse_done_marker: co_return co_await script(out, {start, block, text, end_block, delta, stop, {"", "[DONE]"}});
             case behaviour::sse_duplicate_start: co_return co_await script(out, {start, start, start, block, text, end_block, delta, stop});
             case behaviour::sse_missing_start: co_return co_await script(out, {block, text, end_block, delta, stop});
             case behaviour::sse_unclosed_tool_block: co_return co_await script(out, {start, block, text, delta, stop});
@@ -225,7 +227,7 @@ httpio::request_spec messages_request(std::string body, std::string target = "/a
 constexpr std::int64_t fixed_time = 1760659200;
 
 constexpr std::string_view golden_statistics =
-    R"({"requests":3,"streamed":1,"upstream_failures":0,"upstream_timeouts":0,"client_disconnects":0,"refused":0,"connections_opened":1,"connections_reused":1,"budget_refused":0,"no_provider":0,"repairs":{"duplicate_message_start":2},"providers":{"default":{"attempts":2,"answered":2,"failures":0,"skipped":0,"circuit":"closed"}},"usage":{"today":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"month":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"budget":{"state":"ok","window":"daily","used":18,"limit":100,"percent":18}}})";
+    R"({"requests":3,"streamed":1,"upstream_failures":0,"upstream_timeouts":0,"client_disconnects":0,"refused":0,"connections_opened":1,"connections_reused":1,"budget_refused":0,"no_provider":0,"repairs":{"duplicate_message_start":2},"repair_examples":{},"providers":{"default":{"attempts":2,"answered":2,"failures":0,"skipped":0,"circuit":"closed"}},"usage":{"today":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"month":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"budget":{"state":"ok","window":"daily","used":18,"limit":100,"percent":18}}})";
 constexpr std::string_view golden_models = R"({"data":[{"type":"model","id":"opus","display_name":"opus","created_at":"1970-01-01T00:00:00Z"}],"has_more":false})";
 constexpr std::string_view golden_error = R"({"type":"error","error":{"type":"invalid_request_error","message":"a \"q\" \n b"}})";
 
@@ -681,6 +683,17 @@ const suite gateway_suite = [] {
         (void)w.ask(messages_request(chat("opus", false)));
 
         expect(!w.upstream.seen.at(0).headers.contains("Copilot-Integration-Id"));
+    };
+
+    "capability_a_done_marker_after_the_stream_is_dropped_and_explained_in_the_statistics"_test = [] {
+        world w;
+        w.upstream.mode = behaviour::sse_done_marker;
+
+        auto const answer = w.ask(messages_request(chat("opus", true)));
+
+        expect(event_names(answer.body) == complete_stream);
+        expect(gateway::repair_slot(w.gateway.counters().repairs, anthropic::repair_kind::unparseable_event) == 1_u);
+        expect(w.gateway.counters().repair_examples.at("unparseable_event") == "event= data=[DONE]");
     };
 
     "capability_a_clean_stream_passes_through_event_for_event"_test = [] {

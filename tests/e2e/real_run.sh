@@ -168,7 +168,7 @@ lines = [
     f"- sample project fixed (its test passes afterwards): {'yes' if sample_status == 0 else 'no'}",
     f"- gateway: requests {stats.get('requests')}, streamed {stats.get('streamed')}, upstream failures {stats.get('upstream_failures')}, timeouts {stats.get('upstream_timeouts')}, "
     f"connections opened {stats.get('connections_opened')}, reused {stats.get('connections_reused')}",
-    f"- stream repairs: {repairs or 'none'}",
+    f"- stream repairs: {repairs or 'none'}; first example of each: {stats.get('repair_examples') or 'none'}",
     f"- provider default: {provider}",
     f"- ledger lines {len(ledger)}; statuses {dict(statuses)}; input {sum(r['input'] for r in ledger)}, output {sum(r['output'] for r in ledger)}, cache read {sum(r['cache_read'] for r in ledger)}, cache write {sum(r['cache_creation'] for r in ledger)}",
     f"- requested model -> served model: {served}",

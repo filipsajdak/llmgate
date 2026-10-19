@@ -9,6 +9,7 @@ import llmgate.jsonscan;
 import llmgate.members;
 import llmgate.reflect;
 import llmgate.sse;
+import llmgate.text;
 
 export namespace llmgate::anthropic {
 
@@ -42,6 +43,27 @@ static_assert(reflect::unique_values<event_type>());
 }  // namespace llmgate::anthropic
 
 namespace llmgate::anthropic::detail {
+
+constexpr std::size_t shown_name_chars = 32;
+constexpr std::size_t shown_data_chars = 24;
+
+constexpr std::string printable_prefix(std::string_view const text, std::size_t const limit) {
+    auto shown = std::ranges::to<std::string>(text.substr(0, limit) | std::views::transform([](char const c) { return c >= ' ' && c <= '~' ? c : '?'; }));
+    if (text.size() > limit) {
+        text::append_all(shown, "...");
+    }
+    return shown;
+}
+
+constexpr std::string describe_unparseable(sse::event const& incoming) {
+    std::string out;
+    text::append_all(out, "event=", printable_prefix(incoming.name, shown_name_chars), " data=", printable_prefix(incoming.data, shown_data_chars));
+    return out;
+}
+
+static_assert(describe_unparseable({.name = "", .data = "[DONE]", .id = {}}) == "event= data=[DONE]");
+static_assert(describe_unparseable({.name = "ping", .data = "a\nb", .id = {}}) == "event=ping data=a?b");
+static_assert(describe_unparseable({.name = "", .data = "0123456789012345678901234567", .id = {}}) == "event= data=012345678901234567890123...");
 
 constexpr std::string_view synthesized_message_start =
     R"({"type":"message_start","message":{"id":"msg_llmgate","type":"message","role":"assistant","model":"","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}})";
@@ -248,7 +270,7 @@ public:
     constexpr void on_event(sse::event const& incoming, Out&& out, Report&& report) {
         auto const parsed = detail::classify(incoming.data);
         if (!parsed) {
-            report(repair{.kind = repair_kind::unparseable_event, .detail = std::string{incoming.name}});
+            report(repair{.kind = repair_kind::unparseable_event, .detail = detail::describe_unparseable(incoming)});
             return;
         }
         if (stopped_) {
