@@ -1,0 +1,21 @@
+name: debug-fqdn
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - name: time a reverse lookup and an http.server start
+        run: |
+          python3 - <<'PY'
+          import http.server, socket, time
+          t = time.time(); socket.getfqdn("127.0.0.1"); print(f"getfqdn(127.0.0.1): {time.time() - t:.1f} s")
+          t = time.time(); s = http.server.HTTPServer(("127.0.0.1", 0), http.server.BaseHTTPRequestHandler); print(f"HTTPServer(127.0.0.1, 0): {time.time() - t:.1f} s"); s.server_close()
+          t = time.time(); s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), http.server.BaseHTTPRequestHandler); print(f"ThreadingHTTPServer(127.0.0.1, 0): {time.time() - t:.1f} s"); s.server_close()
+          PY
