@@ -119,6 +119,31 @@ jobs:
       - run: ctest --preset linux -L capability --output-on-failure
       - run: ctest --preset linux -L lint --output-on-failure
 
+  bench:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 60
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Latency, throughput and connection reuse against the committed baseline
+        shell: bash
+        run: |
+          ops/bench/ci.sh bench | tee bench.log
+          grep '^|' bench.log >> "$GITHUB_STEP_SUMMARY"
+      - name: Soak with LeakSanitizer
+        shell: bash
+        run: |
+          SOAK_MINUTES=3 ops/bench/ci.sh soak | tee soak.log
+          { echo '```'; cat soak.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench
+          path: |
+            bench.log
+            soak.log
+            build/bench-ci/*.json
+
   mutation:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     timeout-minutes: 240

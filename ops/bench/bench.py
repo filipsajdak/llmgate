@@ -68,7 +68,25 @@ def start_gateway(binary, work, upstream_port, ledger, tls=False):
     return proc, int(port.group(1))
 
 
+CLOCK_TICKS_PER_SECOND = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+KILOBYTES_PER_PAGE_FALLBACK = 4
+
+
+def proc_numbers(pid):
+    stat = pathlib.Path(f"/proc/{pid}/stat")
+    if not stat.exists():
+        return None
+    fields = stat.read_text().rsplit(")", 1)[1].split()
+    ticks = int(fields[11]) + int(fields[12])
+    pages = int(fields[21])
+    page_kb = os.sysconf("SC_PAGE_SIZE") // 1024 if hasattr(os, "sysconf") else KILOBYTES_PER_PAGE_FALLBACK
+    return pages * page_kb, ticks / CLOCK_TICKS_PER_SECOND
+
+
 def process_numbers(pid):
+    from_proc = proc_numbers(pid)
+    if from_proc:
+        return from_proc
     out = subprocess.run(["ps", "-o", "rss=,cputime=", "-p", str(pid)], capture_output=True, text=True).stdout.split()
     if len(out) != 2:
         return 0, 0.0
@@ -78,7 +96,13 @@ def process_numbers(pid):
     return int(out[0]), seconds
 
 
+TIME_WAIT_STATE = "06"
+
+
 def time_wait_count():
+    tables = [pathlib.Path("/proc/net/tcp"), pathlib.Path("/proc/net/tcp6")]
+    if tables[0].exists():
+        return sum(1 for table in tables if table.exists() for line in table.read_text().splitlines()[1:] if line.split()[3] == TIME_WAIT_STATE)
     out = subprocess.run(["netstat", "-an"], capture_output=True, text=True).stdout
     return out.count("TIME_WAIT")
 
