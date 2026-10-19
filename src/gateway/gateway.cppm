@@ -325,6 +325,11 @@ struct pump_outcome {
     net::result_void client{};
 };
 
+constexpr bool client_gone(pump_outcome const& drained) noexcept {
+    return drained.failure == std::errc::connection_aborted;
+}
+
+
 attempt_result refused(routing::reply_body problem, health const state) {
     held_reply reply{.status = problem.status, .fields = {}, .body = std::move(problem.body)};
     reply.fields.add("Content-Type", "application/json");
@@ -767,12 +772,14 @@ private:
         detail::relay_state state{.counters = &counters_, .buffer_limit = buffer_limit};
         auto const drained = co_await pump(upstream, state, out);
         auto const& provider = providers_[index].name;
+        if (detail::client_gone(drained)) {
+            ++counters_.client_disconnects;
+        }
         if (!drained.client) {
             record_usage(note, state, drained.failure, provider);
             co_return detail::delivered(drained.client, detail::health::neutral);
         }
-        if (drained.failure == std::errc::connection_aborted) {
-            ++counters_.client_disconnects;
+        if (detail::client_gone(drained)) {
             record_usage(note, state, drained.failure, provider);
             co_return detail::delivered(net::result_void{}, detail::health::neutral);
         }

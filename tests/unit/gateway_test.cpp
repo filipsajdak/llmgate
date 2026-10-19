@@ -402,6 +402,33 @@ async::task<bool> eventually(async::reactor& loop, std::function<bool()> conditi
     co_return false;
 }
 
+template <net::byte_stream Inner>
+class failing_writes {
+public:
+    failing_writes(Inner inner, std::size_t const allowed) : inner_{std::move(inner)}, allowed_{allowed} {}
+
+    async::task<net::result_size> read_some(std::span<std::byte> into, net::read_options const options) { co_return co_await inner_.read_some(into, options); }
+
+    async::task<net::result_void> write_all(std::span<std::byte const> data) {
+        if (writes_++ >= allowed_) {
+            co_return std::unexpected{std::make_error_code(std::errc::broken_pipe)};
+        }
+        co_return co_await inner_.write_all(data);
+    }
+
+    int descriptor() const noexcept { return inner_.descriptor(); }
+
+private:
+    Inner inner_;
+    std::size_t allowed_;
+    std::size_t writes_ = 0;
+};
+
+async::task<void> serve_failing_writes(world& served, net::listener& server, std::size_t const allowed_writes) {
+    auto accepted = co_await server.accept();
+    co_await httpio::serve_connection(failing_writes<net::tcp_stream>{std::move(*accepted), allowed_writes}, served.gateway, httpio::limits{});
+}
+
 const suite gateway_suite = [] {
     "capability_a_plain_reply_is_counted_in_the_ledger_and_written_as_a_line"_test = [] {
         world w;
@@ -684,6 +711,24 @@ const suite gateway_suite = [] {
         expect(event_names(answer.body).back() == "error");
         expect(std::chrono::steady_clock::now() - started < std::chrono::seconds{5});
         expect(w.gateway.counters().upstream_timeouts == 1_u);
+    };
+
+    "defect_a_write_to_the_client_that_fails_counts_as_a_disconnect"_test = [] {
+        world w;
+        w.upstream.mode = behaviour::sse_endless;
+        auto server = net::listener::bind(w.loop, std::string{loopback}, 0);
+        w.loop.spawn(serve_failing_writes(w, *server, 2));
+
+        auto const counted = w.loop.run([](world& world, std::uint16_t const port) -> async::task<bool> {
+            auto client = co_await net::tcp_stream::connect(world.loop, std::string{loopback}, port);
+            auto spec = messages_request(chat("opus", true));
+            spec.host = std::format("127.0.0.1:{}", world.port());
+            auto const wire = httpio::format_request(spec);
+            (void)co_await client->write_all(std::as_bytes(std::span{*wire}));
+            co_return co_await eventually(world.loop, [&world] { return world.gateway.counters().client_disconnects == 1; });
+        }(w, server->port()));
+
+        expect(counted);
     };
 
     "limit_a_client_that_disconnects_mid_stream_stops_the_upstream_read"_test = [] {
