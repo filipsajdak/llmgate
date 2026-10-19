@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
 binary=${1:?usage: setup_flow.sh <llmgate binary>}
 work=$(mktemp -d)
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
@@ -134,7 +136,7 @@ check sh -c "! '$binary' --config '$config' stop >/dev/null 2>&1"
 
 label="a squatter on the port is refused and receives nothing"
 python3 - "$port" "$work/squat.log" <<'PY' &
-import http.server, sys
+import fast_http, http.server, sys
 log = open(sys.argv[2], "w")
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):

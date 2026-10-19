@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
 binary=${1:?usage: shutdown_flow.sh <llmgate binary>}
 work=$(mktemp -d)
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
@@ -28,7 +30,7 @@ trap cleanup EXIT
 trap 'exit 143' TERM INT
 
 cat > "$work/upstream.py" <<'PY'
-import http.server, sys, time
+import fast_http, http.server, sys, time
 delay = float(sys.argv[2])
 BODY = b'{"id":"msg_e2e","type":"message","role":"assistant","model":"m","content":[],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":4}}'
 class H(http.server.BaseHTTPRequestHandler):

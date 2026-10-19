@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
 binary=${1:?usage: doctor_flow.sh <llmgate binary>}
 work=$(mktemp -d)
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
@@ -33,7 +35,7 @@ config="$work/llmgate.jsonc"
 secret=gho_fake_secret_value
 
 cat > "$work/github.py" <<'PY'
-import http.server, json, sys, time
+import fast_http, http.server, json, sys, time
 
 MODE = sys.argv[2]
 
@@ -187,7 +189,7 @@ chmod 600 "$work/state/llmgate/identity"
 "$binary" --config "$config" stop >/dev/null
 
 python3 - "$port" <<'PY' &
-import http.server, sys
+import fast_http, http.server, sys
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         body = b'{"status":"ok"}'; self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)

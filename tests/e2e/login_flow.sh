@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
 binary=${1:?usage: login_flow.sh <llmgate binary>}
 work=$(mktemp -d)
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
@@ -32,7 +34,7 @@ if "$binary" --config "$work/llmgate.jsonc" login >/dev/null 2>"$work/err.txt"; 
 check sh -c "[ $rc -eq 1 ] && grep -q 'cannot reach GitHub' '$work/err.txt' && [ ! -e '$work/token.json' ]"
 
 python3 - "$port" <<'PY' &
-import http.server, json, sys
+import fast_http, http.server, json, sys
 class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length", 0)))

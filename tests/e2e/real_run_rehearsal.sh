@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
 root=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
 trap 'kill $upstream_pid $github_pid 2>/dev/null || true; wait 2>/dev/null || true; rm -rf "$work"' EXIT

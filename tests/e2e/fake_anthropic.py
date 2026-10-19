@@ -4,6 +4,8 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import fast_http  # noqa: F401
+
 LOG = sys.argv[2]
 DEFECT = sys.argv[3] if len(sys.argv) > 3 else "none"
 TOOL_COMMAND = os.environ.get("FAKE_TOOL_COMMAND", "echo tool-ran")

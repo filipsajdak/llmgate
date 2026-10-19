@@ -3,6 +3,8 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import fast_http  # noqa: F401
+
 PORT_FILE = sys.argv[1]
 COPILOT_API = sys.argv[2]
 

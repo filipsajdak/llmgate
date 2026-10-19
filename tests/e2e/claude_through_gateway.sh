@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
 root=$(cd "$(dirname "$0")/../.." && pwd)
 binary=${LLMGATE_BINARY:-$root/build/host/llmgate}
 defect=${1:-none}

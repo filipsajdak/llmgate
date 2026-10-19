@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
 root=$(cd "$(dirname "$0")/../.." && pwd)
 binary=${1:-$root/build/host/llmgate}
 work=$(mktemp -d)
