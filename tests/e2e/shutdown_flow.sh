@@ -6,7 +6,8 @@ export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/con
 mkdir -p "$HOME"
 export E2E_UPSTREAM_TOKEN=test-token
 failures=0
-check() { if "$@"; then echo "ok   $label"; else echo "FAIL $label"; failures=$((failures + 1)); fi; }
+started=$(date +%s)
+check() { elapsed=$(($(date +%s) - started)); if "$@"; then echo "ok   [${elapsed}s] $label"; else echo "FAIL [${elapsed}s] $label"; failures=$((failures + 1)); fi; }
 . "$(dirname "$0")/diagnose.sh"
 watchdog_seconds=100
 script_pid=$$

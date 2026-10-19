@@ -6,7 +6,8 @@ export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/con
 mkdir -p "$HOME"
 trap '"$binary" --config "$work/llmgate.jsonc" stop >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
 failures=0
-check() { if "$@"; then echo "ok   $label"; else echo "FAIL $label"; failures=$((failures + 1)); fi; }
+started=$(date +%s)
+check() { elapsed=$(($(date +%s) - started)); if "$@"; then echo "ok   [${elapsed}s] $label"; else echo "FAIL [${elapsed}s] $label"; failures=$((failures + 1)); fi; }
 
 port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
 cat > "$work/llmgate.jsonc" <<JSON
