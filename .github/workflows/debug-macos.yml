@@ -1,0 +1,49 @@
+name: debug-macos
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install gcc ninja cmake openssl@3
+      - run: cmake --preset host
+      - run: cmake --build --preset host --target llmgate
+      - name: time the commands with HOME and XDG overridden, as the flow tests do
+        run: |
+          set +e
+          work=$(mktemp -d)
+          binary="$PWD/build/host/llmgate"
+          probe() { label=$1; shift; start=$(date +%s); "$@" > /dev/null 2>&1; echo "$(( $(date +%s) - start )) s  exit=$?  $label"; }
+          echo "== with the runner's own HOME"
+          probe "python3 -c pass" python3 -c pass
+          probe "llmgate --version" "$binary" --version
+          export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
+          mkdir -p "$HOME"
+          printf '{"listen":"127.0.0.1:49555","upstream":{"base_url":"http://127.0.0.1:1"}}\n' > "$work/c.jsonc"
+          echo "== with HOME, XDG_STATE_HOME and XDG_CONFIG_HOME overridden"
+          probe "python3 -c pass (1st)" python3 -c pass
+          probe "python3 -c pass (2nd)" python3 -c pass
+          probe "python3 socket bind" python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'
+          probe "llmgate --version (1st)" "$binary" --version
+          probe "llmgate --version (2nd)" "$binary" --version
+          probe "llmgate --check-config" "$binary" --config "$work/c.jsonc" --check-config
+          probe "llmgate doctor --offline (1st)" "$binary" --config "$work/c.jsonc" doctor --offline
+          probe "llmgate doctor --offline (2nd)" "$binary" --config "$work/c.jsonc" doctor --offline
+          probe "llmgate setup" "$binary" --config "$work/c.jsonc" setup
+          start=$(date +%s)
+          "$binary" --config "$work/c.jsonc" serve > "$work/g.log" 2>&1 &
+          gw=$!
+          until grep -q "listening on" "$work/g.log" 2>/dev/null || [ $(( $(date +%s) - start )) -gt 60 ]; do sleep 0.2; done
+          echo "$(( $(date +%s) - start )) s  until the gateway logged 'listening'"
+          start=$(date +%s)
+          curl -s -m 20 -o /dev/null "http://127.0.0.1:49555/healthz?challenge=00"
+          echo "$(( $(date +%s) - start )) s  first /healthz request"
+          kill $gw 2>/dev/null
+          start=$(date +%s); wait $gw 2>/dev/null; echo "$(( $(date +%s) - start )) s  until the gateway exited after SIGTERM"

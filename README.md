@@ -1,6 +1,6 @@
 # llmgate
 
-A gateway that lets Claude Code talk to Copilot, OpenAI-compatible and Anthropic backends without losing anything silently. C++26 with static reflection, Apache-2.0.
+A gateway that lets Claude Code talk to GitHub Copilot and Anthropic backends without losing anything silently; other providers (ChatGPT/Codex, local OpenAI-compatible models, Gemini, Grok) are planned and are not built yet. C++26 with static reflection, Apache-2.0.
 
 Status: walking-skeleton phase (BET-1, decision on 2026-11-06). The Anthropic passthrough works end to end with the real Claude Code CLI against a scripted upstream (`tests/e2e/claude_through_gateway.sh`); the first run against GitHub Copilot needs your device login.
 
