@@ -7,11 +7,17 @@ mkdir -p "$HOME"
 failures=0
 check() { if "$@"; then echo "ok   $label"; else echo "FAIL $label"; failures=$((failures + 1)); fi; }
 cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "== the script ended with status $status; the gateway log:"
+    tail -n 40 "$work/state/llmgate/gateway.log" 2>/dev/null || echo "(no gateway log)"
+  fi
   kill $(cat "$work/state/llmgate/gateway.pid" 2>/dev/null) 2>/dev/null || true
   kill ${github_pid:-} ${squatter_pid:-} 2>/dev/null || true
   rm -rf "$work"
 }
 trap cleanup EXIT
+trap 'exit 143' TERM INT
 
 free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'; }
 port=$(free_port)

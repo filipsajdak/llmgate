@@ -8,11 +8,17 @@ export E2E_UPSTREAM_TOKEN=test-token
 failures=0
 check() { if "$@"; then echo "ok   $label"; else echo "FAIL $label"; failures=$((failures + 1)); fi; }
 cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "== the script ended with status $status; the gateway log:"
+    tail -n 40 "$work/state/llmgate/gateway.log" 2>/dev/null || echo "(no gateway log)"
+  fi
   kill $(cat "$work/state/llmgate/gateway.pid" 2>/dev/null) 2>/dev/null || true
   kill ${gateway_pid:-} ${upstream_pid:-} ${curl_pid:-} 2>/dev/null || true
   rm -rf "$work"
 }
 trap cleanup EXIT
+trap 'exit 143' TERM INT
 
 cat > "$work/upstream.py" <<'PY'
 import http.server, sys, time
