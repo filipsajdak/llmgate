@@ -24,6 +24,9 @@ Slices carry the trailer `Bet: BET-2`.
 | Switching, status line | Unit and end-to-end tests: picked target, role and session remaps, signed control endpoint, saved remaps, status line `via PROVIDER/MODEL`, `FALLBACK`, `switched` |
 | Cost at real request sizes | About 3 ms per MB of request body for one stream (README, Performance) |
 
-Not yet covered: advisor, compaction, prompt-cache reads across a switch, long context, a real fallback
-run, the 3,000-request soak, two Anthropic profiles side by side, the Linux CI for the scripted switching
-scenario. Decision on 2026-11-13.
+Also met (2026-10-21): a real fallback run (dead first provider, Claude login second: the session view names
+the second provider and marks the reply as a fallback); a twelve-turn session and a compaction on both real
+backends; opus and haiku turns; the soak (35,577 requests, no leak).
+
+Not yet covered: advisor, prompt-cache reads across a switch, long context at 1M, two Anthropic profiles side
+by side, and a real Claude Code run on a Codex or local-model backend (BET-3). Decision on 2026-11-13.
