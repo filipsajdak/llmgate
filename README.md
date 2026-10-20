@@ -341,6 +341,8 @@ Linux (the `linux` preset in the CI container, 3-second runs, ledger on) shows t
 
 Where the time goes at 100 KB (`sample` on macOS): the request body is scanned three times per request (about 0.09 ms), the usage ledger is opened, written and closed per request (about 0.035 ms), and copying the body to the upstream is the rest. Scanning once and keeping the ledger open are the two cheap wins if a shared gateway ever needs the headroom.
 
+Real Claude Code requests are much larger than the bench default: in a sample of one account's recent sessions the median context was 290k to 470k tokens (1.2 to 1.9 MB of JSON) and the largest about 4 MB. At those sizes (macOS, `--body-kb 2048 4096`) the gateway adds a time proportional to the body, about 3 ms per MB for one stream (6 ms at 2 MB, 12 ms at 4 MB, 0.05 to 0.1 s with eight streams at once) and about 6 ms of CPU per 2 MB request. A model turn at that context takes seconds, so the cost is under 0.5 % of it; scanning the body fewer than three times would only matter for far faster upstreams.
+
 ## Design decisions
 
 | Topic | Decision |
