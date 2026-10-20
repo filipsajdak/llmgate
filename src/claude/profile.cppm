@@ -50,6 +50,22 @@ constexpr std::string_view escaped_quote = R"('\'')";
 
 constexpr std::string_view placeholder_token = "none";
 
+constexpr std::string_view name_characters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
+constexpr std::string_view path_extra_characters = "./";
+
+constexpr bool made_of(std::string_view const text, std::string_view const allowed, std::string_view const also = {}) {
+    return std::ranges::all_of(text, [&](char const c) { return allowed.contains(c) || also.contains(c); });
+}
+
+constexpr std::string profile_directory(std::string_view const name) {
+    if (name.empty() || name.front() == '-' || !made_of(name, name_characters)) {
+        return {};
+    }
+    std::string out;
+    text::append_all(out, "~/.claude-llmgate-", name);
+    return out;
+}
+
 constexpr environment_list connection_variables(launch_config const& settings, std::string_view const gateway_url, std::string_view const client_key,
                                                 std::string_view const expanded_profile_dir) {
     return {
@@ -116,6 +132,21 @@ constexpr std::string shell_quote(std::string_view const text) {
     std::string out;
     out.reserve(text.size() + 2);
     append_shell_quoted(out, text);
+    return out;
+}
+
+constexpr bool plain_path(std::string_view const text) {
+    return !text.empty() && made_of(text, name_characters, path_extra_characters);
+}
+
+constexpr std::string shell_word(std::string_view const text) {
+    return plain_path(text) ? std::string{text} : shell_quote(text);
+}
+
+constexpr std::string gateway_command_file(std::string_view const binary, std::string_view const config_path) {
+    std::string out;
+    text::append_all(out, "---\ndescription: Switch the provider behind a model role for this session, or show the routing\nargument-hint: use opus claude-opus-5.5@copilot | use opus clear | route | targets\nallowed-tools: Bash(",
+                     shell_word(binary), ":*)\n---\n!`", shell_word(binary), " --config ", shell_word(config_path), " $ARGUMENTS --session ${CLAUDE_SESSION_ID}`\n");
     return out;
 }
 

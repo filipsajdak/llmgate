@@ -65,6 +65,14 @@ const suite arguments_suite = [] {
         expect(served_into({.model = "S"}, "garbage").provider.empty());
     };
 
+    "capability_profile_is_a_global_flag_before_the_command"_test = [] {
+        auto const parsed = parse(words({"--profile", "siili", "claude", "-p", "hi"}));
+
+        expect(parsed->profile == "siili" && parsed->which == command::claude && parsed->passthrough == words({"-p", "hi"}));
+        expect(parse(words({"claude"}))->profile.empty());
+        expect(!parse(words({"--profile"})).has_value());
+    };
+
     "capability_setup_and_env_flags_are_read"_test = [] {
         auto const setup = parse(words({"setup", "--service", "--dry-run", "--vscode", "/tmp/s.json"}));
         auto const env = parse(words({"env", "--json"}));
@@ -180,7 +188,7 @@ const suite arguments_suite = [] {
 
     "capability_the_usage_text_is_pinned"_test = [] {
         expect(usage_text ==
-               "usage: llmgate [--config PATH] [serve | login | claude ARGS... | env [--json] [--vscode [FILE]] | setup [--vscode [FILE]] [--service] [--dry-run] | "
+               "usage: llmgate [--config PATH] [--profile NAME] [serve | login | claude ARGS... | env [--json] [--vscode [FILE]] | setup [--vscode [FILE]] [--service] [--dry-run] | "
                "statusline | status | stop | usage [--json] [--days N] | doctor [--json] [--offline] | quota [--json] | use [--session ID] ARGS... | targets | route [--session ID] ARGS...] | --check-config | --version | --print-example | --print-schema | --print-config-table")
             << usage_text;
     };

@@ -71,6 +71,7 @@ const suite commands_suite = [] {
         expect(box.unit_written());
         expect(runs >= 1_i);
         expect(std::filesystem::exists(box.root / "profile" / "settings.json"));
+        expect(std::filesystem::exists(box.root / "profile" / "commands" / "gateway.md"));
     };
 
     "limit_setup_reports_a_service_that_cannot_be_loaded_and_exits_non_zero"_test = [] {

@@ -143,6 +143,22 @@ void announce_write(std::filesystem::path const& path, bool const dry_run) {
     std::println("{} {}", dry_run ? "would write" : "writing    ", path.string());
 }
 
+outcome write_text(std::filesystem::path const& path, std::string const& text, bool const dry_run) {
+    constexpr mode_t file_mode = 0600;
+    if (auto const current = read_file(path); current && *current == text) {
+        std::println("unchanged  {}", path.string());
+        return {};
+    }
+    announce_write(path, dry_run);
+    if (dry_run) {
+        return {};
+    }
+    if (auto const written = process::write_file_atomic(path, text, file_mode, true); !written) {
+        return std::unexpected{path.string() + ": " + written.error().message()};
+    }
+    return {};
+}
+
 outcome write_json(std::filesystem::path const& path, json::value const& document, bool const dry_run, bool const private_parent) {
     constexpr mode_t file_mode = 0600;
     auto const text = json::write(document, 2);
@@ -313,7 +329,11 @@ inline outcome ensure_profile(context const& where, bool const dry_run) {
         return std::unexpected{existing.error()};
     }
     auto merged = claude::merge_settings(std::move(*existing), where.settings.claude.effort, detail::status_line_command(where));
-    return detail::write_json(settings_path, merged, dry_run, true);
+    if (auto written = detail::write_json(settings_path, merged, dry_run, true); !written) {
+        return written;
+    }
+    return detail::write_text(directory / "commands" / "gateway.md",
+                              claude::gateway_command_file(where.binary.string(), process::expand_home(where.options.config_path)), dry_run);
 }
 
 inline outcome ensure_gateway(context const& where) {

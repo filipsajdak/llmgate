@@ -155,6 +155,31 @@ const suite claude_suite = [] {
         expect(claude::shell_quote("a'b'c") == R"('a'\''b'\''c')");
     };
 
+    "capability_a_named_profile_is_its_own_directory_next_to_the_default"_test = [] {
+        expect(claude::profile_directory("siili") == "~/.claude-llmgate-siili");
+        expect(claude::profile_directory("a_b-2") == "~/.claude-llmgate-a_b-2");
+    };
+
+    "limit_a_profile_name_cannot_escape_the_home_directory_or_be_empty"_test = [] {
+        for (std::string_view const bad : {"", "../x", "a/b", "a b", ".", "-x", "x;rm"}) {
+            expect(claude::profile_directory(bad).empty()) << bad;
+        }
+    };
+
+    "capability_the_gateway_slash_command_runs_llmgate_with_the_session_id_and_may_only_run_llmgate"_test = [] {
+        auto const file = claude::gateway_command_file("/opt/bin/llmgate", "/home/me/.config/llmgate/config.jsonc");
+
+        expect(file.contains("allowed-tools: Bash(/opt/bin/llmgate:*)"));
+        expect(file.contains("!`/opt/bin/llmgate --config /home/me/.config/llmgate/config.jsonc $ARGUMENTS --session ${CLAUDE_SESSION_ID}`"));
+        expect(file.starts_with("---\n"));
+    };
+
+    "limit_a_binary_path_with_a_space_is_quoted_in_the_command_and_the_permission"_test = [] {
+        auto const file = claude::gateway_command_file("/my apps/llmgate", "/c.jsonc");
+
+        expect(file.contains("Bash('/my apps/llmgate':*)") && file.contains("!`'/my apps/llmgate' --config /c.jsonc"));
+    };
+
     "capability_the_default_environment_is_exactly_the_documented_variables_in_order"_test = [] {
         constexpr std::string_view expected = R"(export CLAUDE_CONFIG_DIR='/home/me/.claude-llmgate'
 export ANTHROPIC_BASE_URL='http://127.0.0.1:9480/anthropic'

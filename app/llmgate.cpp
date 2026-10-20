@@ -6,6 +6,7 @@
 import std;
 import llmgate.arguments;
 import llmgate.async;
+import llmgate.claude;
 import llmgate.commands;
 import llmgate.config_docs;
 import llmgate.copilot;
@@ -259,10 +260,27 @@ commands::context make_context(arguments::options const& parsed, std::expected<g
             .config_error = settings ? std::string{} : settings.error()};
 }
 
+std::optional<int> apply_profile(arguments::options const& parsed, std::expected<gateway::config, std::string>& settings) {
+    if (parsed.profile.empty()) {
+        return std::nullopt;
+    }
+    auto directory = claude::profile_directory(parsed.profile);
+    if (directory.empty()) {
+        return fail(exit_usage, "--profile takes letters, digits, - and _ only");
+    }
+    if (settings) {
+        settings->claude.profile_dir = std::move(directory);
+    }
+    return std::nullopt;
+}
+
 int run(arguments::options const& parsed, char const* const program) {
     auto settings = load_config(parsed.config_path);
     if (!settings && !arguments::command_marked<arguments::tolerant>(parsed.which)) {
         return fail(exit_config, settings.error());
+    }
+    if (auto const refused = apply_profile(parsed, settings)) {
+        return *refused;
     }
     if (parsed.check_config) {
         return check_config(settings);

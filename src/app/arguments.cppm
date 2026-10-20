@@ -74,6 +74,7 @@ struct limits {
 struct options {
     command which = command::serve;
     [[= flag{"--config"}]] [[= operand{"PATH"}]] std::string config_path = "~/.config/llmgate/config.jsonc";
+    [[= flag{"--profile"}]] [[= operand{"NAME"}]] std::string profile{};
     [[= flag{"--check-config"}]] bool check_config = false;
     [[= flag{"--version"}]] bool show_version = false;
     [[= flag{"--print-example"}]] [[= prints{document::example}]] bool print_example = false;

@@ -181,6 +181,25 @@ Anthropic's gateway guide says that with only `ANTHROPIC_BASE_URL` set, Claude C
 - The gateway refuses to start a forwarding provider together with `client_key_env` (the same header cannot carry both the gateway key and the login) or on a non-loopback listen address; `llmgate --check-config` says so.
 - One Claude subscription account is one Claude Code profile. Anthropic's terms do not allow a gateway to collect, store or intermediate subscription credentials, so llmgate does not hold subscription tokens and cannot switch between two subscription accounts inside a running session; `/login` in Claude Code does that by hand.
 
+## Switching providers, models and accounts
+
+Every model a provider serves is a target with an id of the form `claude-MODEL@PROVIDER` (the `claude` keeps it in Claude Code's `/model` list). Set `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` and `/model` lists them next to the aliases; picking one sends the session to exactly that provider and model, with no fallback. A provider's `offer` list adds models that are not in its `models` map.
+
+A request is routed by the first rule that applies: a picked target, a remap for this session, a remap for the role, then `routes` and `fallback`.
+
+| Command | Effect |
+|---|---|
+| `llmgate targets` | list the targets |
+| `llmgate use opus claude-opus-5.5@copilot` | send the opus role to that target, for every session; saved in the state directory and kept across restarts |
+| `llmgate use opus clear`, `llmgate use clear` | remove one remap, or all |
+| `llmgate use sonnet TARGET --session ID` | the same for one Claude Code session, kept in memory |
+| `llmgate route [MODEL] [--session ID]` | show which provider would answer, and why |
+| `/gateway use sonnet TARGET` | the same from inside Claude Code, for the current session (`llmgate setup` writes the command) |
+
+The commands are signed with the identity key, so only a process that can read it can change the routing. The status line shows `via PROVIDER/MODEL` for the reply the session last received, `FALLBACK` when a later provider than the first one answered, and `switched` when the provider or model changed since the previous reply. Switching provider in the middle of a conversation starts a cold prompt cache, and Claude Code recovers from a rejected thinking signature on its own.
+
+Several accounts of one provider are several provider entries. A Claude subscription account is a Claude Code profile: `llmgate --profile NAME claude` uses `~/.claude-llmgate-NAME` as `CLAUDE_CONFIG_DIR`, and each profile is logged in once with `/login` (see the credential section above). A running Claude Code cannot change profile; `/login` inside it switches by hand.
+
 ## Stopping, doctor and quota
 
 `SIGINT` or `SIGTERM` makes `llmgate serve` stop accepting and close its listening socket. Requests already running finish for up to `time.drain` (default `10s`); new requests on open keep-alive connections get 503, and idle connections do not hold the drain. Then the gateway removes the pid file it owns (the one `llmgate claude` wrote for it) and exits 0. A second signal exits 130 at once; if the drain times out the gateway says how many requests it abandoned and still exits 0. The signal handler only writes a byte to a self-pipe that the reactor waits on next to the listening socket, so there is no flag polling and no work inside the handler. The usage ledger is appended per request, so there is nothing left to flush.

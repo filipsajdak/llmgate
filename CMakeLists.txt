@@ -265,7 +265,7 @@ llmgate_fuzz(config_docs llmgate_properties)
 
 add_executable(llmgate app/llmgate.cpp)
 target_compile_definitions(llmgate PRIVATE LLMGATE_VERSION="${PROJECT_VERSION}")
-target_link_libraries(llmgate PRIVATE llmgate_config_docs llmgate_reflect llmgate_usage llmgate_arguments llmgate_commands llmgate_process llmgate_routing llmgate_copilot llmgate_gateway llmgate_httpio llmgate_json llmgate_net llmgate_shutdown llmgate_tls llmgate_contracts)
+target_link_libraries(llmgate PRIVATE llmgate_claude llmgate_config_docs llmgate_reflect llmgate_usage llmgate_arguments llmgate_commands llmgate_process llmgate_routing llmgate_copilot llmgate_gateway llmgate_httpio llmgate_json llmgate_net llmgate_shutdown llmgate_tls llmgate_contracts)
 add_test(NAME llmgate_version COMMAND llmgate --version)
 set_tests_properties(llmgate_version PROPERTIES LABELS unit PASS_REGULAR_EXPRESSION "llmgate [0-9]")
 add_test(NAME llmgate_example_config COMMAND llmgate --check-config --config ${CMAKE_CURRENT_SOURCE_DIR}/config.example.jsonc)
