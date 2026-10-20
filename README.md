@@ -207,12 +207,12 @@ Several accounts of one provider are several provider entries. A Claude subscrip
 <!-- compat-matrix:begin -->
 | Scenario | GitHub Copilot | Anthropic (Claude login) | Scripted (selftest) |
 |---|---|---|---|
-| Plan mode answers with a plan and changes no file (`plan-mode`) | not run | pass | pass |
-| Delegate to a subagent (`subagent`) | not run | pass | pass |
-| One text turn (`text-turn`) | not run | pass | pass |
-| A thinking block is returned and accepted back (`thinking`) | not run | pass | pass |
-| Fix a bug through a tool loop (read, edit, run) (`tool-loop`) | not run | pass | pass |
-| Create a file with the Write tool (`write-file`) | not run | pass | pass |
+| Plan mode answers with a plan and changes no file (`plan-mode`) | pass | pass | pass |
+| Delegate to a subagent (`subagent`) | pass | pass | pass |
+| One text turn (`text-turn`) | pass | pass | pass |
+| A thinking block is returned and accepted back (`thinking`) | pass | pass | pass |
+| Fix a bug through a tool loop (read, edit, run) (`tool-loop`) | pass | pass | pass |
+| Create a file with the Write tool (`write-file`) | pass | pass | pass |
 <!-- compat-matrix:end -->
 
 ## Stopping, doctor and quota
