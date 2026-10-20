@@ -1,6 +1,8 @@
 {
+  "compaction": "PASS",
   "hooks": "PASS",
   "image": "PASS",
+  "long-session": "PASS",
   "mcp": "PASS",
   "plan-mode": "PASS",
   "skill": "PASS",

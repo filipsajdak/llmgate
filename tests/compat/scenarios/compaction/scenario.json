@@ -1,0 +1,1 @@
+{"title": "The session is compacted and still knows what came before", "feature": "compaction", "needs": ["real_model"], "timeout": 900}

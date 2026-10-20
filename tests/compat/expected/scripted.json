@@ -1,7 +1,9 @@
 {
+  "compaction": "UNSUPPORTED",
   "fallback": "PASS",
   "hooks": "PASS",
   "image": "PASS",
+  "long-session": "UNSUPPORTED",
   "mcp": "PASS",
   "plan-mode": "PASS",
   "skill": "PASS",
