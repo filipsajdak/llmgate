@@ -8,12 +8,53 @@ namespace {
 using namespace boost::ut;
 using namespace llmgate::tls;
 
-constexpr std::byte mlkem_group_high{0x11};
-constexpr std::byte mlkem_group_low{0xEC};
+constexpr std::uint16_t mlkem_group = 0x11EC;
 constexpr std::byte tls_handshake_record{0x16};
+constexpr std::size_t record_header_size = 5;
+constexpr std::size_t handshake_header_size = 4;
+constexpr std::size_t version_and_random_size = 2 + 32;
+constexpr std::uint16_t supported_groups_extension = 0x000A;
+constexpr std::size_t byte_bits = 8;
+
+struct hello_reader {
+    std::span<std::byte const> bytes;
+    std::size_t at = 0;
+
+    std::size_t number(std::size_t const width) {
+        std::size_t value = 0;
+        for (std::size_t used = 0; used < width && at < bytes.size(); ++used) {
+            value = (value << byte_bits) | std::to_integer<std::size_t>(bytes[at++]);
+        }
+        return value;
+    }
+
+    void skip_vector(std::size_t const length_width) { at += number(length_width); }
+};
+
+std::vector<std::uint16_t> offered_groups(std::span<std::byte const> hello) {
+    hello_reader in{.bytes = hello, .at = record_header_size + handshake_header_size + version_and_random_size};
+    in.skip_vector(1);
+    in.skip_vector(2);
+    in.skip_vector(1);
+    auto const extensions_end = in.number(2) + in.at;
+    std::vector<std::uint16_t> groups;
+    while (in.at + 4 <= std::min(extensions_end, hello.size())) {
+        auto const type = in.number(2);
+        auto const length = in.number(2);
+        auto const next = in.at + length;
+        if (type == supported_groups_extension) {
+            auto const listed = in.number(2);
+            for (std::size_t used = 0; used < listed; used += 2) {
+                groups.push_back(static_cast<std::uint16_t>(in.number(2)));
+            }
+        }
+        in.at = next;
+    }
+    return groups;
+}
 
 bool contains_group(std::span<std::byte const> hello) {
-    return std::ranges::contains_subrange(hello, std::array{mlkem_group_high, mlkem_group_low});
+    return std::ranges::contains(offered_groups(hello), mlkem_group);
 }
 
 std::vector<std::byte> client_hello(group_policy const policy) {
