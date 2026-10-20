@@ -207,7 +207,12 @@ Several accounts of one provider are several provider entries. A Claude subscrip
 <!-- compat-matrix:begin -->
 | Scenario | GitHub Copilot | Anthropic (Claude login) | Scripted (selftest) |
 |---|---|---|---|
+| A PostToolUse hook fires after a tool call (`hooks`) | pass | pass | pass |
+| An image is read and understood (`image`) | pass | pass | pass |
+| A tool from an MCP server is listed and called (`mcp`) | pass | pass | pass |
 | Plan mode answers with a plan and changes no file (`plan-mode`) | pass | pass | pass |
+| A project skill is discovered and used (`skill`) | pass | pass | pass |
+| A project slash command runs (`slash-command`) | pass | pass | pass |
 | Delegate to a subagent (`subagent`) | pass | pass | pass |
 | One text turn (`text-turn`) | pass | pass | pass |
 | A thinking block is returned and accepted back (`thinking`) | pass | pass | pass |

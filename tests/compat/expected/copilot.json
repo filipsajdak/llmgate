@@ -1,5 +1,10 @@
 {
+  "hooks": "PASS",
+  "image": "PASS",
+  "mcp": "PASS",
   "plan-mode": "PASS",
+  "skill": "PASS",
+  "slash-command": "PASS",
   "subagent": "PASS",
   "text-turn": "PASS",
   "thinking": "PASS",

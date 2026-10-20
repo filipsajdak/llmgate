@@ -1,0 +1,3 @@
+{ "title": "A PostToolUse hook fires after a tool call", "feature": "hooks", "needs": ["tools", "hooks"],
+  "prompt": "Create a file named note.txt in this directory containing exactly: noted",
+  "claude_args": ["--permission-mode", "acceptEdits", "--allowedTools", "Write"] }

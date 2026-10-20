@@ -1,0 +1,3 @@
+{ "title": "A tool from an MCP server is listed and called", "feature": "MCP", "needs": ["tools", "mcp"],
+  "prompt": "Call the lookup tool of the compat MCP server and write exactly what it returns into answer.txt.",
+  "claude_args": ["--permission-mode", "acceptEdits", "--mcp-config", "mcp.json", "--strict-mcp-config", "--allowedTools", "mcp__compat__lookup,Write"] }

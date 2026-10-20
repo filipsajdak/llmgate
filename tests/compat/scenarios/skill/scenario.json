@@ -1,0 +1,3 @@
+{ "title": "A project skill is discovered and used", "feature": "skills", "needs": ["tools", "skills"],
+  "prompt": "Shout the word gateway.",
+  "claude_args": ["--permission-mode", "acceptEdits", "--allowedTools", "Skill,Write"] }

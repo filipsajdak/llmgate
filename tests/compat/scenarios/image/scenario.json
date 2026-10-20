@@ -1,0 +1,3 @@
+{ "title": "An image is read and understood", "feature": "images", "needs": ["tools", "images"],
+  "prompt": "Look at red.png in this directory. What is its dominant colour? Answer with one word.",
+  "claude_args": ["--allowedTools", "Read"] }

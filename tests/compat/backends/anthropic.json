@@ -1,1 +1,1 @@
-{ "title": "Anthropic (Claude login)", "kind": "real", "provides": ["tools", "plan_mode", "subagents", "thinking", "images", "advisor"] }
+{"title": "Anthropic (Claude login)", "kind": "real", "provides": ["tools", "plan_mode", "subagents", "thinking", "images", "advisor", "skills", "slash_commands", "hooks", "mcp"]}

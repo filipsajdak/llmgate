@@ -1,0 +1,3 @@
+{ "title": "A project slash command runs", "feature": "slash commands", "needs": ["tools", "slash_commands"],
+  "prompt": "/greet world",
+  "claude_args": ["--permission-mode", "acceptEdits", "--allowedTools", "Write"] }

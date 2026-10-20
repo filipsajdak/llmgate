@@ -1,0 +1,1 @@
+transcript_result_contains red
