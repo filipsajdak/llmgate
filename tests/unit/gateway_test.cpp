@@ -809,6 +809,56 @@ const suite gateway_suite = [] {
         expect(answer.status == 400 && answer.body.contains("ghost"));
     };
 
+    "capability_the_session_view_reports_the_provider_that_last_answered_that_session"_test = [] {
+        duo d;
+        auto turn = messages_request(chat("opus", false), "/anthropic/v1/messages", "");
+        turn.fields.add("x-claude-code-session-id", "sess-1");
+
+        (void)d.ask(std::move(turn));
+        auto view = messages_request("");
+        view.method = "GET";
+        view.target = "/llmgate/session?id=sess-1";
+        auto const body = d.ask(std::move(view)).body;
+
+        expect(body.contains(R"json("provider":"a")json") && body.contains(R"json("upstream":"model-a")json") && body.contains(R"json("source":"config")json"));
+        expect(body.contains(R"json("fallback":false)json") && body.contains(R"json("switched":false)json"));
+    };
+
+    "capability_a_fallback_answer_is_marked_and_a_later_remap_is_marked_as_a_switch"_test = [] {
+        duo d;
+        d.first.mode = behaviour::server_error;
+        auto ask_in_session = [&d] {
+            auto turn = messages_request(chat("opus", false), "/anthropic/v1/messages", "");
+            turn.fields.add("x-claude-code-session-id", "sess-2");
+            (void)d.ask(std::move(turn));
+            auto view = messages_request("");
+            view.method = "GET";
+            view.target = "/llmgate/session?id=sess-2";
+            return d.ask(std::move(view)).body;
+        };
+
+        auto const after_fallback = ask_in_session();
+        control::overrides pins;
+        pins.global["opus"] = {.provider = "a", .upstream = "model-a"};
+        d.first.mode = behaviour::json_ok;
+        d.gateway.use_overrides(pins);
+        auto const after_remap = ask_in_session();
+
+        expect(after_fallback.contains(R"json("provider":"b")json") && after_fallback.contains(R"json("fallback":true)json"));
+        expect(after_remap.contains(R"json("provider":"a")json") && after_remap.contains(R"json("switched":true)json") && after_remap.contains(R"json("fallback":false)json"));
+    };
+
+    "limit_an_unknown_session_view_is_empty_not_an_error"_test = [] {
+        duo d;
+        auto view = messages_request("");
+        view.method = "GET";
+        view.target = "/llmgate/session?id=nobody";
+
+        auto const answer = d.ask(std::move(view));
+
+        expect(answer.status == 200 && !answer.body.contains("provider"));
+    };
+
     "capability_a_picked_target_goes_to_exactly_that_provider_with_its_upstream_model"_test = [] {
         duo d;
 

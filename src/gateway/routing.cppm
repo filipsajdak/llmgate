@@ -39,6 +39,7 @@ enum class route {
     statistics [[= endpoint{"GET", "/llmgate/stats"}]],
     control [[= endpoint{"POST", "/llmgate/control"}]],
     route_view [[= endpoint{"GET", "/llmgate/route"}]],
+    session_view [[= endpoint{"GET", "/llmgate/session"}]],
     unknown_path,
     wrong_method,
 };

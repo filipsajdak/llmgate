@@ -94,6 +94,10 @@ llmgate use opus clear >/dev/null
 check answered_by a
 label="a session remap needs the session to match"
 check sh -c "'$binary' --config '$config' use opus claude-model-b@b --session s1 && '$binary' --config '$config' route claude-opus-5-5 --session s1 | grep -q session_remap && '$binary' --config '$config' route claude-opus-5-5 --session s2 | grep -q '\"config\"'"
+label="the status line names the provider that answered the session"
+curl -s -X POST "http://127.0.0.1:$port/anthropic/v1/messages" -H 'content-type: application/json' -H 'x-claude-code-session-id: sess-e2e' \
+  -d '{"model":"claude-opus-5-5","max_tokens":8,"messages":[]}' > /dev/null
+check sh -c "echo '{\"session_id\":\"sess-e2e\",\"model\":{\"display_name\":\"Opus\"},\"workspace\":{\"current_dir\":\"/w/p\"}}' | CLAUDE_CONFIG_DIR=/x/.claude-llmgate-siili '$binary' --config '$config' statusline | head -1 | grep -q 'Opus via a/model-a as siili'"
 label="an unknown target is refused with a non-zero exit"
 check sh -c "! '$binary' --config '$config' use opus claude-nope@b 2>/dev/null"
 

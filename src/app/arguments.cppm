@@ -398,7 +398,28 @@ constexpr statusline::snapshot statusline_input(std::string_view const text) {
     auto const directory = workspace.current_dir.empty() ? lenient_at<std::string>(*parsed, {"cwd"}) : workspace.current_dir;
     return {.model = model.display_name.empty() ? model.id : model.display_name,
             .directory = directory,
-            .context_percent = static_cast<int>(std::clamp(context.used_percentage, 0.0, percent_cap))};
+            .context_percent = static_cast<int>(std::clamp(context.used_percentage, 0.0, percent_cap)),
+            .session_id = lenient_at<std::string>(*parsed, {"session_id"})};
+}
+
+struct served_wire {
+    std::string provider{};
+    std::string upstream{};
+    bool fallback = false;
+    bool switched = false;
+};
+
+constexpr statusline::snapshot served_into(statusline::snapshot now, std::string_view const body) {
+    auto const parsed = json::parse(body, {.jsonc = false});
+    if (!parsed) {
+        return now;
+    }
+    auto const wire = json::read<served_wire>(*parsed, {.allow_unknown_keys = true}).value_or(served_wire{});
+    now.provider = wire.provider;
+    now.upstream_model = wire.upstream;
+    now.fallback = wire.fallback;
+    now.switched = wire.switched;
+    return now;
 }
 
 constexpr std::pair<std::uint64_t, std::uint64_t> counters_from(std::string_view const body) {

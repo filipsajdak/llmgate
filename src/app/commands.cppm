@@ -856,6 +856,18 @@ inline int run_usage(context const& where) {
     return 0;
 }
 
+inline statusline::snapshot fetch_served(arguments::gateway_address const& address, context const& where, statusline::snapshot now) {
+    if (now.session_id.empty()) {
+        return now;
+    }
+    auto const view = process::http_get(address.host, address.port, "/llmgate/session?id=" + now.session_id, detail::key_headers(where.settings), statusline_limit);
+    if (view && view->status == 200) {
+        now = arguments::served_into(std::move(now), view->body);
+    }
+    now.profile = statusline::profile_of(detail::variable("CLAUDE_CONFIG_DIR").value_or(std::string{}));
+    return now;
+}
+
 inline int run_statusline(context const& where, std::string_view const input) {
     auto now = arguments::statusline_input(input);
     if (auto const address = detail::address_of(where.settings)) {
@@ -871,6 +883,7 @@ inline int run_statusline(context const& where, std::string_view const input) {
             now.budget_percent = static_cast<int>(head.percent);
             now.budget_window = head.window;
             now.budget_state = head.state;
+            now = fetch_served(*address, where, std::move(now));
         }
     }
     if (!now.directory.empty()) {

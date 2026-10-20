@@ -52,6 +52,19 @@ const suite arguments_suite = [] {
         expect(parse(words({"targets"}))->which == command::targets);
     };
 
+    "capability_the_statusline_input_carries_the_session_id"_test = [] {
+        expect(statusline_input(R"({"session_id":"abc-1","model":{"id":"m"}})").session_id == "abc-1");
+        expect(statusline_input("{}").session_id.empty());
+    };
+
+    "capability_the_served_view_fills_the_provider_part_of_the_snapshot"_test = [] {
+        auto const now = served_into({.model = "S"}, R"({"provider":"copilot","upstream":"m","source":"config","fallback":true,"switched":false})");
+
+        expect(now.provider == "copilot" && now.upstream_model == "m" && now.fallback && !now.switched && now.model == "S");
+        expect(served_into({.model = "S"}, "{}").provider.empty());
+        expect(served_into({.model = "S"}, "garbage").provider.empty());
+    };
+
     "capability_setup_and_env_flags_are_read"_test = [] {
         auto const setup = parse(words({"setup", "--service", "--dry-run", "--vscode", "/tmp/s.json"}));
         auto const env = parse(words({"env", "--json"}));

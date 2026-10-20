@@ -283,6 +283,11 @@ struct planned {
     std::optional<std::string> upstream{};
 };
 
+struct planned_route {
+    std::vector<planned> steps{};
+    std::string source{};
+};
+
 
 std::pair<std::string, json::value> provider_member(std::string_view const name, provider_stats const& counts, selection::circuit const state) {
     return {std::string{name}, json::to_value(provider_report{.counts = counts, .circuit = state})};
@@ -531,6 +536,7 @@ private:
             case routing::route::models: return detail::models_json(alias_names(), targets_);
             case routing::route::health: return health_body(target);
             case routing::route::route_view: return route_body(target);
+            case routing::route::session_view: return session_body(target);
             case routing::route::statistics: return detail::stats_json(counters_, usage::summary_json(ledger_, settings_.usage.budget, clock_()), providers_object());
             default: return std::nullopt;
         }
@@ -583,6 +589,11 @@ private:
             persist_overrides_(overrides_);
         }
         return {.status = 200, .body = R"({"status":"ok"})"};
+    }
+
+    std::string session_body(std::string_view const target) const {
+        auto const found = served_.items.find(routing::query_value(target, "id"));
+        return found == served_.items.end() ? std::string{"{}"} : json::write(json::to_value(found->second));
     }
 
     std::string route_body(std::string_view const target) const {
@@ -677,6 +688,7 @@ private:
         }
         detail::request_note note{.requested = std::move(first->requested), .session = usage::session_of(incoming.body), .began = std::chrono::steady_clock::now()};
         auto order = plan_for(incoming, note);
+        note.session = session_for(incoming, note);
         co_return co_await run_providers(incoming, out, std::move(order), std::move(note));
     }
 
@@ -685,15 +697,15 @@ private:
         return header ? std::string{*header} : note.session;
     }
 
-    std::vector<detail::planned> plan_for(httpio::request const& incoming, detail::request_note const& note) const {
+    detail::planned_route plan_for(httpio::request const& incoming, detail::request_note const& note) const {
         auto const role = usage::role_of(note.requested);
         auto const configured = selection::order_for(routes_, role, declared_);
         auto const chosen = control::resolve({.requested = note.requested, .role = role, .session = session_for(incoming, note)}, targets_, overrides_, configured);
-        std::vector<detail::planned> steps;
+        detail::planned_route out{.source = std::string{reflect::enum_name(chosen.source)}};
         for (auto const& item : chosen.steps) {
-            steps.push_back({.index = index_of(item.provider), .upstream = item.upstream});
+            out.steps.push_back({.index = index_of(item.provider), .upstream = item.upstream});
         }
-        return steps;
+        return out;
     }
 
     std::size_t index_of(std::string_view const name) const {
@@ -702,11 +714,11 @@ private:
     }
 
     template <net::byte_stream Client>
-    async::task<net::result_void> run_providers(httpio::request const& incoming, httpio::response_writer<Client>& out, std::vector<detail::planned> order,
+    async::task<net::result_void> run_providers(httpio::request const& incoming, httpio::response_writer<Client>& out, detail::planned_route order,
                                                 detail::request_note note) {
         std::optional<detail::held_reply> held;
         std::size_t last = 0;
-        for (auto const& step : order) {
+        for (auto const& step : order.steps) {
             auto const index = step.index;
             if (!admit(index)) {
                 continue;
@@ -714,12 +726,22 @@ private:
             auto result = co_await attempt(index, step.upstream, incoming, out, note);
             settle(index, result.state);
             if (result.delivered) {
+                if (result.state == detail::health::healthy) {
+                    remember_served(note, order, step);
+                }
                 co_return result.client;
             }
             held = std::move(result.held);
             last = index;
         }
         co_return co_await deliver_failure(out, std::move(held), last, std::move(note));
+    }
+
+    void remember_served(detail::request_note const& note, detail::planned_route const& order, detail::planned const& step) {
+        auto const& chosen = providers_[step.index];
+        auto const upstream = step.upstream ? *step.upstream : detail::alias_of(chosen.settings.models, note.requested).value_or(note.requested);
+        control::record(served_, note.session,
+                        {.provider = chosen.name, .upstream = upstream, .source = order.source, .fallback = step.index != order.steps.front().index});
     }
 
     bool admit(std::size_t const index) {
@@ -1014,6 +1036,7 @@ private:
     std::vector<selection::role_route> routes_;
     std::vector<control::target> targets_;
     control::overrides overrides_;
+    control::registry served_;
     std::function<void(control::overrides const&)> persist_overrides_;
     std::vector<std::string> declared_;
     net::connection_pool<net::any_stream> pool_;

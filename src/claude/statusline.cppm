@@ -21,6 +21,12 @@ struct snapshot {
     int budget_percent = 0;
     std::string budget_window{};
     std::string budget_state{};
+    std::string session_id{};
+    std::string provider{};
+    std::string upstream_model{};
+    bool fallback = false;
+    bool switched = false;
+    std::string profile{};
 };
 
 constexpr std::size_t bar_width = 10;
@@ -101,9 +107,30 @@ constexpr std::string context_line(snapshot const& now) {
     return line + gateway_part(now);
 }
 
+constexpr std::string_view profile_prefix = ".claude-llmgate-";
+
+constexpr std::string profile_of(std::string_view directory) {
+    while (directory.ends_with('/')) {
+        directory.remove_suffix(1);
+    }
+    auto const name = directory.substr(directory.rfind('/') == std::string_view::npos ? 0 : directory.rfind('/') + 1);
+    return name.starts_with(profile_prefix) ? std::string{name.substr(profile_prefix.size())} : std::string{};
+}
+
+constexpr std::string served_part(snapshot const& now) {
+    if (now.provider.empty()) {
+        return {};
+    }
+    std::string part;
+    text::append_all(part, " via ", now.provider, now.upstream_model.empty() ? "" : "/", now.upstream_model, now.fallback ? " FALLBACK" : "",
+                     now.switched ? " switched" : "", now.profile.empty() ? "" : " as ", now.profile);
+    return part;
+}
+
 constexpr std::string render(snapshot const& now) {
     std::string first = "[llmgate] ";
     first += now.model.empty() ? "model?" : now.model;
+    first += served_part(now);
     first += " | " + base_name(now.directory);
     if (!now.branch.empty()) {
         first += " | " + now.branch;

@@ -209,6 +209,35 @@ constexpr std::string apply(overrides& book, std::string_view const text, std::s
     return std::format("unknown action {}", what->action);
 }
 
+struct served {
+    std::string provider{};
+    std::string upstream{};
+    std::string source{};
+    bool fallback = false;
+    bool switched = false;
+};
+
+struct registry {
+    std::map<std::string, served, std::less<>> items{};
+    std::deque<std::string> order{};
+};
+
+constexpr void record(registry& book, std::string const& session, served now) {
+    if (session.empty()) {
+        return;
+    }
+    if (auto const before = book.items.find(session); before != book.items.end()) {
+        now.switched = before->second.provider != now.provider || before->second.upstream != now.upstream;
+    }
+    book.items[session] = std::move(now);
+    std::erase(book.order, session);
+    book.order.push_back(session);
+    while (book.items.size() > max_sessions) {
+        book.items.erase(book.order.front());
+        book.order.pop_front();
+    }
+}
+
 struct saved_pin {
     std::string role{};
     std::string provider{};

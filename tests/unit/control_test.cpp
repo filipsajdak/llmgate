@@ -167,6 +167,40 @@ const suite control_suite = [] {
         expect(load_pins("").has_value() && load_pins("")->global.empty());
     };
 
+    "capability_the_registry_marks_a_switch_when_the_provider_or_model_changes_within_a_session"_test = [] {
+        registry book;
+
+        record(book, "s1", {.provider = "copilot", .upstream = "m1", .source = "config"});
+        record(book, "s1", {.provider = "copilot", .upstream = "m1", .source = "config"});
+        expect(!book.items.at("s1").switched);
+        record(book, "s1", {.provider = "anthropic", .upstream = "m1", .source = "global_remap"});
+        expect(book.items.at("s1").switched && book.items.at("s1").provider == "anthropic");
+        record(book, "s1", {.provider = "anthropic", .upstream = "m2", .source = "global_remap"});
+        expect(book.items.at("s1").switched);
+        record(book, "s1", {.provider = "anthropic", .upstream = "m2", .source = "config"});
+        expect(!book.items.at("s1").switched);
+    };
+
+    "limit_the_registry_keeps_at_most_max_sessions_dropping_the_least_recently_served"_test = [] {
+        registry book;
+        for (std::size_t n = 0; n < max_sessions + 2; ++n) {
+            record(book, std::format("s{}", n), {.provider = "p", .upstream = "m", .source = "config"});
+        }
+        record(book, "s2", {.provider = "p", .upstream = "m", .source = "config"});
+        record(book, "late", {.provider = "p", .upstream = "m", .source = "config"});
+
+        expect(book.items.size() == max_sessions);
+        expect(book.items.contains("s2") && book.items.contains("late") && !book.items.contains("s3"));
+    };
+
+    "limit_a_request_without_a_session_id_is_not_recorded"_test = [] {
+        registry book;
+
+        record(book, "", {.provider = "p", .upstream = "m", .source = "config"});
+
+        expect(book.items.empty());
+    };
+
     "limit_a_pin_must_name_a_listed_target"_test = [] {
         expect(pin_problem({.provider = "copilot", .upstream = "claude-sonnet-5.5"}, targets()).empty());
         expect(pin_problem({.provider = "copilot", .upstream = "nope"}, targets()).contains("nope"));
