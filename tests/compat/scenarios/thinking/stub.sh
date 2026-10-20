@@ -1,2 +1,2 @@
 emit_assistant_block thinking
-emit_assistant_text 391
+emit_assistant_text 163

@@ -107,8 +107,10 @@ def main():
     out = pathlib.Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     work = pathlib.Path(tempfile.mkdtemp(prefix="compat-"))
-    env = dict(os.environ, HOME=str(work / "home"), XDG_STATE_HOME=str(work / "state"), XDG_CONFIG_HOME=str(work / "config"), COMPAT_TOKEN="compat-token")
-    (work / "home").mkdir()
+    env = dict(os.environ, XDG_STATE_HOME=str(work / "state"), COMPAT_TOKEN="compat-token")
+    if backend["kind"] == "scripted":
+        env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"))
+        (work / "home").mkdir()
     upstream = None
     try:
         if backend["kind"] == "scripted":

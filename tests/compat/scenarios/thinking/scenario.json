@@ -1,3 +1,3 @@
 { "title": "A thinking block is returned and accepted back", "feature": "thinking", "needs": ["thinking"],
-  "prompt": "What is 17 times 23? Think it through, then answer with the number only.",
+  "prompt": "How many different ways can you make 87 cents using pennies, nickels, dimes and quarters? Work it out carefully, then answer with the number only.",
   "claude_args": ["--tools", "", "--effort", "high"] }
