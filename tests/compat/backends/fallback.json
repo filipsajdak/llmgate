@@ -1,0 +1,1 @@
+{"title": "Copilot down, then Anthropic (fallback)", "kind": "real", "provides": ["tools", "fallback"], "only": ["fallback"], "switch": {"first": "broken", "second": "anthropic"}}

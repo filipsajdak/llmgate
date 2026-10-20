@@ -1,4 +1,5 @@
 {
+  "fallback": "PASS",
   "hooks": "PASS",
   "image": "PASS",
   "mcp": "PASS",
@@ -7,6 +8,8 @@
   "slash-command": "PASS",
   "subagent": "PASS",
   "switch-mid-session": "PASS",
+  "text-haiku": "PASS",
+  "text-opus": "PASS",
   "text-turn": "PASS",
   "thinking": "PASS",
   "tool-loop": "PASS",

@@ -56,9 +56,18 @@ def write_scripted_config(work, upstream_port):
     base = f"http://127.0.0.1:{upstream_port}"
     provider = lambda model: {"base_url": base, "static_token_env": "COMPAT_TOKEN", "models": {"claude-sonnet-5-5": model}}
     config.write_text(json.dumps({
-        "listen": f"127.0.0.1:{free_port()}", "providers": {"a": provider("m-a"), "b": provider("m-b")},
+        "listen": f"127.0.0.1:{free_port()}",
+        "providers": {"a": provider("m-a"), "b": provider("m-b"), "dead": dict(provider("m-dead"), base_url="http://127.0.0.1:1")},
         "claude": {"profile_dir": str(work / "profile")}}))
     return config
+
+
+def scripted_variant(config, overrides, work, name):
+    merged = dict(json.loads(config.read_text()), **overrides)
+    merged["listen"] = f"127.0.0.1:{free_port()}"
+    path = work / f"llmgate-{name}.jsonc"
+    path.write_text(json.dumps(merged))
+    return path
 
 
 def stats_of(binary, config, env):
@@ -91,8 +100,16 @@ def run_one(name, spec, backend, ctx):
     transcript = ctx["out"] / f"{ctx['backend']}-{name}.jsonl"
     env = dict(ctx["env"], COMPAT_SCENARIO_DIR=str(HERE / "scenarios" / name), TRANSCRIPT=str(transcript), LLMGATE_BIN=ctx["binary"], LLMGATE_CONFIG=str(ctx["config"]),
                **{f"COMPAT_{k.upper()}": v for k, v in backend.get("switch", {}).items()})
+    own_config = None
+    if "scripted_config" in spec and ctx["scripted"]:
+        own_config = scripted_variant(ctx["config"], spec["scripted_config"], ctx["work"], name)
+        env["LLMGATE_CONFIG"] = str(own_config)
     if (HERE / "scenarios" / name / "run.sh").exists():
-        return run_script(name, spec, sandbox, env)
+        try:
+            return run_script(name, spec, sandbox, env)
+        finally:
+            if own_config:
+                subprocess.run([ctx["binary"], "--config", str(own_config), "stop"], env=env, capture_output=True)
     command = [ctx["binary"], "--config", str(ctx["config"]), "claude", "-p", spec["prompt"], "--output-format", "stream-json", "--verbose",
                "--no-session-persistence", "--model", spec.get("model", "sonnet")] + spec.get("claude_args", [])
     try:
@@ -139,7 +156,7 @@ def main():
             config = pathlib.Path(args.config)
             if args.claude:
                 env["LLMGATE_CLAUDE"] = args.claude
-        ctx = {"work": work, "out": out, "env": env, "binary": args.binary, "config": config, "backend": args.backend}
+        ctx = {"work": work, "out": out, "env": env, "binary": args.binary, "config": config, "backend": args.backend, "scripted": backend["kind"] == "scripted"}
         chosen = scenarios(set(args.scenario))
         results = {name: run_one(name, spec, backend, ctx) for name, spec in chosen.items() if name in backend.get("only", chosen)}
         stats = stats_of(args.binary, config, env)

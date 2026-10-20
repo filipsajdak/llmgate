@@ -1,0 +1,1 @@
+emit_assistant_text pong

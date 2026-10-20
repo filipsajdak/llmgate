@@ -88,3 +88,5 @@ for line in open(sys.argv[1]):
 sys.exit(1)
 PY
 }
+
+compat_session_field() { curl -s "$(compat_gateway_base)/llmgate/session?id=$1" | python3 -c 'import json, sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$2"; }

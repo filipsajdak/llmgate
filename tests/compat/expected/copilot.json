@@ -6,6 +6,8 @@
   "skill": "PASS",
   "slash-command": "PASS",
   "subagent": "PASS",
+  "text-haiku": "PASS",
+  "text-opus": "PASS",
   "text-turn": "PASS",
   "thinking": "PASS",
   "tool-loop": "PASS",

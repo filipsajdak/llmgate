@@ -1,0 +1,1 @@
+{"title": "Fall back to the next provider when the first is down", "feature": "fallback", "needs": ["fallback"], "timeout": 600, "scripted_config": {"routes": {"other": ["dead", "b"]}}}

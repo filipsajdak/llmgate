@@ -1,0 +1,1 @@
+{ "title": "One text turn on the opus model", "feature": "models", "needs": [], "model": "opus", "prompt": "Reply with exactly one word: pong", "claude_args": ["--tools", ""] }

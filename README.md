@@ -205,20 +205,23 @@ Several accounts of one provider are several provider entries. A Claude subscrip
 `tests/compat/` holds one directory per Claude Code feature (`scenario.json` with the prompt, `check.sh` asserting what the run changed, `stub.sh` for the self-test). `python3 tests/compat/run.py --backend NAME [--config PATH]` runs them through `llmgate claude`, writes `build/compat/NAME.json` (status, detail, the Claude Code version, the `anthropic-beta` tokens the gateway saw) and compares the statuses with `tests/compat/expected/NAME.json`. A scenario a backend does not provide is `unsupported` without a run. The self-test (`ctest -L compat-selftest`) runs every scenario against a scripted backend with a stub in place of Claude Code, and again with a stub that does nothing, which must fail every check. The table is generated from the committed expectations; a backend shows `not run` until a real run is recorded.
 
 <!-- compat-matrix:begin -->
-| Scenario | GitHub Copilot | Anthropic (Claude login) | Copilot then Anthropic (switch) | Scripted (selftest) |
-|---|---|---|---|---|
-| A PostToolUse hook fires after a tool call (`hooks`) | pass | pass | - | pass |
-| An image is read and understood (`image`) | pass | pass | - | pass |
-| A tool from an MCP server is listed and called (`mcp`) | pass | pass | - | pass |
-| Plan mode answers with a plan and changes no file (`plan-mode`) | pass | pass | - | pass |
-| A project skill is discovered and used (`skill`) | pass | pass | - | pass |
-| A project slash command runs (`slash-command`) | pass | pass | - | pass |
-| Delegate to a subagent (`subagent`) | pass | pass | - | pass |
-| Switch provider in the middle of one session (`switch-mid-session`) | unsupported | unsupported | pass | pass |
-| One text turn (`text-turn`) | pass | pass | - | pass |
-| A thinking block is returned and accepted back (`thinking`) | pass | pass | - | pass |
-| Fix a bug through a tool loop (read, edit, run) (`tool-loop`) | pass | pass | - | pass |
-| Create a file with the Write tool (`write-file`) | pass | pass | - | pass |
+| Scenario | GitHub Copilot | Anthropic (Claude login) | Copilot then Anthropic (switch) | Copilot down, then Anthropic (fallback) | Scripted (selftest) |
+|---|---|---|---|---|---|
+| Fall back to the next provider when the first is down (`fallback`) | unsupported | unsupported | - | pass | pass |
+| A PostToolUse hook fires after a tool call (`hooks`) | pass | pass | - | - | pass |
+| An image is read and understood (`image`) | pass | pass | - | - | pass |
+| A tool from an MCP server is listed and called (`mcp`) | pass | pass | - | - | pass |
+| Plan mode answers with a plan and changes no file (`plan-mode`) | pass | pass | - | - | pass |
+| A project skill is discovered and used (`skill`) | pass | pass | - | - | pass |
+| A project slash command runs (`slash-command`) | pass | pass | - | - | pass |
+| Delegate to a subagent (`subagent`) | pass | pass | - | - | pass |
+| Switch provider in the middle of one session (`switch-mid-session`) | unsupported | unsupported | pass | - | pass |
+| One text turn on the haiku model (`text-haiku`) | pass | pass | - | - | pass |
+| One text turn on the opus model (`text-opus`) | pass | pass | - | - | pass |
+| One text turn (`text-turn`) | pass | pass | - | - | pass |
+| A thinking block is returned and accepted back (`thinking`) | pass | pass | - | - | pass |
+| Fix a bug through a tool loop (read, edit, run) (`tool-loop`) | pass | pass | - | - | pass |
+| Create a file with the Write tool (`write-file`) | pass | pass | - | - | pass |
 <!-- compat-matrix:end -->
 
 ## Stopping, doctor and quota
