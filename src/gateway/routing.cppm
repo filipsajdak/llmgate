@@ -246,6 +246,31 @@ constexpr bool valid_challenge(std::string_view const text) noexcept {
            std::ranges::all_of(text, [](char const c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); });
 }
 
+constexpr std::size_t max_beta_tokens = 64;
+constexpr std::string_view other_beta_name = "other";
+
+using beta_counts = std::map<std::string, std::uint64_t>;
+
+constexpr void count_betas(beta_counts& seen, std::string_view const header) {
+    for (auto const piece : std::views::split(header, ',')) {
+        std::string_view token{piece.begin(), piece.end()};
+        while (token.starts_with(' ')) {
+            token.remove_prefix(1);
+        }
+        while (token.ends_with(' ')) {
+            token.remove_suffix(1);
+        }
+        if (token.empty()) {
+            continue;
+        }
+        auto key = std::string{token};
+        if (!seen.contains(key) && seen.size() >= max_beta_tokens) {
+            key = other_beta_name;
+        }
+        ++seen[std::move(key)];
+    }
+}
+
 constexpr std::string_view bearer_value(std::string_view const authorization) noexcept {
     constexpr std::string_view prefix = "Bearer ";
     return authorization.starts_with(prefix) ? authorization.substr(prefix.size()) : std::string_view{};

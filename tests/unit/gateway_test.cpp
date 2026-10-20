@@ -238,7 +238,7 @@ httpio::request_spec control_request(std::string body, std::string_view const ke
 constexpr std::int64_t fixed_time = 1760659200;
 
 constexpr std::string_view golden_statistics =
-    R"({"requests":3,"streamed":1,"upstream_failures":0,"upstream_timeouts":0,"client_disconnects":0,"refused":0,"connections_opened":1,"connections_reused":1,"budget_refused":0,"no_provider":0,"repairs":{"duplicate_message_start":2},"repair_examples":{},"providers":{"default":{"attempts":2,"answered":2,"failures":0,"skipped":0,"circuit":"closed"}},"usage":{"today":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"month":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"budget":{"state":"ok","window":"daily","used":18,"limit":100,"percent":18}}})";
+    R"({"requests":3,"streamed":1,"upstream_failures":0,"upstream_timeouts":0,"client_disconnects":0,"refused":0,"connections_opened":1,"connections_reused":1,"budget_refused":0,"no_provider":0,"repairs":{"duplicate_message_start":2},"repair_examples":{},"betas":{"tools-2024":3},"providers":{"default":{"attempts":2,"answered":2,"failures":0,"skipped":0,"circuit":"closed"}},"usage":{"today":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"month":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"budget":{"state":"ok","window":"daily","used":18,"limit":100,"percent":18}}})";
 constexpr std::string_view golden_models = R"json({"data":[{"type":"model","id":"opus","display_name":"opus","created_at":"1970-01-01T00:00:00Z"},{"type":"model","id":"claude-opus-upstream@default","display_name":"claude-opus-upstream (default)","created_at":"1970-01-01T00:00:00Z","description":"served by the provider default"}],"has_more":false})json";
 constexpr std::string_view golden_error = R"({"type":"error","error":{"type":"invalid_request_error","message":"a \"q\" \n b"}})";
 
@@ -857,6 +857,39 @@ const suite gateway_suite = [] {
         auto const answer = d.ask(std::move(view));
 
         expect(answer.status == 200 && !answer.body.contains("provider"));
+    };
+
+    "capability_the_statistics_count_each_beta_token_the_clients_send"_test = [] {
+        world w;
+        auto first = messages_request(chat("opus", false), "/anthropic/v1/messages", "");
+        first.fields = http::header_map{};
+        first.fields.add("Content-Type", "application/json");
+        first.fields.add("anthropic-beta", "alpha-2026, beta-2026 ,alpha-2026");
+        auto second = messages_request(chat("opus", false), "/anthropic/v1/messages", "");
+
+        (void)w.ask(std::move(first));
+        (void)w.ask(std::move(second));
+        auto const body = w.ask([] {
+            auto request = messages_request("");
+            request.method = "GET";
+            request.target = "/llmgate/stats";
+            return request;
+        }()).body;
+
+        expect(body.contains(R"json("betas":{)json") && body.contains(R"json("alpha-2026":2)json") && body.contains(R"json("beta-2026":1)json") && body.contains(R"json("tools-2024":2)json"));
+    };
+
+    "limit_the_beta_census_is_bounded_and_counts_the_rest_as_other"_test = [] {
+        routing::beta_counts seen;
+
+        for (std::size_t n = 0; n < routing::max_beta_tokens + 5; ++n) {
+            routing::count_betas(seen, std::format("token-{}", n));
+        }
+
+        expect(seen.size() == routing::max_beta_tokens + 1);
+        expect(seen.at("other") == 5_u);
+        routing::count_betas(seen, "token-0");
+        expect(seen.at("token-0") == 2_u);
     };
 
     "capability_a_picked_target_goes_to_exactly_that_provider_with_its_upstream_model"_test = [] {

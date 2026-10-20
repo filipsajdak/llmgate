@@ -165,6 +165,7 @@ struct stats {
     std::uint64_t connections_reused = 0;
     repair_counts repairs{};
     std::map<std::string, std::string> repair_examples{};
+    routing::beta_counts betas{};
     [[= json::skip]] std::map<std::string, provider_stats> providers;
 };
 
@@ -504,6 +505,7 @@ public:
     template <net::byte_stream Client>
     async::task<net::result_void> operator()(httpio::request const& incoming, httpio::response_writer<Client>& out) {
         ++counters_.requests;
+        routing::count_betas(counters_.betas, incoming.head.fields.find("anthropic-beta").value_or(""));
         auto const which = routing::route_of(incoming.head.method, incoming.head.target);
         if (auto refusal = check_access(incoming, which)) {
             ++counters_.refused;
