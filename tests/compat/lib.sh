@@ -51,3 +51,40 @@ PY
 emit_assistant_text() { python3 -c 'import json, sys; print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": sys.argv[1]}]}}))' "$1"; }
 emit_assistant_tool() { python3 -c 'import json, sys; print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_stub", "name": sys.argv[1], "input": {}}]}}))' "$1"; }
 emit_assistant_block() { python3 -c 'import json, sys; print(json.dumps({"type": "assistant", "message": {"content": [{"type": sys.argv[1]}]}}))' "$1"; }
+
+compat_claude() { "$LLMGATE_BIN" --config "$LLMGATE_CONFIG" claude "$@"; }
+
+compat_session_id() {
+  python3 - "$1" <<'PY'
+import json, sys
+for line in open(sys.argv[1]):
+    try:
+        event = json.loads(line)
+    except ValueError:
+        continue
+    if event.get("type") == "system" and event.get("subtype") == "init":
+        print(event.get("session_id", ""))
+        break
+PY
+}
+
+compat_gateway_base() {
+  "$LLMGATE_BIN" --config "$LLMGATE_CONFIG" env --json | python3 -c 'import json, sys; print(json.load(sys.stdin)["ANTHROPIC_BASE_URL"].rsplit("/anthropic", 1)[0])'
+}
+
+compat_served() { curl -s "$(compat_gateway_base)/llmgate/session?id=$1" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("provider", ""))'; }
+
+compat_result_contains() {
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+wanted = sys.argv[2].lower()
+for line in open(sys.argv[1]):
+    try:
+        event = json.loads(line)
+    except ValueError:
+        continue
+    if event.get("type") == "result" and not event.get("is_error") and wanted in str(event.get("result", "")).lower():
+        sys.exit(0)
+sys.exit(1)
+PY
+}

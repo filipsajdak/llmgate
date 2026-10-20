@@ -7,11 +7,13 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 README = HERE.parent.parent / "README.md"
 BEGIN, END = "<!-- compat-matrix:begin -->", "<!-- compat-matrix:end -->"
-ORDER = ["copilot", "anthropic", "scripted"]
+ORDER = ["copilot", "anthropic", "switching", "scripted"]
 NOT_RUN = "not run"
 
 
 def cell(spec, backend, expected):
+    if spec["name"] not in backend.get("only", [spec["name"]]):
+        return "-"
     if set(spec.get("needs", [])) - set(backend["provides"]):
         return "unsupported"
     return expected.get(backend["name"], {}).get(spec["name"], NOT_RUN).lower().replace("_", " ")

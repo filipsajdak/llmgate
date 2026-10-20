@@ -6,6 +6,7 @@
   "skill": "PASS",
   "slash-command": "PASS",
   "subagent": "PASS",
+  "switch-mid-session": "PASS",
   "text-turn": "PASS",
   "thinking": "PASS",
   "tool-loop": "PASS",

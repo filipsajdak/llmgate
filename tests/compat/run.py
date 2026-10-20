@@ -53,9 +53,11 @@ def free_port():
 
 def write_scripted_config(work, upstream_port):
     config = work / "llmgate.jsonc"
+    base = f"http://127.0.0.1:{upstream_port}"
+    provider = lambda model: {"base_url": base, "static_token_env": "COMPAT_TOKEN", "models": {"claude-sonnet-5-5": model}}
     config.write_text(json.dumps({
-        "listen": f"127.0.0.1:{free_port()}", "upstream": {"base_url": f"http://127.0.0.1:{upstream_port}", "messages_path": "/v1/messages"},
-        "static_token_env": "COMPAT_TOKEN", "claude": {"profile_dir": str(work / "profile")}}))
+        "listen": f"127.0.0.1:{free_port()}", "providers": {"a": provider("m-a"), "b": provider("m-b")},
+        "claude": {"profile_dir": str(work / "profile")}}))
     return config
 
 
@@ -68,6 +70,15 @@ def stats_of(binary, config, env):
         return {}
 
 
+def run_script(name, spec, sandbox, env):
+    try:
+        ran = subprocess.run(["sh", "-c", f". {HERE / 'lib.sh'}; . {HERE / 'scenarios' / name / 'run.sh'}"], cwd=sandbox, env=env, stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True, timeout=spec.get("timeout", DEFAULT_TIMEOUT_SECONDS))
+    except subprocess.TimeoutExpired:
+        return FAIL, "timed out"
+    return (PASS, "") if ran.returncode == 0 else (FAIL, tail(ran.stdout + ran.stderr))
+
+
 def run_one(name, spec, backend, ctx):
     missing = sorted(set(spec.get("needs", [])) - set(backend["provides"]))
     if missing:
@@ -78,7 +89,10 @@ def run_one(name, spec, backend, ctx):
     if files.exists():
         shutil.copytree(files, sandbox, dirs_exist_ok=True)
     transcript = ctx["out"] / f"{ctx['backend']}-{name}.jsonl"
-    env = dict(ctx["env"], COMPAT_SCENARIO_DIR=str(HERE / "scenarios" / name), TRANSCRIPT=str(transcript))
+    env = dict(ctx["env"], COMPAT_SCENARIO_DIR=str(HERE / "scenarios" / name), TRANSCRIPT=str(transcript), LLMGATE_BIN=ctx["binary"], LLMGATE_CONFIG=str(ctx["config"]),
+               **{f"COMPAT_{k.upper()}": v for k, v in backend.get("switch", {}).items()})
+    if (HERE / "scenarios" / name / "run.sh").exists():
+        return run_script(name, spec, sandbox, env)
     command = [ctx["binary"], "--config", str(ctx["config"]), "claude", "-p", spec["prompt"], "--output-format", "stream-json", "--verbose",
                "--no-session-persistence", "--model", spec.get("model", "sonnet")] + spec.get("claude_args", [])
     try:
@@ -126,7 +140,8 @@ def main():
             if args.claude:
                 env["LLMGATE_CLAUDE"] = args.claude
         ctx = {"work": work, "out": out, "env": env, "binary": args.binary, "config": config, "backend": args.backend}
-        results = {name: run_one(name, spec, backend, ctx) for name, spec in scenarios(set(args.scenario)).items()}
+        chosen = scenarios(set(args.scenario))
+        results = {name: run_one(name, spec, backend, ctx) for name, spec in chosen.items() if name in backend.get("only", chosen)}
         stats = stats_of(args.binary, config, env)
     finally:
         subprocess.run([args.binary, "--config", str(locals().get("config", "/dev/null")), "stop"], env=env, capture_output=True)

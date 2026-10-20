@@ -1,0 +1,1 @@
+{ "title": "Switch provider in the middle of one session", "feature": "switching", "needs": ["switching"], "timeout": 600 }

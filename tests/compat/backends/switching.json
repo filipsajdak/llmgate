@@ -1,0 +1,1 @@
+{"title": "Copilot then Anthropic (switch)", "kind": "real", "provides": ["tools", "switching"], "only": ["switch-mid-session"], "switch": {"first": "default", "second": "anthropic", "target": "claude-sonnet-5-5@anthropic"}}
