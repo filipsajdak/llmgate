@@ -1,0 +1,2 @@
+emit_assistant_block thinking
+emit_assistant_text 391

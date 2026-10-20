@@ -200,6 +200,21 @@ The commands are signed with the identity key, so only a process that can read i
 
 Several accounts of one provider are several provider entries. A Claude subscription account is a Claude Code profile: `llmgate --profile NAME claude` uses `~/.claude-llmgate-NAME` as `CLAUDE_CONFIG_DIR`, and each profile is logged in once with `/login` (see the credential section above). A running Claude Code cannot change profile; `/login` inside it switches by hand.
 
+## Compatibility with Claude Code features
+
+`tests/compat/` holds one directory per Claude Code feature (`scenario.json` with the prompt, `check.sh` asserting what the run changed, `stub.sh` for the self-test). `python3 tests/compat/run.py --backend NAME [--config PATH]` runs them through `llmgate claude`, writes `build/compat/NAME.json` (status, detail, the Claude Code version, the `anthropic-beta` tokens the gateway saw) and compares the statuses with `tests/compat/expected/NAME.json`. A scenario a backend does not provide is `unsupported` without a run. The self-test (`ctest -L compat-selftest`) runs every scenario against a scripted backend with a stub in place of Claude Code, and again with a stub that does nothing, which must fail every check. The table is generated from the committed expectations; a backend shows `not run` until a real run is recorded.
+
+<!-- compat-matrix:begin -->
+| Scenario | GitHub Copilot | Anthropic (Claude login) | Scripted (selftest) |
+|---|---|---|---|
+| Plan mode proposes a plan and changes nothing (`plan-mode`) | not run | not run | pass |
+| Delegate to a subagent (`subagent`) | not run | not run | pass |
+| One text turn (`text-turn`) | not run | not run | pass |
+| A thinking block is returned and accepted back (`thinking`) | not run | not run | pass |
+| Fix a bug through a tool loop (read, edit, run) (`tool-loop`) | not run | not run | pass |
+| Create a file with the Write tool (`write-file`) | not run | not run | pass |
+<!-- compat-matrix:end -->
+
 ## Stopping, doctor and quota
 
 `SIGINT` or `SIGTERM` makes `llmgate serve` stop accepting and close its listening socket. Requests already running finish for up to `time.drain` (default `10s`); new requests on open keep-alive connections get 503, and idle connections do not hold the drain. Then the gateway removes the pid file it owns (the one `llmgate claude` wrote for it) and exits 0. A second signal exits 130 at once; if the drain times out the gateway says how many requests it abandoned and still exits 0. The signal handler only writes a byte to a self-pipe that the reactor waits on next to the listening socket, so there is no flag polling and no work inside the handler. The usage ledger is appended per request, so there is nothing left to flush.

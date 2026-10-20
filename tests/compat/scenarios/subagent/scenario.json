@@ -1,0 +1,3 @@
+{ "title": "Delegate to a subagent", "feature": "subagents", "needs": ["tools", "subagents"],
+  "prompt": "Use the Agent tool to ask a subagent to list the files in this directory, then tell me how many there are.",
+  "claude_args": ["--permission-mode", "acceptEdits", "--allowedTools", "Agent"] }

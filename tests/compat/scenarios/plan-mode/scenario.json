@@ -1,0 +1,3 @@
+{ "title": "Plan mode proposes a plan and changes nothing", "feature": "plan mode", "needs": ["tools", "plan_mode"],
+  "prompt": "Plan how you would add a function sub(a, b) to mathlib.py. Do not change any file.",
+  "claude_args": ["--permission-mode", "plan"] }

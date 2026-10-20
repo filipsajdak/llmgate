@@ -1,0 +1,3 @@
+{ "title": "Fix a bug through a tool loop (read, edit, run)", "feature": "tools", "needs": ["tools"],
+  "prompt": "In this directory, read mathlib.py, fix the bug so that test_mathlib.py passes, and run python3 test_mathlib.py to confirm.",
+  "claude_args": ["--permission-mode", "acceptEdits", "--allowedTools", "Bash(python3 test_mathlib.py:*)"] }

@@ -1,0 +1,1 @@
+{ "title": "Scripted (selftest)", "kind": "scripted", "provides": ["tools", "plan_mode", "subagents", "thinking"] }
