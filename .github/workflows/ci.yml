@@ -103,7 +103,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: CMAKE_ARGS=-DLLMGATE_CONSTEXPR_DEPTH=deep PRESET=linux ops/ci/linux.sh -L constexpr
+      - run: CMAKE_BUILD_PARALLEL_LEVEL=1 CMAKE_ARGS=-DLLMGATE_CONSTEXPR_DEPTH=deep PRESET=linux ops/ci/linux.sh -L constexpr
 
   newest-gcc:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
