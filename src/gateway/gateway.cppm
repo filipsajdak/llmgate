@@ -55,8 +55,35 @@ provider_config legacy_provider(config const& settings) {
     return out;
 }
 
+std::optional<preset_defaults> defaults_of(preset_kind const kind) {
+    std::optional<preset_defaults> found;
+    template for (constexpr auto enumerator : std::define_static_array(std::meta::enumerators_of(^^preset_kind))) {
+        if constexpr (reflect::has_annotation<preset_defaults>(enumerator)) {
+            if (kind == [:enumerator:]) {
+                found = *reflect::annotation_of<preset_defaults>(enumerator);
+            }
+        }
+    }
+    return found;
+}
+
+provider_config with_preset(provider_config item) {
+    if (auto const defaults = defaults_of(item.preset)) {
+        if (item.base_url.empty()) {
+            item.base_url = defaults->base_url;
+        }
+        if (item.protocol == wire_protocol::anthropic) {
+            item.protocol = defaults->protocol;
+        }
+    }
+    return item;
+}
+
 std::map<std::string, provider_config> effective_providers(config const& settings) {
     auto all = settings.providers;
+    for (auto& entry : all) {
+        entry.second = with_preset(std::move(entry.second));
+    }
     if (!settings.upstream.base_url.empty() && !all.contains(std::string{implicit_provider})) {
         all.emplace(std::string{implicit_provider}, legacy_provider(settings));
     }
@@ -80,6 +107,9 @@ std::vector<std::string> provider_names(std::map<std::string, provider_config> c
 }
 
 std::string provider_problem(std::string const& name, provider_config const& item, config const& settings) {
+    if (item.preset == preset_kind::openai_chat) {
+        return "provider " + name + ": the openai_chat preset is not built yet";
+    }
     if (auto const parsed = routing::parse_url(item.base_url); !parsed) {
         return "provider " + name + ": " + parsed.error();
     }

@@ -68,6 +68,23 @@ Claude Code reads that field is not measured and is the next thing to check); an
 no real upstream wording to be built from yet. It is built from a wording only after a real overflow has been
 captured (`debug.capture_file`), and the `oversize` compatibility scenario stays unwritten until then.
 
+## Preset resolution (slice L3)
+
+`providers.NAME.preset` is one of `copilot`, `anthropic`, `chatgpt`, `openai_chat` (default: none). A preset fills
+what the provider did not set and never overrides what it set:
+
+| Preset | base_url when empty | protocol when left at `anthropic` | Credential the provider still states |
+|---|---|---|---|
+| `copilot` | `https://api.githubcopilot.com` | `anthropic` | a `copilot` object |
+| `anthropic` | `https://api.anthropic.com` | `anthropic` | `static_token_env` or `forward_credentials` |
+| `chatgpt` | `https://api.openai.com/v1` | `openai_responses` | a `chatgpt` object |
+| `openai_chat` | none | not built | refused: "the openai_chat preset is not built yet" |
+
+The defaults are annotations on the enumerators, so the table has one copy. `base_url` is no longer required
+when a preset names one; a provider with neither is refused as before. The models of a provider are not part of
+the preset (P2): `llmgate provider add` proposes them from discovery and pins only the role map, and limits only
+with `--with-limits`.
+
 ## Over-limit handling (P3)
 
 1. The pinned limits are advisory. `max_tokens` above the pinned output limit is clamped to it (BET-4 R6),

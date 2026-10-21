@@ -12,6 +12,10 @@
     "base_url": "https://api.githubcopilot.com",
     // Path of the Messages endpoint on the upstream.
     "messages_path": "/v1/messages",
+    // A working default for this kind of provider: copilot, anthropic, chatgpt (openai_chat is not built
+    // yet). It fills base_url when that is empty and the protocol when it is left at anthropic; whatever
+    // you set yourself wins. One of: none, copilot, anthropic, chatgpt, openai_chat.
+    // "preset": "chatgpt",
     // Wire protocol of the provider: anthropic (the Messages API, the default) or openai_responses (the
     // OpenAI Responses API; Claude Code requests are translated, see docs/translation-responses.md). With
     // openai_responses the messages_path default becomes /responses. One of: anthropic, openai_responses.

@@ -61,6 +61,7 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `upstream` | object | - | The single backend of an older configuration; it keeps working and acts as one provider named default. |
 | `upstream.base_url` | string | required | Base URL of the single upstream; together with the other top-level keys it acts as one provider named default. |
 | `upstream.messages_path` | string | `"/v1/messages"` | Path of the Messages endpoint on the upstream. |
+| `upstream.preset` | one of `none`, `copilot`, `anthropic`, `chatgpt`, `openai_chat` | `"none"` | A working default for this kind of provider: copilot, anthropic, chatgpt (openai_chat is not built yet). It fills base_url when that is empty and the protocol when it is left at anthropic; whatever you set yourself wins. |
 | `upstream.protocol` | one of `anthropic`, `openai_responses` | `"anthropic"` | Wire protocol of the provider: anthropic (the Messages API, the default) or openai_responses (the OpenAI Responses API; Claude Code requests are translated, see docs/translation-responses.md). With openai_responses the messages_path default becomes /responses. |
 | `upstream.headers` | map of string | `{}` | Extra headers sent to the upstream on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here. |
 | `upstream.limits` | map of object | `{}` | Limits per upstream model id, as the provider reports them (llmgate models lists them). max_tokens above output_tokens is clamped; the model list carries prompt_tokens and output_tokens. |
@@ -71,8 +72,9 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `upstream.offer` | array of string | `[]` | Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER. |
 | `models` | map of string | `{}` | Claude Code expands aliases such as sonnet to full model names before it calls the gateway, so map full names: client model name to upstream model name. Unknown names go through unchanged. |
 | `providers` | map of object | `{}` | More than one backend: name each one here. A provider with a copilot object uses the Copilot login, one with static_token_env uses that variable. The keys upstream, models, copilot and static_token_env stay valid and act as one provider named default. |
-| `providers.<name>.base_url` | string | required | Base URL of the provider. |
+| `providers.<name>.base_url` | string | `""` | Base URL of the provider; a preset supplies it when this is empty. |
 | `providers.<name>.messages_path` | string | `"/v1/messages"` | Path of the Messages endpoint on the provider. |
+| `providers.<name>.preset` | one of `none`, `copilot`, `anthropic`, `chatgpt`, `openai_chat` | `"none"` | A working default for this kind of provider: copilot, anthropic, chatgpt (openai_chat is not built yet). It fills base_url when that is empty and the protocol when it is left at anthropic; whatever you set yourself wins. |
 | `providers.<name>.protocol` | one of `anthropic`, `openai_responses` | `"anthropic"` | Wire protocol of the provider: anthropic (the Messages API, the default) or openai_responses (the OpenAI Responses API; Claude Code requests are translated, see docs/translation-responses.md). With openai_responses the messages_path default becomes /responses. |
 | `providers.<name>.headers` | map of string | `{}` | Extra headers sent to the provider on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here. |
 | `providers.<name>.limits` | map of object | `{}` | Limits per upstream model id, as the provider reports them (llmgate models lists them). max_tokens above output_tokens is clamped; the model list carries prompt_tokens and output_tokens. |
@@ -269,12 +271,12 @@ model list can change; `llmgate doctor` checks the sign-in.
 
 ```jsonc
 { "providers": { "codex": {
-    "protocol": "openai_responses",
-    "base_url": "https://api.openai.com/v1",
+    "preset": "chatgpt",
     "chatgpt": { "token_file": "~/.config/llmgate/chatgpt.json" },
     "models": { "claude-opus-5-5": "gpt-6.1-sol", "claude-sonnet-5-5": "gpt-6-sol" } } } }
 ```
 
+- `preset: "chatgpt"` fills the base URL and the `openai_responses` protocol; `copilot` and `anthropic` presets fill their base URLs, and whatever the provider sets itself wins.
 - `llmgate login --provider codex` opens the browser once, registers llmgate with OpenAI, and writes the tokens
   with mode 0600. `LLMGATE_NO_BROWSER=1` prints the address instead of opening it.
 - The access token lasts an hour and refreshes itself; the refresh token lasts 30 days and rotates.

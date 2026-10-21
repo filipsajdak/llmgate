@@ -1879,6 +1879,44 @@ const suite gateway_suite = [] {
         expect(parsed->fallback.failures == 5_u && parsed->fallback.cooldown == std::chrono::seconds{45});
         expect(gateway::config_problem(*parsed).empty());
     };
+
+    "capability_a_preset_fills_the_base_url_and_the_protocol_the_provider_left_out"_test = [] {
+        gateway::config settings;
+        settings.providers["a"] = {.preset = gateway::preset_kind::chatgpt};
+        settings.providers["b"] = {.preset = gateway::preset_kind::copilot};
+        settings.providers["c"] = {.preset = gateway::preset_kind::anthropic};
+        settings.providers["d"] = {.base_url = "https://mine.invalid", .preset = gateway::preset_kind::chatgpt};
+
+        auto const all = gateway::effective_providers(settings);
+
+        expect(all.at("a").base_url == "https://api.openai.com/v1" && all.at("a").protocol == gateway::wire_protocol::openai_responses);
+        expect(all.at("b").base_url == "https://api.githubcopilot.com" && all.at("b").protocol == gateway::wire_protocol::anthropic);
+        expect(all.at("c").base_url == "https://api.anthropic.com");
+        expect(all.at("d").base_url == "https://mine.invalid" && all.at("d").protocol == gateway::wire_protocol::openai_responses);
+    };
+
+    "limit_a_provider_without_a_preset_keeps_what_it_says_and_needs_a_base_url"_test = [] {
+        gateway::config settings;
+        settings.providers["plain"] = {};
+
+        expect(gateway::effective_providers(settings).at("plain").base_url.empty());
+        expect(gateway::config_problem(settings).contains("provider plain") && gateway::config_problem(settings).contains("base_url"));
+    };
+
+    "limit_the_openai_chat_preset_is_refused_until_its_translator_exists"_test = [] {
+        gateway::config settings;
+        settings.providers["local"] = {.base_url = "http://127.0.0.1:30800", .preset = gateway::preset_kind::openai_chat};
+
+        expect(gateway::config_problem(settings).contains("openai_chat") && gateway::config_problem(settings).contains("not built"));
+    };
+
+    "capability_a_preset_is_read_by_name_and_an_unknown_name_is_refused"_test = [] {
+        auto const good = json::read_text<gateway::config>(R"({"listen":"127.0.0.1:1","providers":{"codex":{"preset":"chatgpt","chatgpt":{"token_file":"/t"}}}})");
+        auto const bad = json::read_text<gateway::config>(R"({"listen":"127.0.0.1:1","providers":{"codex":{"preset":"nope"}}})");
+
+        expect(good.has_value() && good->providers.at("codex").preset == gateway::preset_kind::chatgpt && gateway::config_problem(*good).empty());
+        expect(!bad.has_value());
+    };
 };
 
 }  // namespace

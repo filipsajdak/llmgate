@@ -40,6 +40,29 @@ struct chatgpt_config {
 enum class wire_protocol { anthropic, openai_responses };
 static_assert(reflect::unique_values<wire_protocol>());
 
+constexpr std::size_t preset_url_capacity = 40;
+
+struct preset_defaults {
+    char base_url[preset_url_capacity]{};
+    wire_protocol protocol = wire_protocol::anthropic;
+
+    consteval preset_defaults(std::string_view const url, wire_protocol const wire) : protocol(wire) {
+        if (url.size() >= preset_url_capacity) {
+            throw "gateway::preset_defaults: the address does not fit preset_url_capacity";
+        }
+        std::ranges::copy(url, base_url);
+    }
+};
+
+enum class preset_kind {
+    none,
+    copilot [[= preset_defaults{"https://api.githubcopilot.com", wire_protocol::anthropic}]],
+    anthropic [[= preset_defaults{"https://api.anthropic.com", wire_protocol::anthropic}]],
+    chatgpt [[= preset_defaults{"https://api.openai.com/v1", wire_protocol::openai_responses}]],
+    openai_chat
+};
+static_assert(reflect::unique_values<preset_kind>());
+
 constexpr std::string_view default_messages_path = "/v1/messages";
 constexpr std::string_view default_responses_path = "/responses";
 
@@ -53,6 +76,8 @@ struct upstream_config {
     [[= json::required]] [[= reflect::doc{"Base URL of the single upstream; together with the other top-level keys it acts as one provider named default."}]]
     [[= reflect::example{R"("https://api.githubcopilot.com")"}]] std::string base_url{};
     [[= reflect::doc{"Path of the Messages endpoint on the upstream."}]] std::string messages_path = "/v1/messages";
+    [[= reflect::doc{"A working default for this kind of provider: copilot, anthropic, chatgpt (openai_chat is not built yet). It fills base_url when that is empty and the protocol when it is left at anthropic; whatever you set yourself wins."}]]
+    [[= reflect::example{R"("chatgpt")"}]] [[= reflect::commented]] preset_kind preset = preset_kind::none;
     [[= reflect::doc{"Wire protocol of the provider: anthropic (the Messages API, the default) or openai_responses (the OpenAI Responses API; Claude Code requests are translated, see docs/translation-responses.md). With openai_responses the messages_path default becomes /responses."}]]
     wire_protocol protocol = wire_protocol::anthropic;
     [[= reflect::doc{"Extra headers sent to the upstream on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here."}]]
@@ -80,8 +105,10 @@ struct copilot_config {
 };
 
 struct provider_config {
-    [[= json::required]] [[= reflect::doc{"Base URL of the provider."}]] [[= reflect::example{R"("https://api.anthropic.com")"}]] std::string base_url{};
+    [[= reflect::doc{"Base URL of the provider; a preset supplies it when this is empty."}]] [[= reflect::example{R"("https://api.anthropic.com")"}]] std::string base_url{};
     [[= reflect::doc{"Path of the Messages endpoint on the provider."}]] std::string messages_path = "/v1/messages";
+    [[= reflect::doc{"A working default for this kind of provider: copilot, anthropic, chatgpt (openai_chat is not built yet). It fills base_url when that is empty and the protocol when it is left at anthropic; whatever you set yourself wins."}]]
+    [[= reflect::example{R"("chatgpt")"}]] [[= reflect::commented]] preset_kind preset = preset_kind::none;
     [[= reflect::doc{"Wire protocol of the provider: anthropic (the Messages API, the default) or openai_responses (the OpenAI Responses API; Claude Code requests are translated, see docs/translation-responses.md). With openai_responses the messages_path default becomes /responses."}]]
     wire_protocol protocol = wire_protocol::anthropic;
     [[= reflect::doc{"Extra headers sent to the provider on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here."}]] std::map<std::string, std::string> headers{};
