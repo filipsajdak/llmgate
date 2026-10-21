@@ -11,7 +11,7 @@ import llmgate.text;
 export namespace llmgate::doctor {
 
 enum class status { pass, warn, fail };
-enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, credential, ledger, budget, quota };
+enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, ledger, budget, quota };
 static_assert(reflect::unique_values<check>());
 
 enum class port_state { free, ours, foreign };
@@ -40,6 +40,14 @@ struct file_fact {
     unsigned mode = 0;
 };
 
+struct chatgpt_fact {
+    bool configured = false;
+    std::string provider{};
+    file_fact token{};
+    bool valid = false;
+    bool plan_scope = false;
+};
+
 struct facts {
     std::string config_error{};
     std::string listen{};
@@ -53,6 +61,7 @@ struct facts {
     bool copilot_configured = false;
     file_fact token{};
     bool token_valid = false;
+    chatgpt_fact chatgpt{};
     exchange_state exchange = exchange_state::skipped;
     std::string static_token_variable{};
     bool static_token_set = false;
@@ -193,6 +202,23 @@ constexpr finding token_file_finding(facts const& seen) {
     return make(check::copilot_login, status::pass, "the Copilot token file is present and private");
 }
 
+constexpr finding chatgpt_finding(chatgpt_fact const& seen) {
+    std::string const fix = "run llmgate login --provider " + seen.provider;
+    if (!seen.token.exists) {
+        return make(check::chatgpt_login, status::fail, "no ChatGPT sign-in at " + seen.token.path, fix);
+    }
+    if (!seen.valid) {
+        return make(check::chatgpt_login, status::fail, "the token file holds no usable sign-in", fix);
+    }
+    if (too_open(seen.token)) {
+        return make(check::chatgpt_login, status::fail, "the token file has mode " + octal(seen.token.mode) + ", other users can read it", "chmod 600 " + seen.token.path);
+    }
+    if (!seen.plan_scope) {
+        return make(check::chatgpt_login, status::fail, "the sign-in does not grant ChatGPT plan use", "enable plan use in ChatGPT settings, then " + fix);
+    }
+    return make(check::chatgpt_login, status::pass, "the ChatGPT sign-in is saved privately and grants plan use");
+}
+
 constexpr std::optional<finding> exchange_finding(facts const& seen) {
     switch (seen.exchange) {
         case exchange_state::skipped:
@@ -289,8 +315,13 @@ constexpr void add(std::vector<finding>& out, std::optional<finding> item) {
 }
 
 constexpr void add_credential(std::vector<finding>& out, facts const& seen) {
+    if (seen.chatgpt.configured) {
+        out.push_back(chatgpt_finding(seen.chatgpt));
+    }
     if (!seen.copilot_configured) {
-        out.push_back(static_credential_finding(seen));
+        if (!seen.chatgpt.configured) {
+            out.push_back(static_credential_finding(seen));
+        }
         return;
     }
     out.push_back(token_file_finding(seen));

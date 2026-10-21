@@ -50,6 +50,31 @@ check sh -c "[ \"\$(ls -l '$work/chatgpt-token.json' | cut -c1-10)\" = '-rw-----
 label="no token appears in the login output"
 check sh -c "! grep -q 'access-1\\|refresh-1' '$work/login.out'"
 
+doctor_says() { "$binary" --config "$work/config.jsonc" doctor --offline 2>&1 | grep -A1 'chatgpt-login' | grep -q "$1"; }
+label="doctor reports the saved sign-in as passing"
+check doctor_says PASS
+cp "$work/chatgpt-token.json" "$work/token.backup"
+chmod 644 "$work/chatgpt-token.json"
+label="doctor fails a token file other users can read"
+check doctor_says FAIL
+chmod 600 "$work/chatgpt-token.json"
+python3 - "$work/chatgpt-token.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+tokens = json.load(open(path))
+tokens["scope"] = "openid offline_access"
+json.dump(tokens, open(path, "w"))
+PY
+label="doctor fails a sign-in that does not grant plan use"
+check doctor_says 'plan use'
+cp "$work/token.backup" "$work/chatgpt-token.json"
+chmod 600 "$work/chatgpt-token.json"
+rm "$work/chatgpt-token.json"
+label="doctor fails a missing sign-in and names the command"
+check doctor_says 'llmgate login --provider codex'
+cp "$work/token.backup" "$work/chatgpt-token.json"
+chmod 600 "$work/chatgpt-token.json"
+
 start_gateway() {
   : > "$work/gateway.log"
   "$binary" --config "$work/config.jsonc" > "$work/gateway.log" 2>&1 &

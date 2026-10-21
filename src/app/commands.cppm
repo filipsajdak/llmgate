@@ -575,7 +575,27 @@ bool claude_on_path() {
     return named.has_value();
 }
 
+doctor::chatgpt_fact chatgpt_fact_of(gateway::config const& settings) {
+    constexpr std::string_view plan_scope = "chatgpt.tokens.use.direct";
+    for (auto const& [name, provider] : gateway::effective_providers(settings)) {
+        if (!provider.chatgpt || provider.chatgpt->token_file.empty()) {
+            continue;
+        }
+        auto const path = process::expand_home(provider.chatgpt->token_file);
+        doctor::chatgpt_fact fact{.configured = true, .provider = name, .token = file_fact_of(path)};
+        auto const parsed = fact.token.exists ? json::parse(read_file(path).value_or(std::string{}), {.jsonc = false}) : std::unexpected{json::parse_error{}};
+        if (parsed) {
+            fact.valid = !json::text_at(*parsed, {"refresh_token"}).empty() && !json::text_at(*parsed, {"client_id"}).empty();
+            auto const scopes = json::text_at(*parsed, {"scope"});
+            fact.plan_scope = std::ranges::any_of(std::views::split(std::string_view{scopes}, ' '), [&](auto const piece) { return std::string_view{piece.begin(), piece.end()} == plan_scope; });
+        }
+        return fact;
+    }
+    return {};
+}
+
 void describe_credential(context const& where, doctor::facts& seen) {
+    seen.chatgpt = chatgpt_fact_of(where.settings);
     auto const copilot_settings = copilot_target(where.settings);
     seen.copilot_configured = copilot_settings.has_value();
     if (seen.copilot_configured) {

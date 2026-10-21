@@ -52,6 +52,43 @@ const suite doctor_suite = [] {
         expect(count_of(found, status::pass) == found.size());
     };
 
+    "capability_a_chatgpt_sign_in_replaces_the_static_credential_check_and_passes_when_saved_privately_with_plan_scope"_test = [] {
+        auto seen = healthy();
+        seen.copilot_configured = false;
+        seen.chatgpt = {.configured = true, .provider = "codex", .token = {.path = "/c/chatgpt.json", .exists = true, .mode = 0600}, .valid = true, .plan_scope = true};
+
+        auto const found = diagnose(seen);
+
+        expect(state_of(seen, "chatgpt-login") == status::pass);
+        expect(std::ranges::none_of(found, [](finding const& item) { return item.check == "credential"; }));
+        expect(exit_code(found) == 0);
+    };
+
+    "limit_a_missing_unreadable_open_or_planless_chatgpt_sign_in_fails_with_the_command_to_fix_it"_test = [] {
+        auto seen = healthy();
+        seen.copilot_configured = false;
+        seen.chatgpt = {.configured = true, .provider = "codex", .token = {.path = "/c/chatgpt.json", .exists = false}, .valid = false, .plan_scope = false};
+        expect(state_of(seen, "chatgpt-login") == status::fail && named(diagnose(seen), "chatgpt-login").remedy.contains("llmgate login --provider codex"));
+
+        seen.chatgpt.token = {.path = "/c/chatgpt.json", .exists = true, .mode = 0600};
+        expect(state_of(seen, "chatgpt-login") == status::fail);
+
+        seen.chatgpt.valid = true;
+        seen.chatgpt.token.mode = 0644;
+        expect(state_of(seen, "chatgpt-login") == status::fail && named(diagnose(seen), "chatgpt-login").remedy.contains("chmod 600"));
+
+        seen.chatgpt.token.mode = 0600;
+        seen.chatgpt.plan_scope = false;
+        expect(state_of(seen, "chatgpt-login") == status::fail && named(diagnose(seen), "chatgpt-login").detail.contains("plan use"));
+    };
+
+    "capability_copilot_and_chatgpt_can_both_be_configured_and_are_both_reported"_test = [] {
+        auto seen = healthy();
+        seen.chatgpt = {.configured = true, .provider = "codex", .token = {.path = "/c/chatgpt.json", .exists = true, .mode = 0600}, .valid = true, .plan_scope = true};
+
+        expect(state_of(seen, "copilot-login") == status::pass && state_of(seen, "chatgpt-login") == status::pass);
+    };
+
     "capability_a_broken_configuration_is_the_only_config_dependent_failure_reported"_test = [] {
         auto seen = healthy();
         seen.config_error = "cannot read ~/.config/llmgate/config.jsonc";
