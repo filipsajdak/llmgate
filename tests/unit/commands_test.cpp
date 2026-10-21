@@ -331,6 +331,42 @@ const suite commands_suite = [] {
         expect(target.has_value() && target->token_file == "/tmp/token-b.json");
     };
 
+    "capability_login_without_a_provider_name_keeps_choosing_copilot_first_then_a_chatgpt_provider"_test = [] {
+        gateway::config both;
+        both.providers.emplace("a-chatgpt", gateway::provider_config{.base_url = "https://x.invalid", .chatgpt = gateway::chatgpt_config{.token_file = "/tmp/c.json"}});
+        both.providers.emplace("b-copilot", with_token_file("/tmp/token-b.json"));
+        gateway::config only_chatgpt;
+        only_chatgpt.providers.emplace("a-chatgpt", gateway::provider_config{.base_url = "https://x.invalid", .chatgpt = gateway::chatgpt_config{.token_file = "/tmp/c.json"}});
+
+        auto const first = commands::login_choice(both, "");
+        auto const second = commands::login_choice(only_chatgpt, "");
+
+        expect(first.has_value() && std::holds_alternative<gateway::copilot_config>(*first));
+        expect(second.has_value() && std::holds_alternative<gateway::chatgpt_config>(*second));
+    };
+
+    "capability_login_with_a_provider_name_picks_that_providers_sign_in"_test = [] {
+        gateway::config settings;
+        settings.providers.emplace("a-chatgpt", gateway::provider_config{.base_url = "https://x.invalid", .chatgpt = gateway::chatgpt_config{.token_file = "/tmp/c.json"}});
+        settings.providers.emplace("b-copilot", with_token_file("/tmp/token-b.json"));
+
+        auto const chatgpt = commands::login_choice(settings, "a-chatgpt");
+        auto const copilot = commands::login_choice(settings, "b-copilot");
+
+        expect(chatgpt.has_value() && std::get<gateway::chatgpt_config>(*chatgpt).token_file == "/tmp/c.json");
+        expect(copilot.has_value() && std::get<gateway::copilot_config>(*copilot).token_file == "/tmp/token-b.json");
+    };
+
+    "limit_login_names_the_problem_for_an_unknown_provider_one_without_a_sign_in_or_nothing_configured"_test = [] {
+        gateway::config settings;
+        settings.providers.emplace("plain", gateway::provider_config{.base_url = "https://x.invalid"});
+
+        expect(commands::login_choice(settings, "ghost").error().contains("ghost"));
+        expect(commands::login_choice(settings, "plain").error().contains("plain") && commands::login_choice(settings, "plain").error().contains("sign-in"));
+        expect(commands::login_choice(settings, "").error().contains("chatgpt.token_file"));
+        expect(!commands::login_choice(gateway::config{}, "").has_value());
+    };
+
     "limit_no_token_file_means_no_login_target"_test = [] {
         gateway::config settings;
         settings.providers.emplace("a-plain", gateway::provider_config{.base_url = "https://example.invalid"});

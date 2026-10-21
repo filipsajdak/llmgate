@@ -65,6 +65,11 @@ const suite arguments_suite = [] {
         expect(served_into({.model = "S"}, "garbage").provider.empty());
     };
 
+    "capability_login_can_name_the_provider_to_sign_in_to"_test = [] {
+        expect(parse(words({"login", "--provider", "codex"}))->provider == "codex" && parse(words({"login"}))->provider.empty());
+        expect(!parse(words({"login", "--provider"})).has_value());
+    };
+
     "capability_profile_is_a_global_flag_before_the_command"_test = [] {
         auto const parsed = parse(words({"--profile", "siili", "claude", "-p", "hi"}));
 
@@ -188,7 +193,7 @@ const suite arguments_suite = [] {
 
     "capability_the_usage_text_is_pinned"_test = [] {
         expect(usage_text ==
-               "usage: llmgate [--config PATH] [--profile NAME] [serve | login | claude ARGS... | env [--json] [--vscode [FILE]] | setup [--vscode [FILE]] [--service] [--dry-run] | "
+               "usage: llmgate [--config PATH] [--profile NAME] [serve | login [--provider NAME] | claude ARGS... | env [--json] [--vscode [FILE]] | setup [--vscode [FILE]] [--service] [--dry-run] | "
                "statusline | status | stop | usage [--json] [--days N] | doctor [--json] [--offline] | quota [--json] | use [--session ID] ARGS... | targets | route [--session ID] ARGS...] | --check-config | --version | --print-example | --print-schema | --print-config-table")
             << usage_text;
     };

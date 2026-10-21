@@ -6,6 +6,7 @@
 import std;
 import llmgate.arguments;
 import llmgate.async;
+import llmgate.chatgpt;
 import llmgate.claude;
 import llmgate.commands;
 import llmgate.config_docs;
@@ -47,6 +48,9 @@ using credential_store = std::map<std::string, std::unique_ptr<gateway::credenti
 std::unique_ptr<gateway::credential> make_credential(async::reactor& loop, tls::client_context const& tls_context, gateway::provider_config const& provider) {
     if (provider.copilot) {
         return std::make_unique<copilot::copilot_credential>(loop, tls_context, *provider.copilot);
+    }
+    if (provider.chatgpt) {
+        return std::make_unique<chatgpt::chatgpt_credential>(loop, tls_context, *provider.chatgpt);
     }
     auto const* token = provider.static_token_env.empty() ? nullptr : std::getenv(provider.static_token_env.c_str());
     return std::make_unique<gateway::static_credential>(token == nullptr ? std::string{} : std::string{token});
@@ -181,12 +185,50 @@ int login_with(gateway::config const& settings, gateway::copilot_config const& t
     return request_login(loop, *tls_context, target);
 }
 
-int login(gateway::config const& settings) {
-    auto const target = commands::copilot_login_target(settings);
-    if (!target) {
-        return fail(exit_config, "set copilot.token_file (or a provider's copilot.token_file) in the configuration first");
+constexpr std::string_view no_browser_variable = "LLMGATE_NO_BROWSER";
+
+void open_in_browser(std::string const& url) {
+#if defined(__APPLE__)
+    if (std::getenv(no_browser_variable.data()) == nullptr) {
+        (void)process::run_and_wait("/usr/bin/open", {url});
     }
-    return login_with(settings, *target);
+#else
+    static_cast<void>(url);
+#endif
+}
+
+int chatgpt_sign_in(gateway::config const& settings, gateway::chatgpt_config const& target) {
+    async::reactor loop;
+    auto tls_context = tls::client_context::make(settings.tls_groups);
+    if (!tls_context) {
+        return exit_runtime;
+    }
+    chatgpt::sign_in_options options{.announce = [](std::string const& url) {
+        std::println("Sign in with ChatGPT in your browser (it opens by itself on macOS); if it does not, open this address:\n\n  {}\n", url);
+        std::println("Waiting for the browser to come back...");
+        std::fflush(stdout);
+        open_in_browser(url);
+    }};
+    auto const done = loop.run(chatgpt::sign_in(loop, *tls_context, target, std::move(options)));
+    if (!done) {
+        return fail(exit_runtime, std::format("sign-in failed: {}", chatgpt::advice(done.error())));
+    }
+    std::println("Signed in as {}. Tokens saved to {}.", done->account, target.token_file);
+    if (!done->plan_enabled) {
+        return fail(exit_runtime, "ChatGPT plan use is not enabled for this account: enable it in ChatGPT settings or use an OpenAI API key instead");
+    }
+    return 0;
+}
+
+int login(gateway::config const& settings, std::string_view const provider) {
+    auto const target = commands::login_choice(settings, provider);
+    if (!target) {
+        return fail(exit_config, target.error());
+    }
+    if (auto const* chatgpt_target = std::get_if<gateway::chatgpt_config>(&*target)) {
+        return chatgpt_sign_in(settings, *chatgpt_target);
+    }
+    return login_with(settings, std::get<gateway::copilot_config>(*target));
 }
 
 int serve_command(commands::context const& where) {
@@ -194,7 +236,7 @@ int serve_command(commands::context const& where) {
 }
 
 int login_command(commands::context const& where) {
-    return login(where.settings);
+    return login(where.settings, where.options.provider);
 }
 
 int statusline_command(commands::context const& where) {

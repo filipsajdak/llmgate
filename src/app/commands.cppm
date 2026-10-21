@@ -1015,6 +1015,38 @@ inline std::expected<gateway::access_policy, std::string> make_policy(gateway::c
                                   .identity_scope = std::format("{}:{}", host, port)};
 }
 
+using login_target = std::variant<gateway::copilot_config, gateway::chatgpt_config>;
+
+inline std::optional<gateway::chatgpt_config> chatgpt_sign_in(gateway::provider_config const& item) {
+    return item.chatgpt && !item.chatgpt->token_file.empty() ? item.chatgpt : std::nullopt;
+}
+
+inline std::expected<login_target, std::string> login_choice(gateway::config const& settings, std::string_view const provider) {
+    auto const providers = gateway::effective_providers(settings);
+    if (provider.empty()) {
+        if (auto const copilot = detail::copilot_target(settings)) {
+            return login_target{*copilot};
+        }
+        for (auto const& entry : providers) {
+            if (auto const chatgpt = chatgpt_sign_in(entry.second)) {
+                return login_target{*chatgpt};
+            }
+        }
+        return std::unexpected{std::string{"set copilot.token_file or a provider's chatgpt.token_file in the configuration first"}};
+    }
+    auto const found = providers.find(std::string{provider});
+    if (found == providers.end()) {
+        return std::unexpected{std::format("no provider named {}", provider)};
+    }
+    if (auto const chatgpt = chatgpt_sign_in(found->second)) {
+        return login_target{*chatgpt};
+    }
+    if (detail::has_token_file(found->second)) {
+        return login_target{*found->second.copilot};
+    }
+    return std::unexpected{std::format("provider {} has no sign-in: give it a copilot or chatgpt object with a token_file", provider)};
+}
+
 inline std::optional<gateway::copilot_config> copilot_login_target(gateway::config const& settings) {
     return detail::copilot_target(settings);
 }

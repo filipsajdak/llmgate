@@ -12,8 +12,11 @@ import llmgate.http;
 import llmgate.httpio;
 import llmgate.json;
 import llmgate.oauth;
+import llmgate.net;
 import llmgate.process;
+import llmgate.proof;
 import llmgate.reflect;
+import llmgate.text;
 import llmgate.tls;
 
 export namespace llmgate::chatgpt {
@@ -25,7 +28,19 @@ constexpr seconds refresh_margin{60};
 constexpr std::chrono::milliseconds auth_limit{15000};
 constexpr mode_t private_file_mode = 0600;
 
-enum class [[=reflect::error_enum]] errc { login_required = 1, plan_not_enabled, refresh_rejected, auth_unreachable, bad_reply };
+enum class [[=reflect::error_enum]] errc {
+    login_required = 1,
+    plan_not_enabled,
+    refresh_rejected,
+    auth_unreachable,
+    bad_reply,
+    sign_in_denied,
+    sign_in_timeout,
+    state_mismatch,
+    bad_id_token,
+    port_busy,
+    exchange_rejected
+};
 static_assert(reflect::unique_values<errc>() && reflect::starts_at_one<errc>());
 
 using reflect::make_error_code;
@@ -72,7 +87,9 @@ inline httpio::request_spec token_request(std::string body) {
 }
 
 inline std::string refresh_form(tokens const& held) {
-    return "grant_type=refresh_token&refresh_token=" + oauth::percent_encode(held.refresh_token) + "&client_id=" + oauth::percent_encode(held.client_id);
+    std::string out;
+    text::append_all(out, "grant_type=refresh_token&refresh_token=", oauth::percent_encode(held.refresh_token), "&client_id=", oauth::percent_encode(held.client_id));
+    return out;
 }
 
 inline std::error_code refusal(std::string_view const error) {
@@ -181,5 +198,37 @@ private:
     bool login_rejected_ = false;
     int refreshes_ = 0;
 };
+
+
+inline system_clock::time_point wall_clock() {
+    return system_clock::now();
+}
+
+inline std::string advice(std::error_code const failure) {
+    if (failure == make_error_code(errc::port_busy)) {
+        return "the callback port is in use: stop the program using it or set chatgpt.callback_port";
+    }
+    if (failure == make_error_code(errc::sign_in_timeout)) {
+        return "no sign-in arrived in time: run llmgate login --provider again and finish in the browser";
+    }
+    return failure == make_error_code(errc::sign_in_denied) ? std::string{"access was not granted in the browser"} : failure.message();
+}
+
+struct signed_in {
+    std::string account{};
+    bool plan_enabled = false;
+};
+
+struct sign_in_options {
+    std::function<void(std::string const&)> announce{};
+    std::chrono::milliseconds wait{std::chrono::minutes{5}};
+};
+
+}  // namespace llmgate::chatgpt
+
+export namespace llmgate::chatgpt {
+
+async::task<std::expected<signed_in, std::error_code>> sign_in(async::reactor& loop, tls::client_context const& tls_context, gateway::chatgpt_config settings,
+                                                               sign_in_options options, std::function<system_clock::time_point()> clock = wall_clock);
 
 }  // namespace llmgate::chatgpt

@@ -36,3 +36,5 @@ src/http/io.cppm|step|on_event|awaited immediately by the caller, which owns the
 src/http/io.cppm|advance|on_event|private helper awaited immediately by read and step, whose callers own the sink
 src/http/io.cppm|operator ( )|incoming|awaited immediately by serve_connection, whose frame owns the request
 src/http/io.cppm|operator ( )|out|awaited immediately by serve_connection, whose frame owns the writer
+src/gateway/chatgpt.cpp|operator ( )|incoming|awaited immediately by serve_connection, whose frame owns the request
+src/gateway/chatgpt.cpp|operator ( )|out|awaited immediately by serve_connection, whose frame owns the writer

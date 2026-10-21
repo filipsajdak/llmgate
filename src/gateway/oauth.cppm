@@ -225,6 +225,21 @@ constexpr std::string id_token_problem(json::value const& claims, std::string_vi
     return seconds == nullptr || *seconds <= now ? "the ID token has expired" : std::string{};
 }
 
+constexpr std::string uuid_urn(std::array<std::byte, 16> bytes) {
+    bytes[6] = static_cast<std::byte>((std::to_integer<unsigned>(bytes[6]) & 0x0F) | 0x40);
+    bytes[8] = static_cast<std::byte>((std::to_integer<unsigned>(bytes[8]) & 0x3F) | 0x80);
+    std::string out{"urn:uuid:"};
+    for (std::size_t at = 0; at < bytes.size(); ++at) {
+        auto const value = std::to_integer<unsigned>(bytes[at]);
+        out.push_back(proof::hex_digits[value >> 4]);
+        out.push_back(proof::hex_digits[value & 0xF]);
+        if (at == 3 || at == 5 || at == 7 || at == 9) {
+            out.push_back('-');
+        }
+    }
+    return out;
+}
+
 constexpr bool refresh_token_unusable(std::string_view const error) {
     constexpr auto unusable = std::to_array<std::string_view>(
         {"invalid_grant", "invalid_refresh_token", "token_expired", "refresh_token_expired", "refresh_token_invalidated", "refresh_token_reused"});

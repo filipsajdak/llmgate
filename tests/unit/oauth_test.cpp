@@ -128,6 +128,18 @@ const suite oauth_suite = [] {
         expect(!oauth::grants_plan_use("openid offline_access") && !oauth::grants_plan_use("chatgpt.tokens.use.directly") && !oauth::grants_plan_use(""));
     };
 
+    "capability_a_host_id_is_a_version_4_uuid_urn_built_from_random_bytes"_test = [] {
+        std::array<std::byte, 16> bytes{};
+        for (std::size_t at = 0; at < bytes.size(); ++at) {
+            bytes[at] = static_cast<std::byte>(at * 17);
+        }
+
+        auto const urn = oauth::uuid_urn(bytes);
+
+        expect(urn == "urn:uuid:00112233-4455-4677-8899-aabbccddeeff") << urn;
+        expect(oauth::uuid_urn(std::array<std::byte, 16>{}) == "urn:uuid:00000000-0000-4000-8000-000000000000");
+    };
+
     "capability_a_token_reply_is_read_leniently_and_needs_an_access_token"_test = [] {
         auto const done = oauth::parse_token_reply(R"({"access_token":"a","refresh_token":"r","id_token":"i","token_type":"Bearer","expires_in":3600,"scope":"openid","earliest_refresh_at":1760003000,"future":1})");
         auto const bad = oauth::parse_token_reply(R"({"error":"invalid_grant"})");
