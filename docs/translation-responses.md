@@ -95,7 +95,7 @@ becomes `cache_read_input_tokens`, `cache_creation_input_tokens` is 0, `output_t
 Responses reasoning is an opaque item the upstream wants back on the next turn. With `store: false` the item
 returns only through `include: ["reasoning.encrypted_content"]`. The translator requests it, shows the
 reasoning summary as a `thinking` block, and puts the item (id and encrypted content) into the block's
-`signature`, base64 encoded. On the next request a `thinking` block with a signature written by this gateway
+`signature`, as the item's JSON text behind the prefix `llmgate-r1:`. On the next request a `thinking` block with a signature written by this gateway
 is restored to a `reasoning` item; a block with no signature, or one this gateway did not write, is dropped
 (Claude Code treats the signature as opaque, so nothing else needs to change). A history that switched
 provider therefore never sends one provider's reasoning to another.
