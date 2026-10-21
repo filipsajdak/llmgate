@@ -849,6 +849,39 @@ inline std::function<void(std::string const&)> ledger_sink(std::string const& co
     };
 }
 
+inline std::uint64_t size_on_disk(std::filesystem::path const& path) {
+    std::error_code ignored;
+    auto const size = std::filesystem::file_size(path, ignored);
+    return ignored ? std::uint64_t{0} : static_cast<std::uint64_t>(size);
+}
+
+inline std::function<void(std::string const&)> capture_sink_bytes(std::string const& configured_path, std::uint64_t const limit_bytes) {
+    if (configured_path.empty()) {
+        return {};
+    }
+    auto const path = std::filesystem::path{process::expand_home(configured_path)};
+    return [path, limit_bytes, written = size_on_disk(path), warned = false, full = false](std::string const& line) mutable {
+        constexpr mode_t capture_mode = 0600;
+        full = full || written + line.size() > limit_bytes;
+        if (full) {
+            if (!std::exchange(warned, true)) {
+                std::println(stderr, "llmgate: the capture file {} reached its limit and stops growing", path.string());
+            }
+            return;
+        }
+        if (auto const done = process::append_file(path, line, capture_mode, true)) {
+            written += line.size();
+        } else if (!std::exchange(warned, true)) {
+            std::println(stderr, "llmgate: cannot append to the capture file {}: {}", path.string(), done.error().message());
+        }
+    };
+}
+
+inline std::function<void(std::string const&)> capture_sink(gateway::debug_config const& settings) {
+    constexpr std::uint64_t bytes_per_mib = std::uint64_t{1} << 20;
+    return capture_sink_bytes(settings.capture_file, settings.capture_limit_mib * bytes_per_mib);
+}
+
 inline int run_usage(context const& where) {
     auto const& configured = where.settings.usage.ledger_file;
     if (configured.empty()) {

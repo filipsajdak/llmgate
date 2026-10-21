@@ -116,6 +116,9 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `usage.budget.daily_tokens` | integer | `0` | Tokens allowed per UTC day; 0 means no limit. |
 | `usage.budget.monthly_tokens` | integer | `0` | Tokens allowed per UTC month; 0 means no limit. |
 | `usage.budget.warn_percent` | integer | `80` | Percent of a budget after which the status line turns to high. |
+| `debug` | object | - | Debugging aids that are off by default. |
+| `debug.capture_file` | string | `""` | File that receives one JSON line per request with the request and reply bodies and the headers (credentials replaced by <redacted>), for finding out what a misbehaving model sent. The file holds your conversations: it is created with mode 0600, is off while this is empty, and stops growing at capture_limit_mib. |
+| `debug.capture_limit_mib` | integer | `256` | Size in MiB at which the capture file stops growing. |
 <!-- config-table:end -->
 
 ## Usage ledger and budgets

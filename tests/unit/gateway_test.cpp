@@ -1135,6 +1135,45 @@ const suite gateway_suite = [] {
         expect(body.contains(R"json("classifier_requests":{"default/opus":1})json") && body.contains(R"json("classifier_unparseable":{"default/opus":1})json")) << body;
     };
 
+    "capability_with_capture_on_each_reply_is_written_with_its_request_redacted_headers_and_the_raw_stream"_test = [] {
+        world w;
+        std::vector<std::string> lines;
+        w.gateway.capture_with([&lines](std::string const& line) { lines.push_back(line); });
+        w.upstream.mode = behaviour::sse_clean;
+
+        (void)w.ask(messages_request(chat_with_session("opus", true)));
+
+        expect(lines.size() == 1_u);
+        auto const parsed = json::parse(lines.at(0), {.jsonc = false});
+        expect(parsed.has_value());
+        expect(json::text_at(*parsed, {"provider"}) == "default" && json::text_at(*parsed, {"kind"}) == "main" && json::count_at(*parsed, {"status"}).value_or(0) == 200_u);
+        expect(json::text_at(*parsed, {"request_body"}).contains(R"("model":"opus")"));
+        expect(json::text_at(*parsed, {"request_headers", "x-api-key"}) == "<redacted>") << lines.at(0);
+        expect(json::text_at(*parsed, {"reply_body"}).contains("event: message_start") && json::text_at(*parsed, {"reply_body"}).contains("event: message_stop"));
+        expect(json::text_at(*parsed, {"reply_headers", "content-type"}).starts_with("text/event-stream") || json::text_at(*parsed, {"reply_headers", "Content-Type"}).starts_with("text/event-stream"));
+    };
+
+    "capability_a_failed_exchange_is_captured_with_the_upstreams_error_body"_test = [] {
+        world w;
+        std::vector<std::string> lines;
+        w.gateway.capture_with([&lines](std::string const& line) { lines.push_back(line); });
+        w.upstream.mode = behaviour::rate_limited;
+
+        (void)w.ask(messages_request(chat("opus", false)));
+
+        expect(lines.size() == 1_u);
+        auto const parsed = json::parse(lines.at(0), {.jsonc = false});
+        expect(parsed.has_value() && json::count_at(*parsed, {"status"}).value_or(0) == 429_u && json::text_at(*parsed, {"reply_body"}).contains("rate_limit_error")) << lines.at(0);
+    };
+
+    "limit_without_a_capture_sink_nothing_is_captured_and_replies_are_unchanged"_test = [] {
+        world w;
+
+        auto const answer = w.ask(messages_request(chat("opus", false)));
+
+        expect(answer.status == 200 && answer.body.contains(R"("type":"message")"));
+    };
+
     "capability_a_picked_target_goes_to_exactly_that_provider_with_its_upstream_model"_test = [] {
         duo d;
 

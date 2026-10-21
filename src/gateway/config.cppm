@@ -90,6 +90,12 @@ struct usage_config {
     [[= reflect::doc{"Token budgets; 0 means no limit, and counted tokens are input + output + cache writes."}]] usage::budget budget{};
 };
 
+struct debug_config {
+    [[= reflect::doc{"File that receives one JSON line per request with the request and reply bodies and the headers (credentials replaced by <redacted>), for finding out what a misbehaving model sent. The file holds your conversations: it is created with mode 0600, is off while this is empty, and stops growing at capture_limit_mib."}]]
+    [[= reflect::example{R"("~/.local/state/llmgate/capture.jsonl")"}]] [[= reflect::commented]] std::string capture_file{};
+    [[= reflect::doc{"Size in MiB at which the capture file stops growing."}]] std::uint64_t capture_limit_mib = 256;
+};
+
 struct config {
     [[= json::required]] [[= reflect::doc{"Address the gateway listens on; point Claude Code at it with ANTHROPIC_BASE_URL=http://ADDRESS/anthropic."}]]
     [[= reflect::example{R"("127.0.0.1:9480")"}]] std::string listen{};
@@ -126,6 +132,7 @@ struct config {
     [[= reflect::example{R"(["gateway.internal:9480"])"}]] [[= reflect::commented]] std::vector<std::string> allowed_hosts{};
     [[= reflect::doc{"What llmgate claude and llmgate env give Claude Code: model names per role, context window and profile."}]] claude::launch_config claude{};
     [[= reflect::doc{"Usage ledger and token budgets."}]] usage_config usage{};
+    [[= reflect::doc{"Debugging aids that are off by default."}]] debug_config debug{};
 };
 
 }  // namespace llmgate::gateway

@@ -24,7 +24,8 @@ cat > "$work/config.jsonc" <<JSON
                  "models": { "claude-sonnet-5-5": "gpt-fake" } }
   },
   "routes": { "other": ["codex"] },
-  "usage": { "ledger_file": "$work/usage.jsonl" }
+  "usage": { "ledger_file": "$work/usage.jsonl" },
+  "debug": { "capture_file": "$work/state/capture.jsonl" }
 }
 JSON
 RESPONSES_TOKEN=fake-plan-token "$binary" --config "$work/config.jsonc" > "$work/gateway.log" 2>&1 &
@@ -51,7 +52,7 @@ def post(payload, model="claude-sonnet-5-5"):
     body = json.dumps(dict({"model": model, "max_tokens": 64, "stream": True, "temperature": 0.3, "tools": TOOLS}, **payload))
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     connection.request("POST", "/anthropic/v1/messages", body, {"content-type": "application/json", "anthropic-beta": "tools-2024", "anthropic-version": "2023-06-01",
-                                                                  "x-claude-code-session-id": "sess-e2e"})
+                                                                  "x-claude-code-session-id": "sess-e2e", "x-api-key": "client-secret-xyz"})
     reply = connection.getresponse()
     text = reply.read().decode()
     events = [json.loads(line[6:]) for line in text.splitlines() if line.startswith("data: ")]
@@ -109,5 +110,12 @@ pinned_status, _, pinned = post({"messages": [user]}, model="claude-gpt-fake@lim
 body = json.loads(pinned.split("\n\n")[0]) if pinned.startswith("{") else json.loads(pinned)
 check("an upstream rate limit reaches Claude Code as an Anthropic rate_limit_error",
       pinned_status == 429 and body["type"] == "error" and body["error"]["type"] == "rate_limit_error" and body["error"]["message"] == "Rate limit reached")
+import os, stat
+capture_path = f"{work}/state/capture.jsonl"
+captured = [json.loads(line) for line in open(capture_path)]
+check("the capture file is private", stat.S_IMODE(os.stat(capture_path).st_mode) == 0o600)
+check("the capture file holds one line per answered or failed exchange", len(captured) >= 3 and all("request_body" in c and "reply_body" in c for c in captured))
+check("no credential reached the capture file", "client-secret-xyz" not in open(capture_path).read() and "fake-plan-token" not in open(capture_path).read())
+check("a captured stream keeps the raw upstream events", any("response.output_item.added" in c["reply_body"] for c in captured if c["status"] == 200))
 sys.exit(1 if failures else 0)
 PY

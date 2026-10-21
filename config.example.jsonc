@@ -145,5 +145,16 @@
       // Percent of a budget after which the status line turns to high.
       "warn_percent": 80
     }
+  },
+
+  // Debugging aids that are off by default.
+  "debug": {
+    // File that receives one JSON line per request with the request and reply bodies and the headers
+    // (credentials replaced by <redacted>), for finding out what a misbehaving model sent. The file holds
+    // your conversations: it is created with mode 0600, is off while this is empty, and stops growing at
+    // capture_limit_mib.
+    // "capture_file": "~/.local/state/llmgate/capture.jsonl",
+    // Size in MiB at which the capture file stops growing.
+    "capture_limit_mib": 256
   }
 }

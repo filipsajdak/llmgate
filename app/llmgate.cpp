@@ -86,6 +86,14 @@ void attach_ledger(gateway::proxy& proxy, gateway::config const& settings) {
     proxy.persist_usage_with(sink);
 }
 
+void attach_capture(gateway::proxy& proxy, gateway::config const& settings) {
+    if (auto sink = commands::capture_sink(settings.debug)) {
+        std::println(stderr, "llmgate: capturing request and reply bodies to {} (limit {} MiB); the file holds your conversations", settings.debug.capture_file,
+                     settings.debug.capture_limit_mib);
+        proxy.capture_with(std::move(sink));
+    }
+}
+
 void report_abandoned(std::size_t const abandoned, std::chrono::milliseconds const drain) {
     if (abandoned != 0) {
         std::println(stderr, "llmgate: stopped with {} requests still running after the {} s drain", abandoned,
@@ -105,6 +113,7 @@ int serve_on(async::reactor& loop, gateway::config const& settings, std::string 
     auto credentials = make_credentials(loop, tls_context, settings);
     gateway::proxy proxy{loop, settings, std::move(*policy), borrowed(credentials), tls_context};
     attach_ledger(proxy, settings);
+    attach_capture(proxy, settings);
     proxy.use_overrides(commands::read_overrides());
     proxy.persist_overrides_with(commands::overrides_sink());
     auto stop = shutdown::stop_signal::make();

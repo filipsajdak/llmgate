@@ -275,6 +275,45 @@ const suite commands_suite = [] {
         expect(commands::read_overrides().global.empty());
     };
 
+    "capability_the_capture_sink_appends_lines_privately_and_is_off_without_a_path"_test = [] {
+        sandbox box;
+        auto const path = box.root / "state" / "capture.jsonl";
+
+        auto const sink = commands::capture_sink_bytes(path.string(), 1000);
+        sink("one\n");
+        sink("two\n");
+
+        expect(!commands::capture_sink_bytes("", 1000));
+        std::ifstream in{path};
+        std::string text{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+        expect(text == "one\ntwo\n");
+        expect((std::filesystem::status(path).permissions() & (std::filesystem::perms::group_all | std::filesystem::perms::others_all)) == std::filesystem::perms::none);
+    };
+
+    "limit_the_capture_sink_stops_at_its_limit_and_never_writes_half_a_line"_test = [] {
+        sandbox box;
+        auto const path = box.root / "capture.jsonl";
+
+        auto const sink = commands::capture_sink_bytes(path.string(), 30);
+        for (auto const& line : {std::string(19, 'a') + "\n", std::string(19, 'b') + "\n", std::string(5, 'c') + "\n"}) {
+            sink(line);
+        }
+
+        expect(std::filesystem::file_size(path) == 20_u);
+    };
+
+    "limit_an_existing_capture_file_counts_toward_the_limit"_test = [] {
+        sandbox box;
+        auto const path = box.root / "capture.jsonl";
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream{path} << std::string(25, 'x');
+
+        auto const sink = commands::capture_sink_bytes(path.string(), 30);
+        sink(std::string(19, 'a') + "\n");
+
+        expect(std::filesystem::file_size(path) == 25_u);
+    };
+
     "limit_use_refuses_the_wrong_number_of_words"_test = [] {
         expect(!commands::control_body({}, "").has_value());
         expect(!commands::control_body({"opus"}, "").has_value());

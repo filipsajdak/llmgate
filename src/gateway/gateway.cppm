@@ -7,6 +7,7 @@ export module llmgate.gateway;
 import std;
 import llmgate.anthropic;
 import llmgate.async;
+import llmgate.capture;
 import llmgate.claude;
 import llmgate.control;
 import llmgate.history;
@@ -339,6 +340,7 @@ struct request_note {
     std::string session{};
     std::chrono::steady_clock::time_point began{};
     std::string kind{};
+    httpio::request const* request = nullptr;
 };
 
 struct outcome_text {
@@ -363,6 +365,8 @@ struct relay_state {
     sse::parser parser{};
     anthropic::stream_guard guard{};
     std::optional<responses::stream_translator> translator{};
+    bool capture = false;
+    std::string raw{};
     std::deque<std::string> pending{};
     usage::observer observed{};
     std::uint64_t repairs_seen = 0;
@@ -392,6 +396,9 @@ struct relay_state {
     }
 
     void on_chunk(std::span<std::byte const> bytes) {
+        if (capture && streaming && raw.size() < capture::body_limit_bytes) {
+            raw.append(reinterpret_cast<char const*>(bytes.data()), bytes.size());
+        }
         if (streaming) {
             parser.feed(bytes, [this](sse::event const& item) { accept(item); });
             return;
@@ -576,6 +583,7 @@ public:
         : proxy{loop, std::move(settings), std::move(access), single(credentials), tls_context} {}
 
     void use_overrides(control::overrides book) { overrides_ = std::move(book); }
+    void capture_with(std::function<void(std::string const&)> sink) { capture_ = std::move(sink); }
     void persist_overrides_with(std::function<void(control::overrides const&)> sink) { persist_overrides_ = std::move(sink); }
 
     bool uses_credential_endpoint() const {
@@ -781,7 +789,7 @@ private:
             ++counters_.budget_refused;
             co_return co_await reject(out, routing::error_reply(429, "rate_limit_error", usage::refusal_message(now)));
         }
-        detail::request_note note{.requested = std::move(first->requested), .session = usage::session_of(incoming.body), .began = std::chrono::steady_clock::now(), .kind = usage::kind_of(incoming.body)};
+        detail::request_note note{.requested = std::move(first->requested), .session = usage::session_of(incoming.body), .began = std::chrono::steady_clock::now(), .kind = usage::kind_of(incoming.body), .request = &incoming};
         auto order = plan_for(incoming, note);
         note.session = session_for(incoming, note);
         co_return co_await run_providers(incoming, out, std::move(order), std::move(note));
@@ -873,6 +881,7 @@ private:
             ++counters_.no_provider;
             co_return co_await reject(out, routing::error_reply(503, "api_error", "every provider for this model is unavailable (circuit open)"));
         }
+        capture_exchange(note, providers_[last].name, held->status, {}, held->fields, held->body);
         record_entry(note, providers_[last].name, held->status, {}, {}, 0, {.error = usage::error_of_body(held->body)});
         co_return co_await out.send(held->status, held->fields, held->body);
     }
@@ -996,8 +1005,28 @@ private:
             state.observed.on_body(state.buffered);
         }
         auto const status = final_status(state, failure);
-        record_entry(note, provider, status, state.observed.model(), state.observed.used(), state.repairs_seen,
-                     {.stop_reason = state.observed.stop_reason(), .error = reply_error(state, status), .verdict = classifier_verdict(note, state, provider, status)});
+        detail::outcome_text outcome{.stop_reason = state.observed.stop_reason(), .error = reply_error(state, status), .verdict = classifier_verdict(note, state, provider, status)};
+        capture_reply(note, provider, status, state, outcome.verdict);
+        record_entry(note, provider, status, state.observed.model(), state.observed.used(), state.repairs_seen, std::move(outcome));
+    }
+
+    void capture_exchange(detail::request_note const& note, std::string_view const provider, int const status, std::string_view const verdict,
+                          http::header_map const& reply_headers, std::string_view const reply_body) {
+        if (!capture_ || note.request == nullptr) {
+            return;
+        }
+        capture::exchange seen{.time = clock_(), .session = note.session, .provider = std::string{provider}, .requested = note.requested, .kind = note.kind,
+                               .verdict = std::string{verdict}, .status = status, .request_headers = capture::redacted_headers(note.request->head.fields),
+                               .reply_headers = capture::redacted_headers(reply_headers)};
+        seen.request_body = capture::bounded(note.request->body, capture::body_limit_bytes, seen.request_truncated);
+        seen.reply_body = capture::bounded(reply_body, capture::body_limit_bytes, seen.reply_truncated);
+        capture_(capture::line_of(seen));
+    }
+
+    void capture_reply(detail::request_note const& note, std::string_view const provider, int const status, detail::relay_state const& state, std::string_view const verdict) {
+        if (state.head) {
+            capture_exchange(note, provider, status, verdict, state.head->fields, state.streaming ? std::string_view{state.raw} : std::string_view{state.buffered});
+        }
     }
 
     static std::string reply_error(detail::relay_state const& state, int const status) {
@@ -1084,6 +1113,7 @@ private:
                                                    detail::request_note note) {
         detail::relay_state state{.counters = &counters_, .buffer_limit = buffer_limit};
         state.observed.collect_text(note.kind == usage::classifier_kind);
+        state.capture = static_cast<bool>(capture_);
         if (providers_[index].settings.protocol == wire_protocol::openai_responses) {
             state.translator.emplace(note.requested);
         }
@@ -1213,6 +1243,7 @@ private:
     control::overrides overrides_;
     control::registry served_;
     std::function<void(control::overrides const&)> persist_overrides_;
+    std::function<void(std::string const&)> capture_;
     std::vector<std::string> declared_;
     net::connection_pool<net::any_stream> pool_;
     stats counters_;
