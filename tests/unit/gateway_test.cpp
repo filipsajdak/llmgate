@@ -43,6 +43,7 @@ enum class behaviour {
     sse_stalls,
     sse_endless,
     rate_limited,
+    not_a_message,
     server_error,
     bad_request,
     silent,
@@ -116,6 +117,11 @@ struct fake_upstream {
                 auto const counted_start = std::pair{"message_start", stream_body_event("message_start", R"(,"message":{"id":"m","model":"claude-opus-upstream","usage":{"input_tokens":20,"output_tokens":1,"cache_creation_input_tokens":4}})")};
                 auto const counted_delta = std::pair{"message_delta", stream_body_event("message_delta", R"(,"delta":{},"usage":{"output_tokens":9})")};
                 co_return co_await script(out, {counted_start, block, text, end_block, counted_delta, stop});
+            }
+            case behaviour::not_a_message: {
+                http::header_map fields;
+                fields.add("Content-Type", "application/json");
+                co_return co_await out.send(200, fields, R"({"choices":[],"usage":{"completion_tokens":16000}})");
             }
             case behaviour::rate_limited: {
                 http::header_map fields;
@@ -1000,6 +1006,35 @@ const suite gateway_suite = [] {
 
         expect(answer.status == 429);
         expect(!answer.headers.contains("request-id") && !answer.body.contains("request_id")) << answer.body;
+    };
+
+    "capability_a_200_reply_that_is_not_a_message_becomes_a_502_anthropic_error"_test = [] {
+        world w;
+        w.upstream.mode = behaviour::not_a_message;
+
+        auto const answer = w.ask(messages_request(chat("opus", false)));
+
+        expect(answer.status == 502) << answer.status;
+        expect(answer.body.contains(R"("type":"api_error")") && answer.body.contains("not a Message") && answer.body.contains("request_id")) << answer.body;
+        expect(answer.headers.contains("request-id"));
+    };
+
+    "capability_an_unusable_200_reply_falls_back_to_the_next_provider_and_counts_against_the_first"_test = [] {
+        duo d;
+        d.first.mode = behaviour::not_a_message;
+
+        auto const answer = d.chat_with("opus");
+
+        expect(answer.status == 200 && d.second.seen.size() == 1_u);
+        expect(d.counts("a").failures == 1_u);
+    };
+
+    "limit_a_real_message_reply_is_still_relayed_untouched"_test = [] {
+        world w;
+
+        auto const answer = w.ask(messages_request(chat("opus", false)));
+
+        expect(answer.status == 200 && answer.body.contains(R"("type":"message")"));
     };
 
     "capability_a_picked_target_goes_to_exactly_that_provider_with_its_upstream_model"_test = [] {

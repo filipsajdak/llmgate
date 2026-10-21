@@ -336,6 +336,8 @@ struct request_note {
     std::chrono::steady_clock::time_point began{};
 };
 
+constexpr int http_success_floor = 200;
+constexpr int http_client_error_span = 100;
 constexpr int http_error_floor = 400;
 
 struct relay_state {
@@ -394,6 +396,11 @@ struct relay_state {
         head = incoming;
         auto const type = incoming.fields.find("content-type").value_or("");
         streaming = incoming.status >= 200 && incoming.status < 300 && type.starts_with("text/event-stream");
+    }
+
+    bool unusable_success() const {
+        return head.has_value() && head->status >= http_success_floor && head->status < http_error_floor - http_client_error_span && !streaming && !buffer_overflow &&
+               !routing::is_message_json(buffered);
     }
 
     void finish_stream() {
@@ -498,11 +505,11 @@ bool retryable(relay_state const& state, std::error_code const failure) {
     if (failure) {
         return !state.head.has_value();
     }
-    return state.head.has_value() && !state.buffer_overflow && retryable_status(state.head->status);
+    return state.head.has_value() && !state.buffer_overflow && (retryable_status(state.head->status) || state.unusable_success());
 }
 
 health health_of(relay_state const& state, std::error_code const failure) {
-    return failure || state.buffer_overflow ? health::failing : health::healthy;
+    return failure || state.buffer_overflow || state.unusable_success() ? health::failing : health::healthy;
 }
 
 std::optional<routing::endpoint_url> parsed_url(std::string_view const url) {
@@ -1068,6 +1075,10 @@ private:
         }
         if (state.head->keep_alive) {
             pool_.give_back(endpoint_key(index), std::move(upstream));
+        }
+        if (state.unusable_success()) {
+            ++counters_.upstream_failures;
+            return detail::refused(routing::error_reply(502, "api_error", "the upstream answered 200 with a body that is not a Message"), detail::health::failing);
         }
         return {.held = detail::held_reply{.status = state.head->status,
                                            .fields = routing::downstream_headers(state.head->fields),

@@ -94,6 +94,15 @@ constexpr std::string with_request_id(std::string_view const body, std::string_v
     return out;
 }
 
+constexpr bool is_message_json(std::string_view const body) {
+    auto const members = jsonscan::top_level_members(body);
+    if (!members) {
+        return false;
+    }
+    auto const types = jsonscan::members_named(*members, "type");
+    return !types.empty() && body.substr(types.front().value_begin, types.front().value_end - types.front().value_begin) == R"("message")";
+}
+
 constexpr std::string_view path_of(std::string_view const target) noexcept {
     return target.substr(0, target.find('?'));
 }
@@ -357,6 +366,7 @@ static_assert(route_of("GET", "/nope") == route::unknown_path);
 static_assert(parse_url("https://api.example.com").value().port == https_port);
 static_assert(parse_url("http://127.0.0.1:9090/base").value().base_path == "/base");
 static_assert(!parse_url("ftp://x").has_value());
+static_assert(is_message_json(R"({"id":"m","type":"message","content":[]})") && !is_message_json(R"({"choices":[]})") && !is_message_json("x") && !is_message_json(R"({"type":"error"})"));
 static_assert(with_request_id(R"({"type":"error"})", "req_1") == R"({"type":"error","request_id":"req_1"})" && with_request_id("x", "i") == "x");
 static_assert(secrets_equal("abc", "abc") && !secrets_equal("abc", "abd") && !secrets_equal("abc", "abcd") && secrets_equal("", ""));
 static_assert(is_loopback_host("127.0.0.1") && is_loopback_host("localhost") && !is_loopback_host("0.0.0.0") && !is_loopback_host("10.0.0.5"));
