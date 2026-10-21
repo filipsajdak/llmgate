@@ -290,6 +290,33 @@ model list can change; `llmgate doctor` checks the sign-in.
 A chat-completions translator for local models (for example vLLM on a Thor) follows the same design and is not
 built.
 
+## The llmgate mod: the route inside Claude Code
+
+`mods/llmgate/` is a Claude Code [mod](https://code.claude.com/docs/en/plugins/mods/overview) that shows the route
+of the session and switches it without a second terminal ([docs/llmgate-mod.md](docs/llmgate-mod.md); BET-5, first
+slice). `/llmgate` opens a pane (beside the transcript where the app has room, above the prompt otherwise; under
+`claude -p` it prints the routes as text):
+
+- **Now:** for opus, sonnet and haiku the providers and upstream model in force and why (`via`), and the provider
+  that answered the last reply, with `fallback` and `switched` marks.
+- **Targets:** every model your providers offer (`offer` in the provider), with `use for ROLE` (this session) and
+  `make default` (every session) buttons, and `clear session override`.
+
+Start Claude Code with the mod loaded and tell it where llmgate is (the launcher will do both in a later slice):
+
+```
+LLMGATE_BIN="$(command -v llmgate)" LLMGATE_CONFIG=~/.config/llmgate/config.jsonc \
+  llmgate claude --plugin-dir /path/to/llmgate/mods/llmgate
+```
+
+A mod is code that runs with your permissions, so check what this one does first:
+`claude plugin validate mods/llmgate`. It reads `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `LLMGATE_BIN` and
+`LLMGATE_CONFIG`; it fetches only from a loopback gateway (`/anthropic/v1/models`, `/llmgate/route`,
+`/llmgate/session`), sending the gateway key only there; and its one other action is running the `llmgate` binary by
+argument list (`llmgate use ROLE TARGET [--session ID]`) with a target taken from the gateway's own list, never
+through a shell. Its tests run with `claude plugin test` from `mods/llmgate`, and `tests/e2e/mod_flow.sh` runs the
+command against a real gateway (skipped when `claude` is not installed).
+
 ## Stopping, doctor and quota
 
 `SIGINT` or `SIGTERM` makes `llmgate serve` stop accepting and close its listening socket. Requests already running finish for up to `time.drain` (default `10s`); new requests on open keep-alive connections get 503, and idle connections do not hold the drain. Then the gateway removes the pid file it owns (the one `llmgate claude` wrote for it) and exits 0. A second signal exits 130 at once; if the drain times out the gateway says how many requests it abandoned and still exits 0. The signal handler only writes a byte to a self-pipe that the reactor waits on next to the listening socket, so there is no flag polling and no work inside the handler. The usage ledger is appended per request, so there is nothing left to flush.

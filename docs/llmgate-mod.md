@@ -1,6 +1,6 @@
 # The llmgate mod: control the gateway from inside Claude Code
 
-Status: design (BET-5). Nothing here is built. Decisions are the owner's answers of 2026-10-21; facts about what a
+Status: design (BET-5). Built so far: M0 (the spike) and M1 (the pane with Now and Targets, `mods/llmgate/`). Decisions are the owner's answers of 2026-10-21; facts about what a
 mod can do come from the mods documentation (https://code.claude.com/docs/en/plugins/mods/overview, `interface`,
 `events`, `api`) and from the `plugin-authoring` types of Claude Code 2.1.306, marked where only documented.
 
