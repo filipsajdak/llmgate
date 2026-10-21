@@ -15,10 +15,15 @@ Pending entry in the ScudoAI Planner; delete this file once it is there.
 
 Question: may a third-party gateway use a ChatGPT Plus sign-in to reach OpenAI models?
 
-Not read: the help-center article "Using Codex with your ChatGPT plan" (help.openai.com, article 11369540),
-which returned HTTP 403 to an automated fetch. Search snippets of it say that signing in to Codex uses the
-plan's usage, that partner apps can share a plan's usage after the user enables subscription sharing, and
-that a developer app can send Responses API requests with an OAuth token authorized for the user's plan.
+Read (user's PDF export of the article, 2026-10-21): the help-center article "Using Codex with your ChatGPT
+plan" (help.openai.com, article 11369540). It has no section on third-party tools or partner apps: the
+"Third-party tools" statements a web-search summary attributed to it are not in the export. What it does say:
+Codex is included in every ChatGPT plan with limits that vary by plan (5-hour and weekly windows, `/status`
+shows them, Support does not reset them); the ChatGPT Terms of Use and Privacy Policy apply to data shared
+between Codex and ChatGPT; for Plus and Pro, conversations may be used to improve models unless training is
+turned off in the data controls, which also apply to content processed through Codex; since 2026-08-31 the
+GPT-5.4 and GPT-5.4 mini models are gone from the ChatGPT sign-in (replaced by GPT-5.6 Terra and GPT-5.6
+Luna) while the API is unaffected.
 
 Read: OpenAI's developer documentation, "Sign in with ChatGPT", section "Open-source token sharing"
 (developers.openai.com/siwc/token-sharing-open-source and its subpages).
@@ -40,6 +45,4 @@ points: whether a Plus plan is enabled for it (found out at the first sign-in), 
 sign-in on a loopback port, not a device-code login.
 
 Effect on the plan: S5 (translation spec) must obey the preview limitations above; S8 builds the
-documented sign-in and refresh, with `store: false` and `stream: true`. Decision for the user before S8:
-proceed with the documented sign-in for their own Plus account (the recommendation), or build the
-translator against an API key only.
+documented sign-in and refresh, with `store: false` and `stream: true`. Decision (the user, 2026-10-21): proceed with the\ndocumented sign-in for their own Plus account. Their data controls decide whether the content is used for\ntraining, so only the invented sample project and the public repository go through it.
