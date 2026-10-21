@@ -93,6 +93,8 @@ const suite usage_suite = [] {
         expect(kind_of(R"({"model":"m","max_tokens":2048,"stop_sequences":["</block>"],"messages":[]})") == "classifier");
         expect(kind_of(R"({"model":"m","stop_sequences":["\n\nHuman:","</block>"],"messages":[]})") == "classifier");
         expect(kind_of(R"({"model":"m","stop_sequences":["END"],"messages":[]})") == "main");
+        expect(kind_of(R"({"model":"claude-sonnet-5","max_tokens":64,"stop_sequences":["</severity>"],"messages":[]})") == "severity");
+        expect(kind_of(R"({"model":"m","stop_sequences":["</severity>","</block>"],"messages":[]})") == "classifier");
         expect(kind_of(R"({"model":"m","messages":[{"role":"user","content":"</block> in text"}]})") == "main");
         expect(kind_of("not json") == "main");
     };

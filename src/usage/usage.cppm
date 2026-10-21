@@ -149,6 +149,7 @@ constexpr tokens read_tokens(json::value const& source) {
 constexpr std::size_t longest_label = 64;
 constexpr std::size_t longest_error = 200;
 constexpr std::string_view classifier_marker = "</block>";
+constexpr std::string_view severity_marker = "</severity>";
 
 constexpr std::size_t longest_reply_text = 4096;
 constexpr std::string_view classifier_kind = "classifier";
@@ -224,8 +225,12 @@ constexpr std::string kind_of(std::string_view const body) {
         return "main";
     }
     for (auto const& item : jsonscan::members_named(*members, "stop_sequences")) {
-        if (body.substr(item.value_begin, item.value_end - item.value_begin).contains(classifier_marker)) {
+        auto const stops = body.substr(item.value_begin, item.value_end - item.value_begin);
+        if (stops.contains(classifier_marker)) {
             return "classifier";
+        }
+        if (stops.contains(severity_marker)) {
+            return "severity";
         }
     }
     return "main";
