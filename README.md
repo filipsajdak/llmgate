@@ -262,7 +262,7 @@ claims no OpenAI support until one does.
     "protocol": "openai_responses",
     "base_url": "https://api.openai.com/v1",
     "chatgpt": { "token_file": "~/.config/llmgate/chatgpt.json" },
-    "models": { "opus": "gpt-5.6-terra", "sonnet": "gpt-5.6-luna" } } } }
+    "models": { "claude-opus-5-5": "gpt-6.1-sol", "claude-sonnet-5-5": "gpt-6-sol" } } } }
 ```
 
 - `llmgate login --provider codex` opens the browser once, registers llmgate with OpenAI, and writes the tokens
