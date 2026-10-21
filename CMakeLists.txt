@@ -312,6 +312,8 @@ add_test(NAME llmgate_readme_compat_matrix_is_generated COMMAND python3 ${CMAKE_
 set_tests_properties(llmgate_readme_compat_matrix_is_generated PROPERTIES LABELS unit)
 add_test(NAME llmgate_responses_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/responses_flow.sh $<TARGET_FILE:llmgate>)
 set_tests_properties(llmgate_responses_flow PROPERTIES LABELS e2e TIMEOUT 120)
+add_test(NAME llmgate_mod_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/mod_flow.sh $<TARGET_FILE:llmgate>)
+set_tests_properties(llmgate_mod_flow PROPERTIES LABELS e2e TIMEOUT 240 SKIP_RETURN_CODE 77)
 add_test(NAME llmgate_models_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/models_flow.sh $<TARGET_FILE:llmgate>)
 set_tests_properties(llmgate_models_flow PROPERTIES LABELS e2e TIMEOUT 60)
 add_test(NAME llmgate_chatgpt_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/chatgpt_flow.sh $<TARGET_FILE:llmgate>)

@@ -1,0 +1,7 @@
+{
+  "name": "llmgate",
+  "version": "0.1.0",
+  "description": "See and switch the route of an llmgate session from inside Claude Code",
+  "author": { "name": "llmgate" },
+  "license": "Apache-2.0"
+}
