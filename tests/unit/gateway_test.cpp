@@ -953,6 +953,55 @@ const suite gateway_suite = [] {
         expect(gateway::config_problem(built).contains("provider a") && gateway::config_problem(built).contains("forward_credentials"));
     };
 
+    "capability_an_error_the_gateway_makes_carries_a_request_id_in_header_and_body"_test = [] {
+        world w;
+        auto request = messages_request("");
+        request.method = "GET";
+        request.target = "/no/such/path";
+
+        auto const answer = w.ask(std::move(request));
+
+        expect(answer.status == 404);
+        auto const id = answer.headers.contains("request-id") ? answer.headers.at("request-id") : std::string{};
+        expect(id.starts_with("req_") && id.size() > 8) << id;
+        expect(answer.body.contains(std::format(R"("request_id":"{}")", id))) << answer.body;
+        expect(answer.body.contains(R"("type":"not_found_error")"));
+    };
+
+    "capability_each_gateway_made_error_gets_its_own_request_id"_test = [] {
+        world w;
+        auto first = messages_request("");
+        first.method = "GET";
+        first.target = "/nope";
+        auto second = messages_request("");
+        second.method = "GET";
+        second.target = "/nope";
+
+        auto const one = w.ask(std::move(first)).headers.at("request-id");
+        auto const two = w.ask(std::move(second)).headers.at("request-id");
+
+        expect(one != two);
+    };
+
+    "capability_a_refusal_made_while_building_the_upstream_request_carries_a_request_id"_test = [] {
+        duo d{[](gateway::config& built) { built.providers["b"].protocol = gateway::wire_protocol::openai_responses; }};
+
+        auto const answer = d.chat_with("claude-model-b@b", false);
+
+        expect(answer.status == 400 && answer.headers.contains("request-id") && answer.body.contains("request_id")) << answer.body;
+    };
+
+    "limit_an_error_relayed_from_the_upstream_is_not_stamped_by_the_gateway"_test = [] {
+        duo d;
+        d.first.mode = behaviour::rate_limited;
+        d.second.mode = behaviour::rate_limited;
+
+        auto const answer = d.chat_with("opus");
+
+        expect(answer.status == 429);
+        expect(!answer.headers.contains("request-id") && !answer.body.contains("request_id")) << answer.body;
+    };
+
     "capability_a_picked_target_goes_to_exactly_that_provider_with_its_upstream_model"_test = [] {
         duo d;
 

@@ -336,6 +336,8 @@ struct request_note {
     std::chrono::steady_clock::time_point began{};
 };
 
+constexpr int http_error_floor = 400;
+
 struct relay_state {
     stats* counters;
     std::size_t buffer_limit;
@@ -435,13 +437,22 @@ constexpr bool client_gone(pump_outcome const& drained) noexcept {
 }
 
 
+constexpr std::size_t request_id_bytes = 12;
+
+std::string new_request_id() {
+    static std::atomic<std::uint64_t> sequence{0};
+    auto const random = proof::random_hex(request_id_bytes);
+    return random ? "req_" + *random : std::format("req_llmgate_{}", ++sequence);
+}
+
 attempt_result refused(routing::reply_body problem, health const state) {
-    held_reply reply{.status = problem.status, .fields = {}, .body = std::move(problem.body)};
+    auto const id = new_request_id();
+    held_reply reply{.status = problem.status, .fields = {}, .body = routing::with_request_id(problem.body, id)};
     reply.fields.add("Content-Type", "application/json");
+    reply.fields.add("request-id", id);
     return {.held = std::move(reply), .state = state};
 }
 
-constexpr int http_error_floor = 400;
 constexpr std::size_t cache_key_chars = 32;
 constexpr std::string_view cache_key_label = "llmgate-prompt-cache";
 
@@ -579,7 +590,7 @@ public:
         }
         if (which == routing::route::control) {
             auto answer = apply_control(incoming);
-            co_return co_await respond(out, answer.status, std::move(answer.body));
+            co_return co_await (answer.status >= detail::http_error_floor ? reject(out, std::move(answer)) : respond(out, answer.status, std::move(answer.body)));
         }
         if (auto body = json_body(which, incoming.head.target)) {
             co_return co_await respond(out, 200, std::move(*body));
@@ -704,7 +715,11 @@ private:
 
     template <net::byte_stream Client>
     static async::task<net::result_void> reject(httpio::response_writer<Client>& out, routing::reply_body problem) {
-        co_return co_await respond(out, problem.status, std::move(problem.body));
+        auto const id = detail::new_request_id();
+        http::header_map fields;
+        fields.add("Content-Type", "application/json");
+        fields.add("request-id", id);
+        co_return co_await out.send(problem.status, fields, routing::with_request_id(problem.body, id));
     }
 
     template <net::byte_stream Client>

@@ -81,7 +81,7 @@ llmgate_module(llmgate_commands INTERFACE src/app/commands.cppm LIBS llmgate_usa
 llmgate_module(llmgate_proof INTERFACE src/core/proof.cppm LIBS OpenSSL::Crypto)
 llmgate_module(llmgate_net INTERFACE src/net/net.cppm LIBS llmgate_async llmgate_tls)
 llmgate_module(llmgate_httpio INTERFACE src/http/io.cppm LIBS llmgate_async llmgate_http llmgate_net llmgate_shutdown)
-llmgate_module(llmgate_routing INTERFACE src/gateway/routing.cppm LIBS llmgate_http llmgate_json llmgate_jsonscan llmgate_members)
+llmgate_module(llmgate_routing INTERFACE src/gateway/routing.cppm LIBS llmgate_http llmgate_json llmgate_jsonscan llmgate_members llmgate_text)
 llmgate_module(llmgate_selection INTERFACE src/gateway/selection.cppm LIBS llmgate_reflect llmgate_role)
 llmgate_module(llmgate_quota INTERFACE src/gateway/quota.cppm LIBS llmgate_json llmgate_text llmgate_usage)
 llmgate_module(llmgate_doctor INTERFACE src/app/doctor.cppm LIBS llmgate_reflect llmgate_arguments llmgate_json llmgate_quota llmgate_routing llmgate_text)
