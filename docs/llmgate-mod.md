@@ -93,9 +93,25 @@ account id, a base URL or a host: a provider is named by its config key. The gat
 - A held proposal is refused, not applied, on any doubt: timeout, interrupt, a second proposal replacing it, a changed catalogue, or a gateway that no longer answers.
 - A mod's approval cannot pass the permission prompt; the mod's tools are not auto-allowed.
 
+## M0 findings (spike run 2026-10-21, Claude Code 2.1.306, terminal, headless)
+
+A skeleton mod with one command ran under `claude -p "/llmgate-ping" --plugin-dir DIR` through an llmgate session
+and reported what it could reach:
+
+| Question | Answer |
+|---|---|
+| Does `claude -p "/mod-command"` run a mod's command? | **Yes.** The command runs its function with no model turn and prints its text, prefixed with the plugin name |
+| Does `$.http.fetch` reach the loopback gateway? | **Yes.** `GET /healthz` and `GET /llmgate/route?session=ID` both answered 200 |
+| Is the session id readable, and is it the one the gateway keys on? | `$.session.id()` answers it, and after `--resume` it equals the first run's id, so `/llmgate/route?session=` and the per-session remap can be keyed by it |
+| Is the gateway address readable? | **Yes.** `$.env.get('ANTHROPIC_BASE_URL')` gives `http://127.0.0.1:PORT/anthropic`; strip `/anthropic` |
+| Is the `llmgate` binary on the mod's PATH? | **No.** `$.process.run(['llmgate', ...])` failed with ENOENT. The launcher must export `LLMGATE_BIN` (and `LLMGATE_CONFIG`) for the mod, and the mod runs the binary by absolute path; by absolute path it started and ran |
+| Does a pane place under `-p`? | No: `isPlaced: false`, reason `no-surface`, as documented. Placement in a real terminal (a command-opened pane at any width) is documented and is checked in M1 |
+
+So decision M12 gains a duty: the launcher exports `LLMGATE_BIN` and `LLMGATE_CONFIG` into the session, and the
+CLI reads `LLMGATE_CONFIG` when no `--config` is given (to be built in M7).
+
 ## Open questions
 
-1. Whether `claude -p "/llmgate status"` runs a mod's command at all (M0 answers it).
-2. The pricing table's place and shape: a `pricing` section in the config or a separate file, and per-million-token units for input, output, cache read and cache write.
-3. Whether the Anthropic rate-limit headers are enough for a quota line, or the subscription's own usage endpoint is needed.
-4. Whether the mod reads the session id with `$.session.id()` for the per-session route, or from the hook inputs.
+1. The pricing table's place and shape: a `pricing` section in the config or a separate file, and per-million-token units for input, output, cache read and cache write.
+2. Whether the Anthropic rate-limit headers are enough for a quota line, or the subscription's own usage endpoint is needed.
+3. Whether the CLI should read `LLMGATE_CONFIG` itself or the mod should always pass `--config`.
