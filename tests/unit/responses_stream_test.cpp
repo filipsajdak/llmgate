@@ -340,6 +340,31 @@ const suite stream_suite = [] {
         expect(responses::error_body(500, "").contains("the upstream answered 500"));
     };
 
+    "capability_the_documented_plan_route_error_codes_get_a_plain_next_step"_test = [] {
+        auto const body = [](std::string_view const code, std::string_view const message = "x", std::string_view const param = "") {
+            auto const text = [](std::string_view const value) { return json::value{std::string{value}}; };
+            return json::write(json::make_object({{"error", json::make_object({{"message", text(message)}, {"code", text(code)}, {"param", text(param)}})}}));
+        };
+
+        auto const limit = responses::error_body(429, body("subscription_sharing_usage_limit_exceeded"));
+        auto const eligible = responses::error_body(403, body("subscription_sharing_user_not_eligible"));
+        auto const unsupported = responses::error_body(400, body("subscription_sharing_unsupported_capability", "no", "tools[2]"));
+        auto const invalid_user = responses::error_body(401, body("subscription_sharing_invalid_user"));
+        auto const unavailable = responses::error_body(503, body("subscription_sharing_usage_unavailable"));
+
+        expect(limit.contains("rate_limit_error") && limit.contains("ChatGPT settings") && limit.contains("Usage")) << limit;
+        expect(eligible.contains("permission_error") && eligible.contains("not eligible")) << eligible;
+        expect(unsupported.contains("invalid_request_error") && unsupported.contains("tools[2]")) << unsupported;
+        expect(invalid_user.contains("authentication_error") && invalid_user.contains("llmgate login")) << invalid_user;
+        expect(unavailable.contains("api_error") && unavailable.contains("temporarily")) << unavailable;
+    };
+
+    "limit_an_unknown_error_code_keeps_the_upstreams_message_untouched"_test = [] {
+        auto const text = responses::error_body(400, R"({"error":{"message":"bad input","code":"something_new"}})");
+
+        expect(text == R"({"type":"error","error":{"type":"invalid_request_error","message":"bad input"}})") << text;
+    };
+
     "limit_a_cached_count_above_the_input_count_never_makes_input_negative"_test = [] {
         auto upstream = text_stream();
         upstream.back() = event("response.completed", R"(,"response":{"usage":{"input_tokens":5,"input_tokens_details":{"cached_tokens":9},"output_tokens":3}})");

@@ -132,17 +132,49 @@ constexpr std::string_view error_type_for_status(int const status) {
     return found == status_error_types.end() ? "api_error" : found->second;
 }
 
+struct plan_error {
+    std::string_view code;
+    std::string_view type;
+    std::string_view next_step;
+    bool names_param;
+};
+
+constexpr auto plan_errors = std::to_array<plan_error>(
+    {{"subscription_sharing_usage_limit_exceeded", "rate_limit_error", "the ChatGPT plan's usage limit is reached: check ChatGPT settings, then Usage, for when it resets", false},
+     {"subscription_sharing_user_not_eligible", "permission_error", "this ChatGPT account is not eligible to share its plan with tools (a region or policy restriction)", false},
+     {"subscription_sharing_invalid_user", "authentication_error", "the ChatGPT sign-in is no longer valid: run llmgate login --provider NAME again", false},
+     {"subscription_sharing_usage_unavailable", "api_error", "ChatGPT plan usage is temporarily unavailable: try again shortly", false},
+     {"subscription_sharing_user_unavailable", "api_error", "the ChatGPT account is temporarily unavailable: try again shortly", false},
+     {"subscription_sharing_route_not_supported", "permission_error", "the plan route does not support this endpoint or method", false},
+     {"subscription_sharing_unsupported_capability", "invalid_request_error", "the plan route does not support something in this request, remove it", true}});
+
+constexpr std::optional<plan_error> plan_error_for(std::string_view const code) {
+    auto const found = std::ranges::find(plan_errors, code, &plan_error::code);
+    return found == plan_errors.end() ? std::nullopt : std::optional<plan_error>{*found};
+}
+
 }  // namespace llmgate::responses::detail
 
 export namespace llmgate::responses {
 
 constexpr std::string error_body(int const status, std::string_view const upstream_body) {
     auto const parsed = json::parse(upstream_body, {.jsonc = false});
-    auto message = parsed ? json::text_at(*parsed, {"error", "message"}) : std::string{};
+    std::string message;
+    std::string_view type = detail::error_type_for_status(status);
+    if (parsed) {
+        message = json::text_at(*parsed, {"error", "message"});
+        if (auto const known = detail::plan_error_for(json::text_at(*parsed, {"error", "code"}))) {
+            type = known->type;
+            message = known->next_step;
+            if (auto const param = json::text_at(*parsed, {"error", "param"}); known->names_param && !param.empty()) {
+                text::append_all(message, " (", param, ")");
+            }
+        }
+    }
     if (message.empty()) {
         text::append_all(message, "the upstream answered ", text::decimal(status));
     }
-    return json::write(detail::event_of("error", {{"error", json::make_object({{"type", detail::text_value(detail::error_type_for_status(status))}, {"message", detail::text_value(message)}})}}));
+    return json::write(detail::event_of("error", {{"error", json::make_object({{"type", detail::text_value(type)}, {"message", detail::text_value(message)}})}}));
 }
 
 class stream_translator {
