@@ -1,6 +1,6 @@
 # llmgate
 
-A gateway that lets Claude Code talk to GitHub Copilot and Anthropic backends without losing anything silently; other providers (ChatGPT/Codex, local OpenAI-compatible models, Gemini, Grok) are planned and are not built yet. C++26 with static reflection, Apache-2.0.
+A gateway that lets Claude Code talk to GitHub Copilot and Anthropic backends without losing anything silently; a ChatGPT plan backend is built and awaits its first real run; other providers (local OpenAI-compatible models, Gemini, Grok) are planned and are not built yet. C++26 with static reflection, Apache-2.0.
 
 Status: walking-skeleton phase (BET-1, decision on 2026-11-06). The Anthropic passthrough works end to end with the real Claude Code CLI against a scripted upstream (`tests/e2e/claude_through_gateway.sh`); the first run against GitHub Copilot needs your device login.
 
@@ -248,13 +248,35 @@ Several accounts of one provider are several provider entries. A Claude subscrip
 | Create a file with the Write tool (`write-file`) | pass | pass | - | - | pass |
 <!-- compat-matrix:end -->
 
-## Planned: OpenAI Responses and local models
+## ChatGPT plan (built, awaiting its first real run)
 
-llmgate speaks the Anthropic Messages protocol upstream today (Claude models through Copilot or Anthropic). A
-translator to the OpenAI Responses API, for Codex models on a ChatGPT plan, is specified in
-[docs/translation-responses.md](docs/translation-responses.md) and not yet built; nothing in this README
-claims OpenAI support until a real Claude Code turn passes through it. A chat-completions translator for local
-models (for example vLLM on a Thor) follows the same design.
+A provider with `protocol: "openai_responses"` and a `chatgpt` object sends Claude Code's requests to the
+OpenAI Responses API, signed in with your ChatGPT plan through OpenAI's documented sign-in for open-source
+tools. The translation (requests, streamed events, tool calls, thinking, usage and errors) is specified in
+[docs/translation-responses.md](docs/translation-responses.md) and is covered by unit, property and end-to-end
+tests against a scripted upstream. No real Claude Code turn has passed through OpenAI yet, so this README
+claims no OpenAI support until one does.
+
+```jsonc
+{ "providers": { "codex": {
+    "protocol": "openai_responses",
+    "base_url": "https://api.openai.com/v1",
+    "chatgpt": { "token_file": "~/.config/llmgate/chatgpt.json" },
+    "models": { "opus": "gpt-5.6-terra", "sonnet": "gpt-5.6-luna" } } } }
+```
+
+- `llmgate login --provider codex` opens the browser once, registers llmgate with OpenAI, and writes the tokens
+  with mode 0600. `LLMGATE_NO_BROWSER=1` prints the address instead of opening it.
+- The access token lasts an hour and refreshes itself; the refresh token lasts 30 days and rotates.
+- `llmgate doctor` reports whether the sign-in exists and how long it is valid.
+- The plan route's own errors (usage limit, account not eligible, sign-in no longer valid) reach Claude Code as
+  Anthropic errors with a plain next step.
+- On a Plus plan, whether this use is enabled is OpenAI's decision and is only known after the first sign-in.
+  Content sent through the plan is subject to the data controls of that ChatGPT account, so test with invented
+  data.
+
+A chat-completions translator for local models (for example vLLM on a Thor) follows the same design and is not
+built.
 
 ## Stopping, doctor and quota
 

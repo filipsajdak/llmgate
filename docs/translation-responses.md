@@ -1,6 +1,6 @@
 # Translating Claude Code's Messages API to the OpenAI Responses API
 
-Status: design (BET-3, slice S5). Nothing here is built; the README claims no OpenAI support until a real
+Status: built and tested against a scripted upstream (BET-3); the README claims no OpenAI support until a real
 Claude Code turn passes through it. The translator is one provider protocol, `openai_responses`; a second
 one for chat-completions backends (local models, Grok) follows the same shape.
 
