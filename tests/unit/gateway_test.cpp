@@ -1174,6 +1174,29 @@ const suite gateway_suite = [] {
         expect(answer.status == 200 && answer.body.contains(R"("type":"message")"));
     };
 
+    "capability_repeated_rate_limits_never_open_the_circuit_and_the_client_keeps_seeing_the_429"_test = [] {
+        world w;
+        w.upstream.mode = behaviour::rate_limited;
+
+        std::vector<int> statuses;
+        for (int n = 0; n < 8; ++n) {
+            statuses.push_back(w.ask(messages_request(chat("opus", false))).status);
+        }
+
+        expect(std::ranges::all_of(statuses, [](int const status) { return status == 429; })) << statuses.back();
+        expect(w.gateway.counters().providers.at("default").skipped == 0_u && w.gateway.counters().providers.at("default").failures == 0_u);
+        expect(w.gateway.counters().no_provider == 0_u);
+    };
+
+    "limit_a_server_error_still_counts_against_the_provider"_test = [] {
+        duo d;
+        d.first.mode = behaviour::server_error;
+
+        (void)d.chat_with("opus");
+
+        expect(d.counts("a").failures == 1_u);
+    };
+
     "capability_a_picked_target_goes_to_exactly_that_provider_with_its_upstream_model"_test = [] {
         duo d;
 
@@ -1581,14 +1604,14 @@ const suite gateway_suite = [] {
         expect(entry->provider == "b" && entry->status == 200);
     };
 
-    "capability_a_429_before_any_byte_falls_back_to_the_next_provider"_test = [] {
+    "capability_a_429_before_any_byte_falls_back_to_the_next_provider_without_counting_as_a_failure"_test = [] {
         duo d;
         d.first.mode = behaviour::rate_limited;
 
         auto const answer = d.chat_with("opus");
 
         expect(answer.status == 200 && d.second.seen.size() == 1_u);
-        expect(d.counts("a").failures == 1_u);
+        expect(d.counts("a").failures == 0_u && d.counts("a").attempts == 1_u);
     };
 
     "capability_a_timeout_waiting_for_the_response_head_falls_back_to_the_next_provider"_test = [] {

@@ -352,6 +352,7 @@ struct outcome_text {
 constexpr int http_success_floor = 200;
 constexpr int http_success_span = 100;
 constexpr int http_error_floor = 400;
+constexpr int too_many_requests = 429;
 
 struct relay_state {
     stats* counters;
@@ -1163,7 +1164,7 @@ private:
         return {.held = detail::held_reply{.status = state.head->status,
                                            .fields = routing::downstream_headers(state.head->fields),
                                            .body = detail::client_error_body(providers_[index].settings.protocol, state.head->status, std::move(state.buffered))},
-                .state = detail::health::failing};
+                .state = state.head->status == detail::too_many_requests ? detail::health::neutral : detail::health::failing};
     }
 
     static http::header_map stream_headers(http::message_head const& head) {
