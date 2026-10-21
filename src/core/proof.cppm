@@ -36,6 +36,13 @@ constexpr std::string identity_message(std::string_view const scope, std::string
     return message;
 }
 
+inline std::array<unsigned char, sha256_bytes> sha256(std::string_view const data) {
+    std::array<unsigned char, sha256_bytes> digest{};
+    unsigned int length = 0;
+    EVP_Digest(data.data(), data.size(), digest.data(), &length, EVP_sha256(), nullptr);
+    return digest;
+}
+
 inline std::string hmac_sha256_hex(std::string_view const key, std::string_view const message) {
     std::array<unsigned char, sha256_bytes> digest{};
     unsigned int length = 0;
