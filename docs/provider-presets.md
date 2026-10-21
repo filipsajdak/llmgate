@@ -52,6 +52,22 @@ that change (model ids, limits) from the provider instead of from a table that g
 
 The published model list (`/v1/models` of llmgate) then carries these limits for Claude Code's picker.
 
+## Measured: the listed limits are not enforced (2026-10-21)
+
+| Route | Listed | Sent | Result |
+|---|---|---|---|
+| work Copilot, `claude-haiku-5.5` on `/v1/messages` | prompt 100000 | a prompt that the backend counted as 286476 input tokens | HTTP 200, answered |
+| work Copilot, same model | output 100000 | `max_tokens` 128000 | HTTP 200, answered |
+| ChatGPT plan route, `gpt-6-sol` | context 272000 | about 1.7 MB of short tokens (several times the window by any count) | HTTP 200, `response.completed` |
+
+Claude Code itself refuses a prompt it estimates above its assumed window before it sends anything ("Prompt is
+too long", seen at 3 MB for a 200k window), so an upstream overflow can only happen between the two limits.
+Consequences: the limits that discovery reports are information, not rules; pinning `prompt_tokens` and
+publishing it as `max_input_tokens` could make Claude Code compact earlier than the route needs (whether
+Claude Code reads that field is not measured and is the next thing to check); and the error mapping of P3 has
+no real upstream wording to be built from yet. It is built from a wording only after a real overflow has been
+captured (`debug.capture_file`), and the `oversize` compatibility scenario stays unwritten until then.
+
 ## Over-limit handling (P3)
 
 1. The pinned limits are advisory. `max_tokens` above the pinned output limit is clamped to it (BET-4 R6),
