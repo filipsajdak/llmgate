@@ -226,6 +226,14 @@ Several accounts of one provider are several provider entries. A Claude subscrip
 | Create a file with the Write tool (`write-file`) | pass | pass | - | - | pass |
 <!-- compat-matrix:end -->
 
+## Planned: OpenAI Responses and local models
+
+llmgate speaks the Anthropic Messages protocol upstream today (Claude models through Copilot or Anthropic). A
+translator to the OpenAI Responses API, for Codex models on a ChatGPT plan, is specified in
+[docs/translation-responses.md](docs/translation-responses.md) and not yet built; nothing in this README
+claims OpenAI support until a real Claude Code turn passes through it. A chat-completions translator for local
+models (for example vLLM on a Thor) follows the same design.
+
 ## Stopping, doctor and quota
 
 `SIGINT` or `SIGTERM` makes `llmgate serve` stop accepting and close its listening socket. Requests already running finish for up to `time.drain` (default `10s`); new requests on open keep-alive connections get 503, and idle connections do not hold the drain. Then the gateway removes the pid file it owns (the one `llmgate claude` wrote for it) and exits 0. A second signal exits 130 at once; if the drain times out the gateway says how many requests it abandoned and still exits 0. The signal handler only writes a byte to a self-pipe that the reactor waits on next to the listening socket, so there is no flag polling and no work inside the handler. The usage ledger is appended per request, so there is nothing left to flush.
