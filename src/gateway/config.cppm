@@ -27,6 +27,16 @@ struct timeouts {
     milliseconds drain = shutdown::default_drain;
 };
 
+constexpr std::uint16_t default_callback_port = 1455;
+
+struct chatgpt_config {
+    [[= reflect::doc{"File that holds the ChatGPT sign-in tokens (created with mode 0600); run llmgate login --provider NAME once to write it."}]]
+    [[= reflect::example{R"("~/.config/llmgate/chatgpt-token.json")"}]] std::string token_file{};
+    [[= reflect::doc{"Address of the OpenAI sign-in service."}]] std::string issuer = "https://auth.openai.com";
+    [[= reflect::doc{"Port on 127.0.0.1 that receives the browser's callback during the sign-in."}]] std::uint16_t callback_port = default_callback_port;
+    [[= reflect::doc{"Name OpenAI shows the user when this tool is registered at the first sign-in."}]] std::string agent_name = "llmgate";
+};
+
 enum class wire_protocol { anthropic, openai_responses };
 static_assert(reflect::unique_values<wire_protocol>());
 
@@ -72,6 +82,7 @@ struct provider_config {
     [[= reflect::doc{"Name of the environment variable that holds the API key sent as the bearer token."}]]
     [[= reflect::example{R"("ANTHROPIC_UPSTREAM_KEY")"}]] std::string static_token_env{};
     [[= reflect::doc{"GitHub Copilot login of this provider; used instead of static_token_env."}]] std::optional<copilot_config> copilot{};
+    [[= reflect::doc{"ChatGPT plan sign-in of this provider (OpenAI's documented token sharing for open-source tools); used instead of static_token_env, with protocol openai_responses."}]] std::optional<chatgpt_config> chatgpt{};
     [[= reflect::doc{"Model names this provider expects: the name Claude Code sends maps to the id here; unknown names pass through unchanged."}]]
     std::map<std::string, std::string> models{};
 };
@@ -124,6 +135,7 @@ struct config {
     [[= reflect::doc{"Time limits of the gateway."}]] timeouts time{};
     [[= reflect::doc{"TLS key exchange groups offered to the providers."}]] tls::group_policy tls_groups = tls::group_policy::post_quantum_preferred;
     [[= reflect::doc{"GitHub Copilot device login of the default provider; run llmgate login once."}]] std::optional<copilot_config> copilot{};
+    [[= reflect::doc{"ChatGPT plan sign-in of this provider (OpenAI's documented token sharing for open-source tools); used instead of static_token_env, with protocol openai_responses."}]] std::optional<chatgpt_config> chatgpt{};
     [[= reflect::doc{"Name of the environment variable that holds the API key of the default provider."}]]
     [[= reflect::example{R"("ANTHROPIC_UPSTREAM_KEY")"}]] [[= reflect::commented]] std::string static_token_env{};
     [[= reflect::doc{"Name of the environment variable that holds the key clients must send; required when listen is not a loopback address."}]]

@@ -79,6 +79,11 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `providers.<name>.copilot.github_url` | string | `"https://github.com"` | GitHub web address used by the device login. |
 | `providers.<name>.copilot.api_url` | string | `"https://api.github.com"` | GitHub API address that exchanges the OAuth token for a Copilot token. |
 | `providers.<name>.copilot.poll_interval` | duration | none | Time between polls of the device login; absent means the interval GitHub names. |
+| `providers.<name>.chatgpt` | object | none | ChatGPT plan sign-in of this provider (OpenAI's documented token sharing for open-source tools); used instead of static_token_env, with protocol openai_responses. |
+| `providers.<name>.chatgpt.token_file` | string | `""` | File that holds the ChatGPT sign-in tokens (created with mode 0600); run llmgate login --provider NAME once to write it. |
+| `providers.<name>.chatgpt.issuer` | string | `"https://auth.openai.com"` | Address of the OpenAI sign-in service. |
+| `providers.<name>.chatgpt.callback_port` | integer | `1455` | Port on 127.0.0.1 that receives the browser's callback during the sign-in. |
+| `providers.<name>.chatgpt.agent_name` | string | `"llmgate"` | Name OpenAI shows the user when this tool is registered at the first sign-in. |
 | `providers.<name>.models` | map of string | `{}` | Model names this provider expects: the name Claude Code sends maps to the id here; unknown names pass through unchanged. |
 | `routes` | map of array of string | `{}` | Per role (opus, sonnet, haiku, fable, other) the providers to try in order. A role without a list uses the other list, then every provider. |
 | `fallback` | object | - | A provider that fails before any response byte reaches Claude Code (connect error, no response head in time, 5xx, 429) is retried on the next one of the role's list; after failures consecutive failures it is skipped for cooldown. |
@@ -96,6 +101,11 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `copilot.github_url` | string | `"https://github.com"` | GitHub web address used by the device login. |
 | `copilot.api_url` | string | `"https://api.github.com"` | GitHub API address that exchanges the OAuth token for a Copilot token. |
 | `copilot.poll_interval` | duration | none | Time between polls of the device login; absent means the interval GitHub names. |
+| `chatgpt` | object | none | ChatGPT plan sign-in of this provider (OpenAI's documented token sharing for open-source tools); used instead of static_token_env, with protocol openai_responses. |
+| `chatgpt.token_file` | string | `""` | File that holds the ChatGPT sign-in tokens (created with mode 0600); run llmgate login --provider NAME once to write it. |
+| `chatgpt.issuer` | string | `"https://auth.openai.com"` | Address of the OpenAI sign-in service. |
+| `chatgpt.callback_port` | integer | `1455` | Port on 127.0.0.1 that receives the browser's callback during the sign-in. |
+| `chatgpt.agent_name` | string | `"llmgate"` | Name OpenAI shows the user when this tool is registered at the first sign-in. |
 | `static_token_env` | string | `""` | Name of the environment variable that holds the API key of the default provider. |
 | `client_key_env` | string | `""` | Name of the environment variable that holds the key clients must send; required when listen is not a loopback address. |
 | `allowed_hosts` | array of string | `[]` | Host names, besides the listen address, accepted in the Host header of a request. |

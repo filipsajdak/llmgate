@@ -225,6 +225,12 @@ constexpr std::string id_token_problem(json::value const& claims, std::string_vi
     return seconds == nullptr || *seconds <= now ? "the ID token has expired" : std::string{};
 }
 
+constexpr bool refresh_token_unusable(std::string_view const error) {
+    constexpr auto unusable = std::to_array<std::string_view>(
+        {"invalid_grant", "invalid_refresh_token", "token_expired", "refresh_token_expired", "refresh_token_invalidated", "refresh_token_reused"});
+    return std::ranges::contains(unusable, error);
+}
+
 constexpr bool grants_plan_use(std::string_view const scopes) {
     return std::ranges::any_of(std::views::split(scopes, ' '), [](auto const piece) { return std::string_view{piece.begin(), piece.end()} == plan_scope; });
 }

@@ -95,6 +95,20 @@
     // "poll_interval": "5s",
   },
 
+  // ChatGPT plan sign-in of this provider (OpenAI's documented token sharing for open-source tools);
+  // used instead of static_token_env, with protocol openai_responses.
+  "chatgpt": {
+    // File that holds the ChatGPT sign-in tokens (created with mode 0600); run llmgate login --provider
+    // NAME once to write it.
+    "token_file": "~/.config/llmgate/chatgpt-token.json",
+    // Address of the OpenAI sign-in service.
+    "issuer": "https://auth.openai.com",
+    // Port on 127.0.0.1 that receives the browser's callback during the sign-in.
+    "callback_port": 1455,
+    // Name OpenAI shows the user when this tool is registered at the first sign-in.
+    "agent_name": "llmgate"
+  },
+
   // Name of the environment variable that holds the API key of the default provider.
   // "static_token_env": "ANTHROPIC_UPSTREAM_KEY",
 
