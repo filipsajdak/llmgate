@@ -38,12 +38,19 @@ The session registry knows which provider answered a session last. When the next
 different provider, the gateway removes `thinking` and `redacted_thinking` blocks from the history before
 sending, counts the removal in the statistics, and keeps them when the provider is the same.
 
-One constraint: with thinking enabled, a backend can require that the assistant turn at the end of a
-tool loop starts with a thinking block, and the plan-to-execute change is exactly such a turn (the
-`ExitPlanMode` call). If the strip removes the block of that turn, the request is sent with the `thinking`
-setting removed too, so one step runs without extended thinking instead of failing. The compatibility suite
-gets a switch scenario with thinking in the history and a crafted tool-loop request, run on Copilot and on
-the Claude login, to confirm what each backend accepts before this is relied on.
+Measured on the work Copilot account (2026-10-21, a crafted tool-loop request through the gateway):
+
+| Request | Result |
+|---|---|
+| tool loop, no thinking block, adaptive thinking | HTTP 200 |
+| tool loop, a thinking block with another provider's signature, adaptive thinking | HTTP 400 `Invalid signature in thinking block` |
+| the budget form (`thinking.type = enabled`) on the sonnet and opus models | HTTP 400, only adaptive is supported |
+
+So the strip is necessary (a foreign signature is refused) and safe (a tool loop without a thinking block is
+accepted). Some backends validate more strictly with the budget form of thinking, which requires the last
+tool-loop turn to start with a thinking block; the answer there is to map or drop the setting (R18), and it
+is built only when a backend needs it. The compatibility suite gets a switch scenario with thinking in the
+history to run on both real backends.
 
 ## Auto-mode classifier (R11, R12)
 

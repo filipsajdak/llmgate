@@ -90,3 +90,5 @@ PY
 }
 
 compat_session_field() { curl -s "$(compat_gateway_base)/llmgate/session?id=$1" | python3 -c 'import json, sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$2"; }
+
+compat_stat() { curl -s "$(compat_gateway_base)/llmgate/stats" | python3 -c 'import json, sys; print(json.load(sys.stdin).get(sys.argv[1], 0))' "$1"; }

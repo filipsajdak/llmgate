@@ -220,6 +220,7 @@ Several accounts of one provider are several provider entries. A Claude subscrip
 | A project slash command runs (`slash-command`) | pass | pass | - | - | pass |
 | Delegate to a subagent (`subagent`) | pass | pass | - | - | pass |
 | Switch provider in the middle of one session (`switch-mid-session`) | unsupported | unsupported | pass | - | pass |
+| Switch provider after a turn with thinking (`switch-with-thinking`) | unsupported | unsupported | pass | - | pass |
 | One text turn on the haiku model (`text-haiku`) | pass | pass | - | - | pass |
 | One text turn on the opus model (`text-opus`) | pass | pass | - | - | pass |
 | One text turn (`text-turn`) | pass | pass | - | - | pass |

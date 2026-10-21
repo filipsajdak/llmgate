@@ -10,9 +10,13 @@ scenario_dir = pathlib.Path(os.environ["COMPAT_SCENARIO_DIR"])
 lib = pathlib.Path(__file__).with_name("lib.sh")
 arguments = sys.argv[1:]
 session = arguments[arguments.index("--resume") + 1] if "--resume" in arguments else str(uuid.uuid4())
+history = [{"role": "user", "content": "hi"}]
+if "--resume" in arguments:
+    history += [{"role": "assistant", "content": [{"type": "thinking", "thinking": "x", "signature": "from-the-first-provider"}, {"type": "text", "text": "ok"}]},
+                {"role": "user", "content": "go on"}]
 request = urllib.request.Request(
     os.environ["ANTHROPIC_BASE_URL"] + "/v1/messages",
-    data=json.dumps({"model": "claude-sonnet-5-5", "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}).encode(),
+    data=json.dumps({"model": "claude-sonnet-5-5", "max_tokens": 8, "messages": history}).encode(),
     headers={"content-type": "application/json", "x-api-key": os.environ.get("ANTHROPIC_AUTH_TOKEN", ""), "anthropic-beta": "compat-selftest-2026",
              "x-claude-code-session-id": session},
 )

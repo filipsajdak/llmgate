@@ -1,0 +1,1 @@
+{"title": "Switch provider after a turn with thinking", "feature": "switching", "needs": ["switching", "thinking"], "timeout": 900}

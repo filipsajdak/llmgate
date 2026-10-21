@@ -10,6 +10,7 @@
   "slash-command": "PASS",
   "subagent": "PASS",
   "switch-mid-session": "PASS",
+  "switch-with-thinking": "PASS",
   "text-haiku": "PASS",
   "text-opus": "PASS",
   "text-turn": "PASS",

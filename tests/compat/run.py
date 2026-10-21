@@ -79,12 +79,19 @@ def stats_of(binary, config, env):
         return {}
 
 
-def run_script(name, spec, sandbox, env):
+def keep_transcripts(sandbox, out, backend, name):
+    for item in sandbox.glob("*.jsonl"):
+        shutil.copy(item, out / f"{backend}-{name}-{item.name}")
+
+
+def run_script(name, spec, sandbox, env, keep):
     try:
         ran = subprocess.run(["sh", "-c", f". {HERE / 'lib.sh'}; . {HERE / 'scenarios' / name / 'run.sh'}"], cwd=sandbox, env=env, stdin=subprocess.DEVNULL,
                              capture_output=True, text=True, timeout=spec.get("timeout", DEFAULT_TIMEOUT_SECONDS))
     except subprocess.TimeoutExpired:
         return FAIL, "timed out"
+    finally:
+        keep_transcripts(sandbox, *keep)
     return (PASS, "") if ran.returncode == 0 else (FAIL, tail(ran.stdout + ran.stderr))
 
 
@@ -106,7 +113,7 @@ def run_one(name, spec, backend, ctx):
         env["LLMGATE_CONFIG"] = str(own_config)
     if (HERE / "scenarios" / name / "run.sh").exists():
         try:
-            return run_script(name, spec, sandbox, env)
+            return run_script(name, spec, sandbox, env, (ctx["out"], ctx["backend"], name))
         finally:
             if own_config:
                 subprocess.run([ctx["binary"], "--config", str(own_config), "stop"], env=env, capture_output=True)
