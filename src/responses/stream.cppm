@@ -39,7 +39,7 @@ static_assert(reflect::unique_values<upstream_event>());
 enum class item_kind { message, function_call, reasoning };
 static_assert(reflect::unique_values<item_kind>());
 
-enum class block_type { text, tool_use, thinking };
+enum class block_type { text, thinking };
 
 constexpr std::string_view upstream_prefix = "response.";
 constexpr std::string_view fallback_message_id = "llmgate";
@@ -103,8 +103,17 @@ constexpr json::value usage_of(json::value const& response) {
 struct open_block {
     std::size_t index = 0;
     block_type kind = block_type::text;
-    bool arguments_sent = false;
 };
+
+struct pending_call {
+    std::string call_id{};
+    std::string name{};
+    std::string arguments{};
+};
+
+constexpr std::string_view dropped_call_label = "dropped_incomplete_tool_call";
+constexpr std::string_view output_limit_message = "the upstream stopped at its output limit before producing any output";
+constexpr std::string_view no_output_message = "the upstream returned no output";
 
 struct handles {
     upstream_event event;
@@ -192,36 +201,53 @@ private:
         }
     }
 
-    void open_tool(std::uint64_t const at, json::value const& data) {
+    void remember_call(std::uint64_t const at, json::value const& data) {
         auto id = json::text_at(data, {"item", "call_id"});
         if (id.empty()) {
             id = json::text_at(data, {"item", "id"});
         }
-        saw_call_ = true;
-        open(at, detail::block_type::tool_use,
-             json::make_object({{"type", detail::text_value("tool_use")}, {"id", detail::text_value(id)}, {"name", detail::text_value(json::text_at(data, {"item", "name"}))},
-                                {"input", json::make_object({})}}));
+        calls_[at] = {.call_id = std::move(id), .name = json::text_at(data, {"item", "name"}), .arguments = json::text_at(data, {"item", "arguments"})};
     }
 
     void open_thinking(std::uint64_t const at) {
         open(at, detail::block_type::thinking, json::make_object({{"type", detail::text_value("thinking")}, {"thinking", detail::text_value("")}, {"signature", detail::text_value("")}}));
     }
 
-    void send_arguments(std::uint64_t const at, std::string_view const text) {
-        auto& block = blocks_[at];
-        block.arguments_sent = true;
-        put("content_block_delta", detail::delta_event(block.index, "input_json_delta", "partial_json", text));
+    void drop_call(std::uint64_t const at) {
+        calls_.erase(at);
+        ++ignored_[std::string{detail::dropped_call_label}];
+    }
+
+    void emit_call(detail::pending_call const& call) {
+        auto const index = next_index_++;
+        saw_call_ = true;
+        put("content_block_start", detail::block_event("content_block_start", index,
+                                                       json::make_object({{"type", detail::text_value("tool_use")}, {"id", detail::text_value(call.call_id)},
+                                                                          {"name", detail::text_value(call.name)}, {"input", json::make_object({})}}),
+                                                       "content_block"));
+        put("content_block_delta", detail::delta_event(index, "input_json_delta", "partial_json", call.arguments));
+        put("content_block_stop", detail::event_of("content_block_stop", {{"index", detail::count_value(index)}}));
     }
 
     void finish_tool(std::uint64_t const at, json::value const& data) {
-        if (!blocks_.contains(at)) {
-            open_tool(at, data);
+        begin();
+        if (!calls_.contains(at)) {
+            remember_call(at, data);
         }
-        if (!blocks_[at].arguments_sent) {
-            auto const arguments = json::text_at(data, {"item", "arguments"});
-            send_arguments(at, arguments.empty() ? detail::empty_arguments : std::string_view{arguments});
+        auto& call = calls_[at];
+        if (auto const final_text = json::text_at(data, {"item", "arguments"}); !final_text.empty()) {
+            call.arguments = final_text;
         }
-        close(at);
+        if (call.arguments.empty()) {
+            call.arguments = detail::empty_arguments;
+        }
+        auto const parsed = json::parse(call.arguments, {.jsonc = false});
+        if (!parsed || std::get_if<json::object>(&parsed->data) == nullptr) {
+            drop_call(at);
+            return;
+        }
+        emit_call(call);
+        calls_.erase(at);
     }
 
     void finish_reasoning(std::uint64_t const at, json::value const& data) {
@@ -240,6 +266,14 @@ private:
         begin();
         while (!blocks_.empty()) {
             close(blocks_.begin()->first);
+        }
+        if (!calls_.empty()) {
+            ignored_[std::string{detail::dropped_call_label}] += calls_.size();
+            calls_.clear();
+        }
+        if (next_index_ == 0) {
+            fail("", reason == "max_tokens" ? detail::output_limit_message : detail::no_output_message);
+            return;
         }
         auto const* response = json::at(data, {"response"});
         auto const usage = response == nullptr ? detail::usage_of(json::value{}) : detail::usage_of(*response);
@@ -266,7 +300,7 @@ private:
         begin();
         auto const kind = reflect::enum_from_name<detail::item_kind>(json::text_at(data, {"item", "type"}));
         if (kind == detail::item_kind::function_call) {
-            open_tool(output_index(data), data);
+            remember_call(output_index(data), data);
         } else if (kind == detail::item_kind::reasoning) {
             open_thinking(output_index(data));
         }
@@ -290,8 +324,8 @@ private:
     }
 
     [[=detail::handles{detail::upstream_event::function_call_arguments_delta}]] void on_arguments_delta(json::value const& data) {
-        if (auto const at = output_index(data); blocks_.contains(at)) {
-            send_arguments(at, json::text_at(data, {"delta"}));
+        if (auto const found = calls_.find(output_index(data)); found != calls_.end()) {
+            found->second.arguments += json::text_at(data, {"delta"});
         }
     }
 
@@ -321,6 +355,7 @@ private:
     bool saw_call_ = false;
     std::size_t next_index_ = 0;
     std::map<std::uint64_t, detail::open_block> blocks_{};
+    std::map<std::uint64_t, detail::pending_call> calls_{};
     std::map<std::string, std::uint64_t> ignored_{};
     std::vector<detail::produced_event> produced_{};
 };

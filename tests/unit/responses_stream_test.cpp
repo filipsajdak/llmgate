@@ -139,10 +139,10 @@ const suite stream_suite = [] {
     "capability_a_tool_call_streams_its_arguments_and_ends_the_turn_with_tool_use"_test = [] {
         auto const out = translate(tool_stream());
 
-        expect(names(out) == "message_start content_block_start content_block_delta content_block_delta content_block_stop message_delta message_stop") << names(out);
+        expect(names(out) == "message_start content_block_start content_block_delta content_block_stop message_delta message_stop") << names(out);
         expect(out[1].data == R"({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_1","name":"Bash","input":{}}})");
-        expect(out[2].data == R"({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":"}})");
-        expect(out[5].data.contains(R"("stop_reason":"tool_use")"));
+        expect(out[2].data == R"({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"ls\"}"}})") << out[2].data;
+        expect(out[4].data.contains(R"("stop_reason":"tool_use")"));
         grammar_holds(out);
     };
 
@@ -167,6 +167,51 @@ const suite stream_suite = [] {
         expect(starts.size() == 3_u);
         expect(starts[0].contains(R"("index":0)") && starts[1].contains(R"("index":1)") && starts[2].contains(R"("index":2)"));
         grammar_holds(out);
+    };
+
+    "capability_a_tool_call_is_emitted_whole_or_not_at_all"_test = [] {
+        auto upstream = tool_stream();
+        upstream.erase(upstream.begin() + 5, upstream.end());
+        upstream.push_back(event("response.incomplete", R"(,"response":{"incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":5,"output_tokens":2}})"));
+
+        auto const out = translate(upstream);
+
+        expect(out.back().name == "error" || names(out).find("content_block_start") == std::string::npos) << names(out);
+        expect(!names(out).contains("content_block_delta")) << names(out);
+    };
+
+    "capability_text_before_a_cut_off_call_is_kept_and_the_turn_ends_at_the_output_limit"_test = [] {
+        auto upstream = text_stream();
+        upstream.pop_back();
+        upstream.push_back(event("response.output_item.added", R"(,"output_index":1,"item":{"type":"function_call","id":"fc_2","call_id":"call_2","name":"Write","arguments":""})"));
+        upstream.push_back(event("response.function_call_arguments.delta", R"(,"output_index":1,"item_id":"fc_2","delta":"{\"file_path\":\"a.py\"")"));
+        upstream.push_back(event("response.incomplete", R"(,"response":{"incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":5,"output_tokens":2}})"));
+
+        auto const out = translate(upstream);
+
+        expect(names(out) == "message_start ping content_block_start content_block_delta content_block_delta content_block_stop message_delta message_stop") << names(out);
+        expect(out[out.size() - 2].data.contains(R"("stop_reason":"max_tokens")"));
+        expect(!out[out.size() - 2].data.contains("tool_use"));
+        grammar_holds(out);
+    };
+
+    "limit_a_call_whose_arguments_are_not_a_json_object_is_dropped_and_counted"_test = [] {
+        responses::stream_translator translator{"m"};
+        auto upstream = tool_stream();
+        upstream[5] = event("response.output_item.done", R"(,"output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Bash","arguments":"{\"command\":"})");
+
+        auto const out = translate(upstream, 0, &translator);
+
+        expect(!names(out).contains("content_block_start") && out.back().name == "error") << names(out);
+        expect(translator.ignored().at("dropped_incomplete_tool_call") == 1_u);
+    };
+
+    "limit_a_response_with_no_output_at_all_is_an_error_that_names_the_cause"_test = [] {
+        auto const completed = translate({event("response.created", created), event("response.completed", usage_120_100_9)});
+        auto const limited = translate({event("response.created", created), event("response.incomplete", R"(,"response":{"incomplete_details":{"reason":"max_output_tokens"}})")});
+
+        expect(completed.back().name == "error" && completed.back().data.contains("no output")) << completed.back().data;
+        expect(limited.back().name == "error" && limited.back().data.contains("output limit")) << limited.back().data;
     };
 
     "capability_a_call_whose_arguments_come_only_with_the_done_event_still_sends_them"_test = [] {
