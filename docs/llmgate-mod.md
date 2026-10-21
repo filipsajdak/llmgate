@@ -105,6 +105,8 @@ and reported what it could reach:
 | Is the session id readable, and is it the one the gateway keys on? | `$.session.id()` answers it, and after `--resume` it equals the first run's id, so `/llmgate/route?session=` and the per-session remap can be keyed by it |
 | Is the gateway address readable? | **Yes.** `$.env.get('ANTHROPIC_BASE_URL')` gives `http://127.0.0.1:PORT/anthropic`; strip `/anthropic` |
 | Is the `llmgate` binary on the mod's PATH? | **No.** `$.process.run(['llmgate', ...])` failed with ENOENT. The launcher must export `LLMGATE_BIN` (and `LLMGATE_CONFIG`) for the mod, and the mod runs the binary by absolute path; by absolute path it started and ran |
+| Does a command-opened pane place in a real session? | **Yes** (owner's run, Claude Code Desktop app, Code tab, 2026-10-21): `$.ui.open` from the command resolved `isPlaced: true` and the pane docked on the right of the transcript, drawing the mod's text; the same text also printed in the transcript. Terminal and VS Code placement are checked in M1 and M8 |
+| Does `llmgate targets` run from the mod? | It ran and exited 1 with "the gateway is down" because it used the default config (port 9480) while the session's gateway was on another port: the mod's commands must run with the session's config, which `LLMGATE_CONFIG` carries (decision M12) |
 | Does a pane place under `-p`? | No: `isPlaced: false`, reason `no-surface`, as documented. Placement in a real terminal (a command-opened pane at any width) is documented and is checked in M1 |
 
 So decision M12 gains a duty: the launcher exports `LLMGATE_BIN` and `LLMGATE_CONFIG` into the session, and the
