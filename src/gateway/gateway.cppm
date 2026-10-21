@@ -9,6 +9,7 @@ import llmgate.anthropic;
 import llmgate.async;
 import llmgate.claude;
 import llmgate.control;
+import llmgate.history;
 import llmgate.http;
 import llmgate.httpio;
 import llmgate.json;
@@ -183,6 +184,7 @@ struct stats {
     std::map<std::string, std::string> repair_examples{};
     routing::beta_counts betas{};
     std::map<std::string, std::uint64_t> dropped_fields{};
+    std::uint64_t thinking_blocks_stripped = 0;
     std::map<std::string, std::uint64_t> ignored_events{};
     [[= json::skip]] std::map<std::string, provider_stats> providers;
 };
@@ -869,7 +871,7 @@ private:
     template <net::byte_stream Client>
     async::task<detail::attempt_result> attempt(std::size_t const index, std::optional<std::string> upstream_model, httpio::request const& incoming,
                                                 httpio::response_writer<Client>& out, detail::request_note note) {
-        auto spec = co_await build_spec(index, upstream_model, incoming);
+        auto spec = co_await build_spec(index, upstream_model, incoming, note.session);
         if (!spec) {
             co_return std::move(spec.error());
         }
@@ -887,6 +889,19 @@ private:
         ++counters_.upstream_failures;
         auto const status = failure == std::errc::timed_out ? gateway_timeout_status : bad_gateway_status;
         return detail::refused(routing::error_reply(status, "api_error", "cannot reach the upstream: " + failure.message()), detail::health::failing);
+    }
+
+    std::string history_for(detail::provider_runtime const& chosen, std::string_view const session, std::string body) {
+        auto const last = session.empty() ? served_.items.end() : served_.items.find(session);
+        if (last == served_.items.end() || last->second.provider == chosen.name) {
+            return body;
+        }
+        auto done = history::without_thinking(body);
+        if (!done) {
+            return body;
+        }
+        counters_.thinking_blocks_stripped += done->removed;
+        return std::move(done->body);
     }
 
     std::expected<std::string, detail::attempt_result> upstream_body(detail::provider_runtime const& chosen, httpio::request const& incoming, std::string body) {
@@ -909,7 +924,8 @@ private:
         co_return std::move(*bearer);
     }
 
-    async::task<std::expected<httpio::request_spec, detail::attempt_result>> build_spec(std::size_t const index, std::optional<std::string> upstream_model, httpio::request const& incoming) {
+    async::task<std::expected<httpio::request_spec, detail::attempt_result>> build_spec(std::size_t const index, std::optional<std::string> upstream_model, httpio::request const& incoming,
+                                                                                                  std::string session) {
         auto& chosen = providers_[index];
         if (!chosen.url) {
             co_return std::unexpected{detail::refused(routing::error_reply(500, "api_error", "the upstream base_url is not valid"), detail::health::neutral)};
@@ -918,7 +934,7 @@ private:
         if (!prepared) {
             co_return std::unexpected{detail::refused(std::move(prepared.error()), detail::health::neutral)};
         }
-        auto body = upstream_body(chosen, incoming, std::move(prepared->body));
+        auto body = upstream_body(chosen, incoming, history_for(chosen, session, std::move(prepared->body)));
         if (!body) {
             co_return std::unexpected{std::move(body.error())};
         }

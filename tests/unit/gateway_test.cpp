@@ -241,10 +241,24 @@ httpio::request_spec control_request(std::string body, std::string_view const ke
     return request;
 }
 
+std::string thinking_history(std::string_view const model) {
+    return std::format(R"({{"model":"{}","max_tokens":8,"stream":false,"messages":[{{"role":"user","content":"hi"}},)"
+                       R"({{"role":"assistant","content":[{{"type":"thinking","thinking":"x","signature":"sig-from-a"}},{{"type":"text","text":"ok"}}]}},{{"role":"user","content":"more"}}]}})",
+                       model);
+}
+
+httpio::request_spec in_session(std::string body, std::string_view const session) {
+    auto spec = messages_request(std::move(body), "/anthropic/v1/messages", "");
+    if (!session.empty()) {
+        spec.fields.add("x-claude-code-session-id", std::string{session});
+    }
+    return spec;
+}
+
 constexpr std::int64_t fixed_time = 1760659200;
 
 constexpr std::string_view golden_statistics =
-    R"({"requests":3,"streamed":1,"upstream_failures":0,"upstream_timeouts":0,"client_disconnects":0,"refused":0,"connections_opened":1,"connections_reused":1,"budget_refused":0,"no_provider":0,"repairs":{"duplicate_message_start":2},"repair_examples":{},"betas":{"tools-2024":3},"dropped_fields":{},"ignored_events":{},"providers":{"default":{"attempts":2,"answered":2,"failures":0,"skipped":0,"circuit":"closed"}},"usage":{"today":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"month":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"budget":{"state":"ok","window":"daily","used":18,"limit":100,"percent":18}}})";
+    R"({"requests":3,"streamed":1,"upstream_failures":0,"upstream_timeouts":0,"client_disconnects":0,"refused":0,"connections_opened":1,"connections_reused":1,"budget_refused":0,"no_provider":0,"repairs":{"duplicate_message_start":2},"repair_examples":{},"betas":{"tools-2024":3},"thinking_blocks_stripped":0,"dropped_fields":{},"ignored_events":{},"providers":{"default":{"attempts":2,"answered":2,"failures":0,"skipped":0,"circuit":"closed"}},"usage":{"today":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"month":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"budget":{"state":"ok","window":"daily","used":18,"limit":100,"percent":18}}})";
 constexpr std::string_view golden_models = R"json({"data":[{"type":"model","id":"opus","display_name":"opus","created_at":"1970-01-01T00:00:00Z"},{"type":"model","id":"claude-opus-upstream@default","display_name":"claude-opus-upstream (default)","created_at":"1970-01-01T00:00:00Z","description":"served by the provider default"}],"has_more":false})json";
 constexpr std::string_view golden_error = R"({"type":"error","error":{"type":"invalid_request_error","message":"a \"q\" \n b"}})";
 
@@ -1035,6 +1049,49 @@ const suite gateway_suite = [] {
         auto const answer = w.ask(messages_request(chat("opus", false)));
 
         expect(answer.status == 200 && answer.body.contains(R"("type":"message")"));
+    };
+
+    "capability_thinking_blocks_are_stripped_when_the_session_moves_to_another_provider"_test = [] {
+        duo d;
+
+        (void)d.ask(in_session(chat("claude-model-a@a", false), "sw-1"));
+        auto const answer = d.ask(in_session(thinking_history("claude-model-b@b"), "sw-1"));
+
+        expect(answer.status == 200 && d.second.seen.size() == 1_u);
+        expect(!d.second.seen.at(0).body.contains("signature") && !d.second.seen.at(0).body.contains("sig-from-a")) << d.second.seen.at(0).body;
+        expect(d.second.seen.at(0).body.contains(R"("text":"ok")"));
+        expect(d.stats().body.contains(R"("thinking_blocks_stripped":1)"));
+    };
+
+    "limit_thinking_stays_when_the_same_provider_answers_again"_test = [] {
+        duo d;
+
+        (void)d.ask(in_session(chat("claude-model-b@b", false), "sw-2"));
+        (void)d.ask(in_session(thinking_history("claude-model-b@b"), "sw-2"));
+
+        expect(d.second.seen.size() == 2_u && d.second.seen.at(1).body.contains("sig-from-a"));
+        expect(d.stats().body.contains(R"("thinking_blocks_stripped":0)"));
+    };
+
+    "limit_a_session_the_gateway_has_not_seen_and_a_request_without_a_session_keep_their_history"_test = [] {
+        duo d;
+
+        (void)d.ask(in_session(thinking_history("claude-model-b@b"), "never-seen"));
+        (void)d.ask(in_session(thinking_history("claude-model-b@b"), ""));
+
+        expect(d.second.seen.size() == 2_u);
+        expect(d.second.seen.at(0).body.contains("sig-from-a") && d.second.seen.at(1).body.contains("sig-from-a"));
+    };
+
+    "capability_each_attempt_is_judged_against_the_provider_that_answered_last"_test = [] {
+        duo d;
+        d.first.mode = behaviour::server_error;
+        (void)d.ask(in_session(chat("claude-model-b@b", false), "sw-3"));
+
+        (void)d.ask(in_session(thinking_history("opus"), "sw-3"));
+
+        expect(d.first.seen.size() == 1_u && !d.first.seen.at(0).body.contains("sig-from-a"));
+        expect(d.second.seen.size() == 2_u && d.second.seen.at(1).body.contains("sig-from-a"));
     };
 
     "capability_a_picked_target_goes_to_exactly_that_provider_with_its_upstream_model"_test = [] {
