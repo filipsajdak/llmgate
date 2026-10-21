@@ -1,0 +1,1 @@
+{"title": "Copilot then ChatGPT plan (switch)", "kind": "real", "provides": ["tools", "switching", "thinking"], "only": ["switch-mid-session", "switch-with-thinking"], "switch": {"first": "work", "second": "codex", "target": "claude-gpt-6-sol@codex"}}

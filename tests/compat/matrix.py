@@ -7,7 +7,7 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 README = HERE.parent.parent / "README.md"
 BEGIN, END = "<!-- compat-matrix:begin -->", "<!-- compat-matrix:end -->"
-ORDER = ["copilot", "anthropic", "codex", "switching", "fallback", "scripted"]
+ORDER = ["copilot", "anthropic", "codex", "switching", "switching-codex", "fallback", "scripted"]
 NOT_RUN = "not run"
 
 
