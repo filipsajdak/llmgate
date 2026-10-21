@@ -87,7 +87,7 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `time` | object | - | Time limits of the gateway. |
 | `time.connect` | duration | `"10s"` | How long a connect to a provider may take. A duration is a number with the unit ms, s, m or h. |
 | `time.response_head` | duration | `"2m"` | How long a provider may take to send the response head before the attempt counts as failed and the next provider is tried. |
-| `time.stream_idle` | duration | `"10m"` | How long a streaming response may stay silent before the gateway cuts it. |
+| `time.stream_idle` | duration | `"2m"` | How long a streaming response may stay silent before the gateway cuts it with an error event, so that the client can retry. Anthropic servers send a ping every few seconds, so a silence of two minutes is a stall; raise it for a provider that streams nothing while it reasons. |
 | `time.drain` | duration | `"10s"` | How long a stop (SIGINT or SIGTERM) lets running requests finish; a second signal exits at once. |
 | `tls_groups` | one of `post_quantum_required`, `post_quantum_preferred`, `classical_only` | `"post_quantum_preferred"` | TLS key exchange groups offered to the providers. |
 | `copilot` | object | none | GitHub Copilot device login of the default provider; run llmgate login once. |

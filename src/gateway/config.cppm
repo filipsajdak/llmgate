@@ -21,8 +21,8 @@ struct timeouts {
     milliseconds connect = std::chrono::seconds{10};
     [[= reflect::doc{"How long a provider may take to send the response head before the attempt counts as failed and the next provider is tried."}]]
     milliseconds response_head = std::chrono::minutes{2};
-    [[= reflect::doc{"How long a streaming response may stay silent before the gateway cuts it."}]]
-    milliseconds stream_idle = std::chrono::minutes{10};
+    [[= reflect::doc{"How long a streaming response may stay silent before the gateway cuts it with an error event, so that the client can retry. Anthropic servers send a ping every few seconds, so a silence of two minutes is a stall; raise it for a provider that streams nothing while it reasons."}]]
+    milliseconds stream_idle = std::chrono::minutes{2};
     [[= reflect::doc{"How long a stop (SIGINT or SIGTERM) lets running requests finish; a second signal exits at once."}]]
     milliseconds drain = shutdown::default_drain;
 };

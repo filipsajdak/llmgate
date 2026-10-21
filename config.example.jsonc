@@ -69,8 +69,10 @@
     // How long a provider may take to send the response head before the attempt counts as failed and the
     // next provider is tried.
     "response_head": "2m",
-    // How long a streaming response may stay silent before the gateway cuts it.
-    "stream_idle": "10m",
+    // How long a streaming response may stay silent before the gateway cuts it with an error event, so
+    // that the client can retry. Anthropic servers send a ping every few seconds, so a silence of two
+    // minutes is a stall; raise it for a provider that streams nothing while it reasons.
+    "stream_idle": "2m",
     // How long a stop (SIGINT or SIGTERM) lets running requests finish; a second signal exits at once.
     "drain": "10s"
   },
