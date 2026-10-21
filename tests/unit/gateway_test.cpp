@@ -1197,6 +1197,16 @@ const suite gateway_suite = [] {
         expect(d.counts("a").failures == 1_u);
     };
 
+    "capability_the_host_header_to_an_upstream_carries_a_non_default_port"_test = [] {
+        duo d;
+
+        (void)d.chat_with("claude-model-b@b");
+
+        auto const& headers = d.second.seen.at(0).headers;
+        auto const host = headers.contains("Host") ? headers.at("Host") : headers.contains("host") ? headers.at("host") : std::string{"<missing>"};
+        expect(host == std::format("127.0.0.1:{}", d.second_listener.port())) << host;
+    };
+
     "capability_a_picked_target_goes_to_exactly_that_provider_with_its_upstream_model"_test = [] {
         duo d;
 

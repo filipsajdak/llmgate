@@ -968,7 +968,7 @@ private:
         }
         co_return httpio::request_spec{.method = "POST",
                                        .target = chosen.url->base_path + effective_messages_path(chosen.settings.protocol, chosen.settings.messages_path),
-                                       .host = chosen.url->host,
+                                       .host = routing::host_header(*chosen.url),
                                        .fields = detail::upstream_headers(incoming, chosen.settings.headers, chosen.settings.copilot.has_value(), chosen.settings.forward_credentials, *token,
                                                                           chosen.settings.protocol),
                                        .body = std::move(*body)};

@@ -84,6 +84,11 @@ constexpr reply_body error_reply(int const status, std::string_view const kind, 
     return {.status = status, .body = error_json(kind, message)};
 }
 
+constexpr std::string host_header(endpoint_url const& target) {
+    auto const standard = target.secure ? https_port : http_port;
+    return target.port == standard ? target.host : target.host + ":" + text::decimal(target.port);
+}
+
 constexpr std::string with_request_id(std::string_view const body, std::string_view const id) {
     auto const close = body.rfind('}');
     if (close == std::string_view::npos) {
@@ -367,6 +372,8 @@ static_assert(parse_url("https://api.example.com").value().port == https_port);
 static_assert(parse_url("http://127.0.0.1:9090/base").value().base_path == "/base");
 static_assert(!parse_url("ftp://x").has_value());
 static_assert(is_message_json(R"({"id":"m","type":"message","content":[]})") && !is_message_json(R"({"choices":[]})") && !is_message_json("x") && !is_message_json(R"({"type":"error"})"));
+static_assert(host_header({.secure = false, .host = "a", .port = 80, .base_path = ""}) == "a" && host_header({.secure = true, .host = "a", .port = 443, .base_path = ""}) == "a" &&
+              host_header({.secure = false, .host = "a", .port = 8080, .base_path = ""}) == "a:8080" && host_header({.secure = true, .host = "a", .port = 80, .base_path = ""}) == "a:80");
 static_assert(with_request_id(R"({"type":"error"})", "req_1") == R"({"type":"error","request_id":"req_1"})" && with_request_id("x", "i") == "x");
 static_assert(secrets_equal("abc", "abc") && !secrets_equal("abc", "abd") && !secrets_equal("abc", "abcd") && secrets_equal("", ""));
 static_assert(is_loopback_host("127.0.0.1") && is_loopback_host("localhost") && !is_loopback_host("0.0.0.0") && !is_loopback_host("10.0.0.5"));

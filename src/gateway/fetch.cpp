@@ -44,7 +44,7 @@ async::task<std::expected<reply, std::error_code>> request(async::reactor& loop,
     if (!target) {
         co_return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
     }
-    spec.host = target->host;
+    spec.host = routing::host_header(*target);
     spec.target = target->base_path + spec.target;
     auto stream = co_await open_stream(loop, tls_context, *target, limit);
     if (!stream) {
