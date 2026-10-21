@@ -1,0 +1,357 @@
+module;
+
+#include <meta>
+
+export module llmgate.responses_stream;
+
+import std;
+import llmgate.json;
+import llmgate.members;
+import llmgate.reflect;
+import llmgate.responses_request;
+import llmgate.sse;
+import llmgate.text;
+
+namespace llmgate::responses::detail {
+
+enum class upstream_event {
+    created,
+    in_progress,
+    output_item_added,
+    output_item_done,
+    content_part_added,
+    content_part_done,
+    output_text_delta,
+    output_text_done,
+    function_call_arguments_delta,
+    function_call_arguments_done,
+    reasoning_summary_part_added,
+    reasoning_summary_part_done,
+    reasoning_summary_text_delta,
+    reasoning_summary_text_done,
+    completed,
+    incomplete,
+    failed,
+    error
+};
+static_assert(reflect::unique_values<upstream_event>());
+
+enum class item_kind { message, function_call, reasoning };
+static_assert(reflect::unique_values<item_kind>());
+
+enum class block_type { text, tool_use, thinking };
+
+constexpr std::string_view upstream_prefix = "response.";
+constexpr std::string_view fallback_message_id = "llmgate";
+constexpr std::string_view empty_arguments = "{}";
+
+constexpr std::string normalized(std::string_view name) {
+    if (name.starts_with(upstream_prefix)) {
+        name.remove_prefix(upstream_prefix.size());
+    }
+    std::string out{name};
+    std::ranges::replace(out, '.', '_');
+    return out;
+}
+
+constexpr json::value text_value(std::string_view const text) {
+    return json::make_string(std::string{text});
+}
+
+constexpr json::value count_value(std::uint64_t const count) {
+    return json::value{static_cast<std::int64_t>(count)};
+}
+
+constexpr json::value event_of(std::string_view const type, std::initializer_list<std::pair<std::string, json::value>> const rest = {}) {
+    json::object members{{"type", text_value(type)}};
+    members.append_range(rest);
+    return json::value{std::move(members)};
+}
+
+constexpr json::value block_event(std::string_view const type, std::size_t const index, json::value body, std::string_view const key) {
+    return event_of(type, {{"index", count_value(index)}, {std::string{key}, std::move(body)}});
+}
+
+constexpr json::value delta_event(std::size_t const index, std::string_view const kind, std::string_view const field, std::string_view const text) {
+    return block_event("content_block_delta", index, json::make_object({{"type", text_value(kind)}, {std::string{field}, text_value(text)}}), "delta");
+}
+
+constexpr std::string_view error_type_of(std::string_view const code) {
+    if (code == "rate_limit_exceeded") {
+        return "rate_limit_error";
+    }
+    return code == "context_length_exceeded" || code == "invalid_prompt" || code == "invalid_request_error" ? "invalid_request_error" : "api_error";
+}
+
+constexpr std::string_view stop_reason_of(std::string_view const reason) {
+    if (reason == "max_output_tokens") {
+        return "max_tokens";
+    }
+    return reason == "content_filter" ? "refusal" : "end_turn";
+}
+
+constexpr json::value usage_of(json::value const& response) {
+    auto const input = json::count_at(response, {"usage", "input_tokens"}).value_or(0);
+    auto const cached = json::count_at(response, {"usage", "input_tokens_details", "cached_tokens"}).value_or(0);
+    auto const output = json::count_at(response, {"usage", "output_tokens"}).value_or(0);
+    return json::make_object({{"input_tokens", count_value(input > cached ? input - cached : 0)},
+                              {"output_tokens", count_value(output)},
+                              {"cache_read_input_tokens", count_value(cached)},
+                              {"cache_creation_input_tokens", count_value(0)}});
+}
+
+struct open_block {
+    std::size_t index = 0;
+    block_type kind = block_type::text;
+    bool arguments_sent = false;
+};
+
+struct handles {
+    upstream_event event;
+};
+
+struct produced_event {
+    std::string name{};
+    std::string data{};
+};
+
+}  // namespace llmgate::responses::detail
+
+export namespace llmgate::responses {
+
+class stream_translator {
+public:
+    explicit stream_translator(std::string model) : model_{std::move(model)} {}
+
+    template <sse::event_sink Sink>
+    void on_event(sse::event const& incoming, Sink&& out) {
+        accept(incoming);
+        for (auto const& item : produced_) {
+            out(sse::event{.name = item.name, .data = item.data, .id = {}});
+        }
+        produced_.clear();
+    }
+
+    std::map<std::string, std::uint64_t> const& ignored() const noexcept { return ignored_; }
+
+private:
+    constexpr void accept(sse::event const& incoming);
+    constexpr void dispatch(detail::upstream_event kind, json::value const& data);
+
+    void put(std::string_view const name, json::value const& body) { produced_.push_back({.name = std::string{name}, .data = json::write(body)}); }
+
+    void ping() { put("ping", detail::event_of("ping")); }
+
+    static std::uint64_t output_index(json::value const& data) { return json::count_at(data, {"output_index"}).value_or(0); }
+
+    void begin(std::string_view const response_id = {}) {
+        if (started_) {
+            return;
+        }
+        started_ = true;
+        std::string id{"msg_"};
+        id += response_id.empty() ? detail::fallback_message_id : response_id;
+        auto const usage = json::make_object({{"input_tokens", detail::count_value(0)}, {"output_tokens", detail::count_value(0)}});
+        put("message_start", detail::event_of("message_start", {{"message", json::make_object({{"id", detail::text_value(id)},
+                                                                                              {"type", detail::text_value("message")},
+                                                                                              {"role", detail::text_value("assistant")},
+                                                                                              {"model", detail::text_value(model_)},
+                                                                                              {"content", json::value{json::array{}}},
+                                                                                              {"stop_reason", json::value{nullptr}},
+                                                                                              {"stop_sequence", json::value{nullptr}},
+                                                                                              {"usage", usage}})}}));
+    }
+
+    void open(std::uint64_t const at, detail::block_type const kind, json::value start) {
+        begin();
+        blocks_[at] = {.index = next_index_++, .kind = kind};
+        put("content_block_start", detail::block_event("content_block_start", blocks_[at].index, std::move(start), "content_block"));
+    }
+
+    void close(std::uint64_t const at) {
+        if (auto const found = blocks_.find(at); found != blocks_.end()) {
+            put("content_block_stop", detail::event_of("content_block_stop", {{"index", detail::count_value(found->second.index)}}));
+            blocks_.erase(found);
+        }
+    }
+
+    void open_tool(std::uint64_t const at, json::value const& data) {
+        auto id = json::text_at(data, {"item", "call_id"});
+        if (id.empty()) {
+            id = json::text_at(data, {"item", "id"});
+        }
+        saw_call_ = true;
+        open(at, detail::block_type::tool_use,
+             json::make_object({{"type", detail::text_value("tool_use")}, {"id", detail::text_value(id)}, {"name", detail::text_value(json::text_at(data, {"item", "name"}))},
+                                {"input", json::make_object({})}}));
+    }
+
+    void open_thinking(std::uint64_t const at) {
+        open(at, detail::block_type::thinking, json::make_object({{"type", detail::text_value("thinking")}, {"thinking", detail::text_value("")}, {"signature", detail::text_value("")}}));
+    }
+
+    void send_arguments(std::uint64_t const at, std::string_view const text) {
+        auto& block = blocks_[at];
+        block.arguments_sent = true;
+        put("content_block_delta", detail::delta_event(block.index, "input_json_delta", "partial_json", text));
+    }
+
+    void finish_tool(std::uint64_t const at, json::value const& data) {
+        if (!blocks_.contains(at)) {
+            open_tool(at, data);
+        }
+        if (!blocks_[at].arguments_sent) {
+            auto const arguments = json::text_at(data, {"item", "arguments"});
+            send_arguments(at, arguments.empty() ? detail::empty_arguments : std::string_view{arguments});
+        }
+        close(at);
+    }
+
+    void finish_reasoning(std::uint64_t const at, json::value const& data) {
+        if (!blocks_.contains(at)) {
+            open_thinking(at);
+        }
+        std::string signature{signature_prefix};
+        if (auto const* item = json::at(data, {"item"})) {
+            signature += json::write(*item);
+        }
+        put("content_block_delta", detail::delta_event(blocks_[at].index, "signature_delta", "signature", signature));
+        close(at);
+    }
+
+    void end_message(json::value const& data, std::string_view const reason) {
+        begin();
+        while (!blocks_.empty()) {
+            close(blocks_.begin()->first);
+        }
+        auto const* response = json::at(data, {"response"});
+        auto const usage = response == nullptr ? detail::usage_of(json::value{}) : detail::usage_of(*response);
+        put("message_delta",
+            detail::event_of("message_delta", {{"delta", json::make_object({{"stop_reason", detail::text_value(saw_call_ ? "tool_use" : reason)}, {"stop_sequence", json::value{nullptr}}})},
+                                               {"usage", usage}}));
+        put("message_stop", detail::event_of("message_stop"));
+        finished_ = true;
+    }
+
+    void fail(std::string_view const code, std::string_view const message) {
+        put("error", detail::event_of("error", {{"error", json::make_object({{"type", detail::text_value(detail::error_type_of(code))}, {"message", detail::text_value(message)}})}}));
+        finished_ = true;
+    }
+
+    [[=detail::handles{detail::upstream_event::created}]] void on_created(json::value const& data) { begin(json::text_at(data, {"response", "id"})); }
+
+    [[=detail::handles{detail::upstream_event::in_progress}]] void on_in_progress(json::value const& data) {
+        begin(json::text_at(data, {"response", "id"}));
+        ping();
+    }
+
+    [[=detail::handles{detail::upstream_event::output_item_added}]] void on_item_added(json::value const& data) {
+        begin();
+        auto const kind = reflect::enum_from_name<detail::item_kind>(json::text_at(data, {"item", "type"}));
+        if (kind == detail::item_kind::function_call) {
+            open_tool(output_index(data), data);
+        } else if (kind == detail::item_kind::reasoning) {
+            open_thinking(output_index(data));
+        }
+    }
+
+    [[=detail::handles{detail::upstream_event::output_item_done}]] void on_item_done(json::value const& data) {
+        auto const at = output_index(data);
+        switch (reflect::enum_from_name<detail::item_kind>(json::text_at(data, {"item", "type"})).value_or(detail::item_kind::message)) {
+            case detail::item_kind::function_call: finish_tool(at, data); break;
+            case detail::item_kind::reasoning: finish_reasoning(at, data); break;
+            case detail::item_kind::message: close(at); break;
+        }
+    }
+
+    [[=detail::handles{detail::upstream_event::output_text_delta}]] void on_text_delta(json::value const& data) {
+        auto const at = output_index(data);
+        if (!blocks_.contains(at)) {
+            open(at, detail::block_type::text, json::make_object({{"type", detail::text_value("text")}, {"text", detail::text_value("")}}));
+        }
+        put("content_block_delta", detail::delta_event(blocks_[at].index, "text_delta", "text", json::text_at(data, {"delta"})));
+    }
+
+    [[=detail::handles{detail::upstream_event::function_call_arguments_delta}]] void on_arguments_delta(json::value const& data) {
+        if (auto const at = output_index(data); blocks_.contains(at)) {
+            send_arguments(at, json::text_at(data, {"delta"}));
+        }
+    }
+
+    [[=detail::handles{detail::upstream_event::reasoning_summary_text_delta}]] void on_summary_delta(json::value const& data) {
+        auto const at = output_index(data);
+        if (!blocks_.contains(at)) {
+            open_thinking(at);
+        }
+        put("content_block_delta", detail::delta_event(blocks_[at].index, "thinking_delta", "thinking", json::text_at(data, {"delta"})));
+    }
+
+    [[=detail::handles{detail::upstream_event::completed}]] void on_completed(json::value const& data) { end_message(data, detail::stop_reason_of({})); }
+
+    [[=detail::handles{detail::upstream_event::incomplete}]] void on_incomplete(json::value const& data) {
+        end_message(data, detail::stop_reason_of(json::text_at(data, {"response", "incomplete_details", "reason"})));
+    }
+
+    [[=detail::handles{detail::upstream_event::failed}]] void on_failed(json::value const& data) {
+        fail(json::text_at(data, {"response", "error", "code"}), json::text_at(data, {"response", "error", "message"}));
+    }
+
+    [[=detail::handles{detail::upstream_event::error}]] void on_error(json::value const& data) { fail(json::text_at(data, {"code"}), json::text_at(data, {"message"})); }
+
+    std::string model_;
+    bool started_ = false;
+    bool finished_ = false;
+    bool saw_call_ = false;
+    std::size_t next_index_ = 0;
+    std::map<std::uint64_t, detail::open_block> blocks_{};
+    std::map<std::string, std::uint64_t> ignored_{};
+    std::vector<detail::produced_event> produced_{};
+};
+
+}  // namespace llmgate::responses
+
+namespace llmgate::responses {
+
+consteval std::span<std::meta::info const> rule_members() {
+    return std::define_static_array(std::meta::members_of(^^stream_translator, std::meta::access_context::unchecked()) |
+                                    std::views::filter([](std::meta::info const member) { return std::meta::is_function(member) && std::meta::has_identifier(member) && reflect::has_annotation<detail::handles>(member); }));
+}
+
+constexpr auto ruleless_events =
+    std::to_array({detail::upstream_event::content_part_added, detail::upstream_event::content_part_done, detail::upstream_event::output_text_done,
+                   detail::upstream_event::function_call_arguments_done, detail::upstream_event::reasoning_summary_part_added,
+                   detail::upstream_event::reasoning_summary_part_done, detail::upstream_event::reasoning_summary_text_done});
+
+consteval bool rules_cover_events() {
+    auto const handled = rule_members() | std::views::transform([](std::meta::info const member) { return reflect::annotation_of<detail::handles>(member)->event; });
+    return std::ranges::all_of(reflect::enum_values<detail::upstream_event>, [&](detail::upstream_event const type) {
+        return std::ranges::count(handled, type) + std::ranges::count(ruleless_events, type) == 1;
+    });
+}
+static_assert(rules_cover_events());
+
+constexpr void stream_translator::dispatch(detail::upstream_event const kind, json::value const& data) {
+    template for (constexpr auto member : rule_members()) {
+        if (reflect::annotation_of<detail::handles>(member)->event == kind) {
+            this->[:member:](data);
+        }
+    }
+}
+
+constexpr void stream_translator::accept(sse::event const& incoming) {
+    if (finished_) {
+        return;
+    }
+    auto const data = json::parse(incoming.data, {.jsonc = false});
+    auto const type = data ? json::text_at(*data, {"type"}) : std::string{};
+    auto const name = type.empty() ? std::string{incoming.name} : type;
+    auto const kind = reflect::enum_from_name<detail::upstream_event>(detail::normalized(name));
+    if (!data || !kind) {
+        ++ignored_[name];
+        ping();
+        return;
+    }
+    dispatch(*kind, *data);
+}
+
+}  // namespace llmgate::responses
