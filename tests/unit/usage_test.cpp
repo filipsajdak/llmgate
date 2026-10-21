@@ -69,6 +69,87 @@ const suite usage_suite = [] {
         expect(role_of("gpt-4o") == "other");
     };
 
+    "capability_the_observer_reads_the_stop_reason_and_an_error_event"_test = [] {
+        observer streamed;
+        streamed.on_event("message_delta", R"({"delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":9}})");
+        observer whole;
+        whole.on_body(R"({"type":"message","model":"m","stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":2}})");
+        observer failed;
+        failed.on_event("error", R"({"type":"error","error":{"type":"api_error","message":"upstream stream ended before message_stop"}})");
+
+        expect(streamed.stop_reason() == "max_tokens" && whole.stop_reason() == "tool_use" && failed.stop_reason().empty());
+        expect(failed.error() == "upstream stream ended before message_stop" && streamed.error().empty());
+    };
+
+    "capability_an_error_body_gives_its_message_or_its_type"_test = [] {
+        expect(error_of_body(R"({"type":"error","error":{"type":"rate_limit_error","message":"slow down"}})") == "slow down");
+        expect(error_of_body(R"({"error":{"type":"rate_limit_error"}})") == "rate_limit_error");
+        expect(error_of_body("<html>bad gateway</html>").empty());
+        expect(error_of_body(std::format(R"({{"error":{{"message":"{}"}}}})", std::string(500, 'x'))).size() == longest_error);
+        expect(error_of_body("{\"error\":{\"message\":\"a\\u001bb\"}}") == "a?b");
+    };
+
+    "capability_a_request_whose_stop_sequence_is_the_classifier_marker_is_classifier_traffic"_test = [] {
+        expect(kind_of(R"({"model":"m","max_tokens":2048,"stop_sequences":["</block>"],"messages":[]})") == "classifier");
+        expect(kind_of(R"({"model":"m","stop_sequences":["\n\nHuman:","</block>"],"messages":[]})") == "classifier");
+        expect(kind_of(R"({"model":"m","stop_sequences":["END"],"messages":[]})") == "main");
+        expect(kind_of(R"({"model":"m","messages":[{"role":"user","content":"</block> in text"}]})") == "main");
+        expect(kind_of("not json") == "main");
+    };
+
+    "capability_a_classifier_reply_is_read_the_way_the_client_does_and_anything_else_is_unparseable"_test = [] {
+        expect(verdict_of("<block>yes") == reply_verdict::block);
+        expect(verdict_of("<block>no") == reply_verdict::allow);
+        expect(verdict_of("<block>yes</block>") == reply_verdict::block);
+        expect(verdict_of("  \n<block>no</block>") == reply_verdict::allow);
+        expect(verdict_of("<thinking>weigh it</thinking>\n<block>no</block>") == reply_verdict::allow);
+        expect(verdict_of("<thinking>a</thinking><block>yes") == reply_verdict::block);
+    };
+
+    "limit_prose_wrong_tags_and_cut_off_replies_are_unparseable_never_a_verdict"_test = [] {
+        for (std::string_view const reply : {"", "Allow.", "Not blocked.", "<block>This action should be allowed. Allowed.", "<allow>yes</allow>", "<block>yesterday",
+                                             "<block> yes", "<block>YES", "<thinking>never closed <block>no", "<block>", "block yes"}) {
+            expect(verdict_of(reply) == reply_verdict::unparseable) << reply;
+        }
+    };
+
+    "limit_a_negation_is_never_read_as_a_verdict"_test = [] {
+        expect(verdict_of("This should not be allowed. <block>no") == reply_verdict::unparseable);
+        expect(verdict_of("<block>no, do not allow") == reply_verdict::unparseable);
+    };
+
+    "capability_the_observer_collects_reply_text_only_when_asked_and_only_a_bounded_amount"_test = [] {
+        observer collecting;
+        collecting.collect_text(true);
+        collecting.on_event("content_block_delta", R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"<block>"}})");
+        collecting.on_event("content_block_delta", R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"no"}})");
+        collecting.on_event("content_block_delta", R"({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}})");
+        observer plain;
+        plain.on_event("content_block_delta", R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}})");
+        observer long_reply;
+        long_reply.collect_text(true);
+        for (std::size_t n = 0; n < 200; ++n) {
+            long_reply.on_event("content_block_delta", std::format(R"({{"delta":{{"type":"text_delta","text":"{}"}}}})", std::string(100, 'a')));
+        }
+        observer whole;
+        whole.collect_text(true);
+        whole.on_body(R"({"type":"message","content":[{"type":"text","text":"<block>yes"}]})");
+
+        expect(collecting.text() == "<block>no" && plain.text().empty() && long_reply.text().size() == longest_reply_text && whole.text() == "<block>yes");
+    };
+
+    "limit_ledger_lines_from_before_these_fields_read_with_empty_values"_test = [] {
+        auto const entry = from_line(R"({"time":9,"model":"m","status":200,"repairs":0})");
+
+        expect(entry.has_value() && entry->stop_reason.empty() && entry->error.empty() && entry->kind.empty());
+    };
+
+    "limit_the_new_text_fields_of_a_ledger_line_are_cleaned_like_the_others"_test = [] {
+        auto const entry = from_line(to_line({.time = noon, .stop_reason = "end\u001bturn", .error = std::string(500, 'e'), .kind = "cl\u001bass"}));
+
+        expect(entry.has_value() && entry->stop_reason == "end?turn" && entry->kind == "cl?ass" && entry->error.size() == longest_error);
+    };
+
     "defect_control_characters_in_model_names_never_reach_the_report"_test = [] {
         ledger book;
         book.add({.time = noon, .requested = "a\x1b]0;pwned\x07", .model = "m\x1b[2J\n"});
@@ -263,12 +344,12 @@ const suite usage_suite = [] {
     };
     "capability_the_ledger_line_keeps_its_bytes_and_key_order"_test = [] {
         constexpr std::string_view golden =
-            R"({"time":1760702400,"requested":"sonnet","model":"claude-sonnet-5-5","role":"sonnet","provider":"copilot","session":"s1","input":1,"output":2,"cache_read":3,"cache_creation":4,"duration_ms":350,"status":200,"repairs":1})"
+            R"({"time":1760702400,"requested":"sonnet","model":"claude-sonnet-5-5","role":"sonnet","provider":"copilot","session":"s1","input":1,"output":2,"cache_read":3,"cache_creation":4,"duration_ms":350,"status":200,"repairs":1,"stop_reason":"end_turn","error":"","kind":"main","verdict":""})"
             "\n";
-        constexpr std::string_view bare = R"({"time":0,"requested":"","model":"","role":"","provider":"","session":"","input":0,"output":0,"cache_read":0,"cache_creation":0,"duration_ms":0,"status":0,"repairs":0})" "\n";
+        constexpr std::string_view bare = R"({"time":0,"requested":"","model":"","role":"","provider":"","session":"","input":0,"output":0,"cache_read":0,"cache_creation":0,"duration_ms":0,"status":0,"repairs":0,"stop_reason":"","error":"","kind":"","verdict":""})" "\n";
 
         auto const line = to_line({.time = noon, .requested = "sonnet", .model = "claude-sonnet-5-5", .role = "sonnet", .provider = "copilot", .session = "s1",
-                                   .used = {.input = 1, .output = 2, .cache_read = 3, .cache_creation = 4}, .duration_ms = 350, .status = 200, .repairs = 1});
+                                   .used = {.input = 1, .output = 2, .cache_read = 3, .cache_creation = 4}, .duration_ms = 350, .status = 200, .repairs = 1, .stop_reason = "end_turn", .kind = "main"});
 
         expect(line == golden);
         expect(to_line({}) == bare);

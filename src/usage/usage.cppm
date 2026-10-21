@@ -127,6 +127,10 @@ struct record {
     std::int64_t duration_ms = 0;
     int status = 0;
     std::uint64_t repairs = 0;
+    std::string stop_reason{};
+    std::string error{};
+    std::string kind{};
+    std::string verdict{};
 
     friend constexpr bool operator==(record const&, record const&) = default;
 };
@@ -142,6 +146,91 @@ constexpr tokens read_tokens(json::value const& source) {
     return copy_by_position<tokens>(lenient::read<usage_counts>(source).value_or(usage_counts{}));
 }
 
+constexpr std::size_t longest_label = 64;
+constexpr std::size_t longest_error = 200;
+constexpr std::string_view classifier_marker = "</block>";
+
+constexpr std::size_t longest_reply_text = 4096;
+constexpr std::string_view classifier_kind = "classifier";
+
+enum class reply_verdict { block, allow, unparseable };
+static_assert(reflect::unique_values<reply_verdict>());
+
+constexpr std::string_view skip_blanks(std::string_view text) {
+    while (!text.empty() && (text.front() == ' ' || text.front() == '\n' || text.front() == '\t' || text.front() == '\r')) {
+        text.remove_prefix(1);
+    }
+    return text;
+}
+
+constexpr bool ends_verdict(std::string_view const rest) {
+    return rest.empty() || rest == "</block>";
+}
+
+constexpr reply_verdict verdict_of(std::string_view text) {
+    constexpr std::string_view thinking_open = "<thinking>";
+    constexpr std::string_view thinking_close = "</thinking>";
+    constexpr std::string_view block_open = "<block>";
+    text = skip_blanks(text);
+    if (text.starts_with(thinking_open)) {
+        auto const end = text.find(thinking_close);
+        if (end == std::string_view::npos) {
+            return reply_verdict::unparseable;
+        }
+        text = skip_blanks(text.substr(end + thinking_close.size()));
+    }
+    if (!text.starts_with(block_open)) {
+        return reply_verdict::unparseable;
+    }
+    text.remove_prefix(block_open.size());
+    if (text.starts_with("yes") && ends_verdict(text.substr(std::string_view{"yes"}.size()))) {
+        return reply_verdict::block;
+    }
+    return text.starts_with("no") && ends_verdict(text.substr(std::string_view{"no"}.size())) ? reply_verdict::allow : reply_verdict::unparseable;
+}
+
+constexpr std::string clean_text(std::string_view const text, std::size_t const limit) {
+    std::string clean;
+    for (auto const c : text.substr(0, limit)) {
+        clean += c >= '!' && c <= '~' ? c : (c == ' ' ? ' ' : '?');
+    }
+    return clean;
+}
+
+constexpr std::string label(std::string_view const text) {
+    std::string clean;
+    for (auto const c : text.substr(0, longest_label)) {
+        clean += c >= '!' && c <= '~' ? c : '?';
+    }
+    return clean;
+}
+
+constexpr std::string error_text(json::value const& parsed) {
+    auto message = json::text_at(parsed, {"error", "message"});
+    if (message.empty()) {
+        message = json::text_at(parsed, {"error", "type"});
+    }
+    return clean_text(message, longest_error);
+}
+
+constexpr std::string error_of_body(std::string_view const body) {
+    auto const parsed = json::parse(body, {.jsonc = false});
+    return parsed ? error_text(*parsed) : std::string{};
+}
+
+constexpr std::string kind_of(std::string_view const body) {
+    auto const members = jsonscan::top_level_members(body);
+    if (!members) {
+        return "main";
+    }
+    for (auto const& item : jsonscan::members_named(*members, "stop_sequences")) {
+        if (body.substr(item.value_begin, item.value_end - item.value_begin).contains(classifier_marker)) {
+            return "classifier";
+        }
+    }
+    return "main";
+}
+
 class observer {
 public:
     constexpr void on_event(std::string_view const name, std::string_view const data) {
@@ -149,8 +238,15 @@ public:
             start(data);
         } else if (name == "message_delta") {
             delta(data);
+        } else if (name == "error") {
+            failure(data);
+        } else if (collecting_ && name == "content_block_delta") {
+            collect(data);
         }
     }
+
+    constexpr void collect_text(bool const on) noexcept { collecting_ = on; }
+    constexpr std::string const& text() const noexcept { return text_; }
 
     constexpr void on_body(std::string_view const body) {
         auto const parsed = json::parse(body, {.jsonc = false});
@@ -158,12 +254,18 @@ public:
             return;
         }
         model_ = json::text_at(*parsed, {"model"});
+        stop_reason_ = label(json::text_at(*parsed, {"stop_reason"}));
+        if (collecting_) {
+            collect_body_text(*parsed);
+        }
         if (auto const* usage = json::at(*parsed, {"usage"})) {
             used_ = read_tokens(*usage);
         }
     }
 
     constexpr std::string const& model() const noexcept { return model_; }
+    constexpr std::string const& stop_reason() const noexcept { return stop_reason_; }
+    constexpr std::string const& error() const noexcept { return error_; }
     constexpr tokens const& used() const noexcept { return used_; }
 
 private:
@@ -180,26 +282,50 @@ private:
 
     constexpr void delta(std::string_view const data) {
         auto const parsed = json::parse(data, {.jsonc = false});
-        auto const* usage = parsed ? json::at(*parsed, {"usage"}) : nullptr;
-        if (usage == nullptr) {
+        if (!parsed) {
             return;
         }
-        used_.raise_to(read_tokens(*usage));
+        if (auto reason = json::text_at(*parsed, {"delta", "stop_reason"}); !reason.empty()) {
+            stop_reason_ = label(reason);
+        }
+        if (auto const* usage = json::at(*parsed, {"usage"})) {
+            used_.raise_to(read_tokens(*usage));
+        }
     }
 
+    constexpr void collect(std::string_view const data) {
+        auto const parsed = json::parse(data, {.jsonc = false});
+        if (parsed && json::text_at(*parsed, {"delta", "type"}) == "text_delta") {
+            append_reply_text(json::text_at(*parsed, {"delta", "text"}));
+        }
+    }
+
+    constexpr void collect_body_text(json::value const& message) {
+        auto const* content = json::at(message, {"content"});
+        auto const* blocks = content == nullptr ? nullptr : std::get_if<json::array>(&content->data);
+        for (auto const& block : blocks == nullptr ? json::array{} : *blocks) {
+            if (json::text_at(block, {"type"}) == "text") {
+                append_reply_text(json::text_at(block, {"text"}));
+            }
+        }
+    }
+
+    constexpr void append_reply_text(std::string_view const piece) {
+        text_.append(piece.substr(0, longest_reply_text - std::min(text_.size(), longest_reply_text)));
+    }
+
+    constexpr void failure(std::string_view const data) {
+        auto const parsed = json::parse(data, {.jsonc = false});
+        error_ = parsed ? error_text(*parsed) : std::string{};
+    }
+
+    bool collecting_ = false;
+    std::string text_{};
+    std::string stop_reason_{};
+    std::string error_{};
     std::string model_{};
     tokens used_{};
 };
-
-constexpr std::size_t longest_label = 64;
-
-constexpr std::string label(std::string_view const text) {
-    std::string clean;
-    for (auto const c : text.substr(0, longest_label)) {
-        clean += c >= '!' && c <= '~' ? c : '?';
-    }
-    return clean;
-}
 
 constexpr bool session_character(char const c) noexcept {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '-' || c == '_';
@@ -250,6 +376,10 @@ constexpr record cleaned(record entry) {
     entry.role = label(entry.role);
     entry.provider = label(entry.provider);
     entry.session = checked_session(entry.session);
+    entry.stop_reason = label(entry.stop_reason);
+    entry.error = clean_text(entry.error, longest_error);
+    entry.kind = label(entry.kind);
+    entry.verdict = label(entry.verdict);
     entry.status = std::clamp(entry.status, 0, status_cap);
     return entry;
 }

@@ -99,7 +99,7 @@ struct fake_upstream {
         auto const block = std::pair{"content_block_start", stream_body_event("content_block_start", R"(,"index":0)")};
         auto const text = std::pair{"content_block_delta", stream_body_event("content_block_delta", R"(,"index":0,"delta":{"text":"hi"})")};
         auto const end_block = std::pair{"content_block_stop", stream_body_event("content_block_stop", R"(,"index":0)")};
-        auto const delta = std::pair{"message_delta", stream_body_event("message_delta", R"(,"delta":{},"usage":{"output_tokens":2})")};
+        auto const delta = std::pair{"message_delta", stream_body_event("message_delta", R"(,"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2})")};
         auto const stop = std::pair{"message_stop", stream_body_event("message_stop")};
         switch (mode) {
             case behaviour::json_ok: {
@@ -258,7 +258,7 @@ httpio::request_spec in_session(std::string body, std::string_view const session
 constexpr std::int64_t fixed_time = 1760659200;
 
 constexpr std::string_view golden_statistics =
-    R"({"requests":3,"streamed":1,"upstream_failures":0,"upstream_timeouts":0,"client_disconnects":0,"refused":0,"connections_opened":1,"connections_reused":1,"budget_refused":0,"no_provider":0,"repairs":{"duplicate_message_start":2},"repair_examples":{},"betas":{"tools-2024":3},"thinking_blocks_stripped":0,"dropped_fields":{},"ignored_events":{},"providers":{"default":{"attempts":2,"answered":2,"failures":0,"skipped":0,"circuit":"closed"}},"usage":{"today":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"month":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"budget":{"state":"ok","window":"daily","used":18,"limit":100,"percent":18}}})";
+    R"({"requests":3,"streamed":1,"upstream_failures":0,"upstream_timeouts":0,"client_disconnects":0,"refused":0,"connections_opened":1,"connections_reused":1,"budget_refused":0,"no_provider":0,"repairs":{"duplicate_message_start":2},"repair_examples":{},"betas":{"tools-2024":3},"thinking_blocks_stripped":0,"classifier_requests":{},"classifier_unparseable":{},"dropped_fields":{},"ignored_events":{},"providers":{"default":{"attempts":2,"answered":2,"failures":0,"skipped":0,"circuit":"closed"}},"usage":{"today":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"month":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"budget":{"state":"ok","window":"daily","used":18,"limit":100,"percent":18}}})";
 constexpr std::string_view golden_models = R"json({"data":[{"type":"model","id":"opus","display_name":"opus","created_at":"1970-01-01T00:00:00Z"},{"type":"model","id":"claude-opus-upstream@default","display_name":"claude-opus-upstream (default)","created_at":"1970-01-01T00:00:00Z","description":"served by the provider default"}],"has_more":false})json";
 constexpr std::string_view golden_error = R"({"type":"error","error":{"type":"invalid_request_error","message":"a \"q\" \n b"}})";
 
@@ -1092,6 +1092,47 @@ const suite gateway_suite = [] {
 
         expect(d.first.seen.size() == 1_u && !d.first.seen.at(0).body.contains("sig-from-a"));
         expect(d.second.seen.size() == 2_u && d.second.seen.at(1).body.contains("sig-from-a"));
+    };
+
+    "capability_the_ledger_line_names_the_stop_reason_the_traffic_kind_and_the_error"_test = [] {
+        world w;
+        std::vector<std::string> lines;
+        w.gateway.persist_usage_with([&lines](std::string const& line) { lines.push_back(line); });
+        w.upstream.mode = behaviour::sse_clean;
+
+        (void)w.ask(messages_request(chat("opus", true)));
+        (void)w.ask(messages_request(R"({"model":"opus","max_tokens":8,"stream":true,"stop_sequences":["</block>"],"messages":[{"role":"user","content":"hi"}]})"));
+        w.upstream.mode = behaviour::rate_limited;
+        (void)w.ask(messages_request(chat("opus", false)));
+
+        expect(lines.size() == 3_u);
+        auto const normal = usage::from_line(lines.at(0));
+        auto const classifier = usage::from_line(lines.at(1));
+        auto const limited = usage::from_line(lines.at(2));
+        expect(normal && normal->kind == "main" && normal->stop_reason == "end_turn" && normal->error.empty()) << lines.at(0);
+        expect(classifier && classifier->kind == "classifier") << lines.at(1);
+        expect(limited && limited->status == 429 && limited->error == "rate_limit_error") << lines.at(2);
+    };
+
+    "capability_a_classifier_reply_that_is_not_a_verdict_is_counted_per_provider_and_model"_test = [] {
+        world w;
+        std::vector<std::string> lines;
+        w.gateway.persist_usage_with([&lines](std::string const& line) { lines.push_back(line); });
+        w.upstream.mode = behaviour::sse_clean;
+        auto const classifier = R"({"model":"opus","max_tokens":8,"stream":true,"stop_sequences":["</block>"],"messages":[{"role":"user","content":"hi"}]})";
+
+        (void)w.ask(messages_request(classifier));
+        (void)w.ask(messages_request(chat("opus", true)));
+        auto stats_request = messages_request("");
+        stats_request.method = "GET";
+        stats_request.target = "/llmgate/stats";
+        auto const body = w.ask(std::move(stats_request)).body;
+
+        auto const entry = usage::from_line(lines.at(0));
+        expect(entry && entry->kind == "classifier" && entry->verdict == "unparseable") << lines.at(0);
+        auto const normal = usage::from_line(lines.at(1));
+        expect(normal && normal->verdict.empty());
+        expect(body.contains(R"json("classifier_requests":{"default/opus":1})json") && body.contains(R"json("classifier_unparseable":{"default/opus":1})json")) << body;
     };
 
     "capability_a_picked_target_goes_to_exactly_that_provider_with_its_upstream_model"_test = [] {

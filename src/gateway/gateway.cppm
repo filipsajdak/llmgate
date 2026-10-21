@@ -185,6 +185,8 @@ struct stats {
     routing::beta_counts betas{};
     std::map<std::string, std::uint64_t> dropped_fields{};
     std::uint64_t thinking_blocks_stripped = 0;
+    std::map<std::string, std::uint64_t> classifier_requests{};
+    std::map<std::string, std::uint64_t> classifier_unparseable{};
     std::map<std::string, std::uint64_t> ignored_events{};
     [[= json::skip]] std::map<std::string, provider_stats> providers;
 };
@@ -336,10 +338,17 @@ struct request_note {
     std::string requested{};
     std::string session{};
     std::chrono::steady_clock::time_point began{};
+    std::string kind{};
+};
+
+struct outcome_text {
+    std::string stop_reason{};
+    std::string error{};
+    std::string verdict{};
 };
 
 constexpr int http_success_floor = 200;
-constexpr int http_client_error_span = 100;
+constexpr int http_success_span = 100;
 constexpr int http_error_floor = 400;
 
 struct relay_state {
@@ -401,7 +410,7 @@ struct relay_state {
     }
 
     bool unusable_success() const {
-        return head.has_value() && head->status >= http_success_floor && head->status < http_error_floor - http_client_error_span && !streaming && !buffer_overflow &&
+        return head.has_value() && head->status >= http_success_floor && head->status < http_success_floor + http_success_span && !streaming && !buffer_overflow &&
                !routing::is_message_json(buffered);
     }
 
@@ -772,7 +781,7 @@ private:
             ++counters_.budget_refused;
             co_return co_await reject(out, routing::error_reply(429, "rate_limit_error", usage::refusal_message(now)));
         }
-        detail::request_note note{.requested = std::move(first->requested), .session = usage::session_of(incoming.body), .began = std::chrono::steady_clock::now()};
+        detail::request_note note{.requested = std::move(first->requested), .session = usage::session_of(incoming.body), .began = std::chrono::steady_clock::now(), .kind = usage::kind_of(incoming.body)};
         auto order = plan_for(incoming, note);
         note.session = session_for(incoming, note);
         co_return co_await run_providers(incoming, out, std::move(order), std::move(note));
@@ -864,7 +873,7 @@ private:
             ++counters_.no_provider;
             co_return co_await reject(out, routing::error_reply(503, "api_error", "every provider for this model is unavailable (circuit open)"));
         }
-        record_entry(note, providers_[last].name, held->status, {}, {}, 0);
+        record_entry(note, providers_[last].name, held->status, {}, {}, 0, {.error = usage::error_of_body(held->body)});
         co_return co_await out.send(held->status, held->fields, held->body);
     }
 
@@ -986,11 +995,31 @@ private:
         if (!state.streaming && state.head && !failure && state.head->status >= 200 && state.head->status < 300) {
             state.observed.on_body(state.buffered);
         }
-        record_entry(note, provider, final_status(state, failure), state.observed.model(), state.observed.used(), state.repairs_seen);
+        auto const status = final_status(state, failure);
+        record_entry(note, provider, status, state.observed.model(), state.observed.used(), state.repairs_seen,
+                     {.stop_reason = state.observed.stop_reason(), .error = reply_error(state, status), .verdict = classifier_verdict(note, state, provider, status)});
+    }
+
+    static std::string reply_error(detail::relay_state const& state, int const status) {
+        auto error = state.observed.error();
+        return error.empty() && status >= detail::http_error_floor && !state.streaming ? usage::error_of_body(state.buffered) : error;
+    }
+
+    std::string classifier_verdict(detail::request_note const& note, detail::relay_state const& state, std::string_view const provider, int const status) {
+        if (note.kind != usage::classifier_kind || status < detail::http_success_floor || status >= detail::http_success_floor + detail::http_success_span) {
+            return {};
+        }
+        auto const found = usage::verdict_of(state.observed.text());
+        auto const key = std::format("{}/{}", provider, state.observed.model().empty() ? usage::label(note.requested) : state.observed.model());
+        ++counters_.classifier_requests[key];
+        if (found == usage::reply_verdict::unparseable) {
+            ++counters_.classifier_unparseable[key];
+        }
+        return std::string{reflect::enum_name(found)};
     }
 
     void record_entry(detail::request_note const& note, std::string_view const provider, int const status, std::string_view const model,
-                      usage::tokens const& used, std::uint64_t const repairs) {
+                      usage::tokens const& used, std::uint64_t const repairs, detail::outcome_text outcome) {
         auto const elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - note.began);
         usage::record entry{.time = clock_(),
                             .requested = usage::label(note.requested),
@@ -1001,7 +1030,11 @@ private:
                             .used = used,
                             .duration_ms = elapsed.count(),
                             .status = status,
-                            .repairs = repairs};
+                            .repairs = repairs,
+                            .stop_reason = std::move(outcome.stop_reason),
+                            .error = std::move(outcome.error),
+                            .kind = note.kind,
+                            .verdict = std::move(outcome.verdict)};
         ledger_.add(entry);
         if (persist_) {
             persist_(usage::to_line(entry));
@@ -1050,6 +1083,7 @@ private:
     async::task<detail::attempt_result> read_reply(std::size_t const index, net::any_stream& upstream, httpio::response_writer<Client>& out,
                                                    detail::request_note note) {
         detail::relay_state state{.counters = &counters_, .buffer_limit = buffer_limit};
+        state.observed.collect_text(note.kind == usage::classifier_kind);
         if (providers_[index].settings.protocol == wire_protocol::openai_responses) {
             state.translator.emplace(note.requested);
         }
