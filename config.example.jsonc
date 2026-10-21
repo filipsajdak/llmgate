@@ -12,6 +12,10 @@
     "base_url": "https://api.githubcopilot.com",
     // Path of the Messages endpoint on the upstream.
     "messages_path": "/v1/messages",
+    // Wire protocol of the provider: anthropic (the Messages API, the default) or openai_responses (the
+    // OpenAI Responses API; Claude Code requests are translated, see docs/translation-responses.md). With
+    // openai_responses the messages_path default becomes /responses. One of: anthropic, openai_responses.
+    "protocol": "anthropic",
     // Extra headers sent to the upstream on every request. With a copilot login the gateway also sends
     // Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here.
     "headers": { "Editor-Version": "vscode/1.99.0", "Copilot-Integration-Id": "vscode-chat" }

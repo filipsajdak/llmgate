@@ -115,9 +115,26 @@ struct produced_event {
     std::string data{};
 };
 
+constexpr auto status_error_types = std::to_array<std::pair<int, std::string_view>>(
+    {{400, "invalid_request_error"}, {401, "authentication_error"}, {403, "permission_error"}, {404, "not_found_error"}, {429, "rate_limit_error"}});
+
+constexpr std::string_view error_type_for_status(int const status) {
+    auto const found = std::ranges::find(status_error_types, status, &std::pair<int, std::string_view>::first);
+    return found == status_error_types.end() ? "api_error" : found->second;
+}
+
 }  // namespace llmgate::responses::detail
 
 export namespace llmgate::responses {
+
+constexpr std::string error_body(int const status, std::string_view const upstream_body) {
+    auto const parsed = json::parse(upstream_body, {.jsonc = false});
+    auto message = parsed ? json::text_at(*parsed, {"error", "message"}) : std::string{};
+    if (message.empty()) {
+        text::append_all(message, "the upstream answered ", text::decimal(status));
+    }
+    return json::write(detail::event_of("error", {{"error", json::make_object({{"type", detail::text_value(detail::error_type_for_status(status))}, {"message", detail::text_value(message)}})}}));
+}
 
 class stream_translator {
 public:

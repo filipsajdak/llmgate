@@ -283,6 +283,18 @@ const suite stream_suite = [] {
         expect(translate(upstream)[translate(upstream).size() - 2].data.contains(R"("input_tokens":0,"output_tokens":0)"));
     };
 
+    "capability_an_upstream_error_status_and_body_become_an_anthropic_error"_test = [] {
+        auto const body = R"({"error":{"message":"Rate limit reached","type":"rate_limit_error","code":"rate_limit_exceeded"}})";
+
+        expect(responses::error_body(429, body) == R"({"type":"error","error":{"type":"rate_limit_error","message":"Rate limit reached"}})");
+        expect(responses::error_body(401, R"({"error":{"message":"bad token"}})") == R"({"type":"error","error":{"type":"authentication_error","message":"bad token"}})");
+        expect(responses::error_body(403, R"({"error":{"message":"no plan"}})").contains("permission_error"));
+        expect(responses::error_body(400, R"({"error":{"message":"bad"}})").contains("invalid_request_error"));
+        expect(responses::error_body(404, "{}").contains("not_found_error"));
+        expect(responses::error_body(503, "<html>").contains(R"("type":"api_error")"));
+        expect(responses::error_body(500, "").contains("the upstream answered 500"));
+    };
+
     "limit_a_cached_count_above_the_input_count_never_makes_input_negative"_test = [] {
         auto upstream = text_stream();
         upstream.back() = event("response.completed", R"(,"response":{"usage":{"input_tokens":5,"input_tokens_details":{"cached_tokens":9},"output_tokens":3}})");

@@ -6,6 +6,7 @@ import std;
 import llmgate.claude;
 import llmgate.doc;
 import llmgate.json;
+import llmgate.reflect;
 import llmgate.selection;
 import llmgate.shutdown;
 import llmgate.tls;
@@ -26,10 +27,18 @@ struct timeouts {
     milliseconds drain = shutdown::default_drain;
 };
 
+enum class wire_protocol { anthropic, openai_responses };
+static_assert(reflect::unique_values<wire_protocol>());
+
+constexpr std::string_view default_messages_path = "/v1/messages";
+constexpr std::string_view default_responses_path = "/responses";
+
 struct upstream_config {
     [[= json::required]] [[= reflect::doc{"Base URL of the single upstream; together with the other top-level keys it acts as one provider named default."}]]
     [[= reflect::example{R"("https://api.githubcopilot.com")"}]] std::string base_url{};
     [[= reflect::doc{"Path of the Messages endpoint on the upstream."}]] std::string messages_path = "/v1/messages";
+    [[= reflect::doc{"Wire protocol of the provider: anthropic (the Messages API, the default) or openai_responses (the OpenAI Responses API; Claude Code requests are translated, see docs/translation-responses.md). With openai_responses the messages_path default becomes /responses."}]]
+    wire_protocol protocol = wire_protocol::anthropic;
     [[= reflect::doc{"Extra headers sent to the upstream on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here."}]]
     [[= reflect::example{R"({ "Editor-Version": "vscode/1.99.0", "Copilot-Integration-Id": "vscode-chat" })"}]]
     std::map<std::string, std::string> headers{};
@@ -55,6 +64,8 @@ struct copilot_config {
 struct provider_config {
     [[= json::required]] [[= reflect::doc{"Base URL of the provider."}]] [[= reflect::example{R"("https://api.anthropic.com")"}]] std::string base_url{};
     [[= reflect::doc{"Path of the Messages endpoint on the provider."}]] std::string messages_path = "/v1/messages";
+    [[= reflect::doc{"Wire protocol of the provider: anthropic (the Messages API, the default) or openai_responses (the OpenAI Responses API; Claude Code requests are translated, see docs/translation-responses.md). With openai_responses the messages_path default becomes /responses."}]]
+    wire_protocol protocol = wire_protocol::anthropic;
     [[= reflect::doc{"Extra headers sent to the provider on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here."}]] std::map<std::string, std::string> headers{};
     [[= reflect::doc{"Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen."}]] [[= reflect::commented]] bool forward_credentials = false;
     [[= reflect::doc{"Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER."}]] [[= reflect::example{R"(["claude-sonnet-5-5"])"}]] [[= reflect::commented]] std::vector<std::string> offer{};

@@ -2,3 +2,4 @@
 app/llmgate.cpp|enum-handler-table|{arguments::command::serve, &serve_command},|handlers_cover_every_command static_asserts the table holds each command exactly once
 app/llmgate.cpp|enum-handler-table|{arguments::document::example, &config_docs::gateway_example},|printers_cover_every_document static_asserts the table holds each document exactly once
 src/responses/request.cppm|word-chain|if (kind == "auto") {|the wire values of an Anthropic tool_choice; "auto" is a C++ keyword, so no enumerator can carry it
+tests/unit/gateway_test.cpp|json-format-template|R"({"requests":3,"streamed":1,|the golden pins the /llmgate/stats wire format; the test compares it with the output of json::to_value, so it is the check that the aggregate has not drifted

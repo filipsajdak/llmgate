@@ -16,6 +16,8 @@ import llmgate.members;
 import llmgate.net;
 import llmgate.proof;
 import llmgate.reflect;
+import llmgate.responses_request;
+import llmgate.responses_stream;
 import llmgate.role;
 import llmgate.routing;
 import llmgate.selection;
@@ -29,6 +31,10 @@ export import llmgate.config;
 export namespace llmgate::gateway {
 
 using reflect::member_named;
+
+constexpr std::string effective_messages_path(wire_protocol const protocol, std::string_view const configured) {
+    return protocol == wire_protocol::openai_responses && configured == default_messages_path ? std::string{default_responses_path} : std::string{configured};
+}
 
 provider_config legacy_provider(config const& settings) {
     provider_config out;
@@ -71,17 +77,27 @@ std::vector<std::string> provider_names(std::map<std::string, provider_config> c
     return names;
 }
 
+std::string provider_problem(std::string const& name, provider_config const& item, config const& settings) {
+    if (auto const parsed = routing::parse_url(item.base_url); !parsed) {
+        return "provider " + name + ": " + parsed.error();
+    }
+    if (item.forward_credentials && !settings.client_key_env.empty()) {
+        return "provider " + name + " forwards the client's credentials, which cannot also carry the gateway key: remove client_key_env";
+    }
+    if (item.forward_credentials && item.protocol != wire_protocol::anthropic) {
+        return "provider " + name + " forwards the client's credentials (forward_credentials), which only an anthropic provider can use";
+    }
+    return {};
+}
+
 std::string config_problem(config const& settings) {
     auto const providers = effective_providers(settings);
     if (providers.empty()) {
         return "configure upstream.base_url or at least one entry in providers";
     }
     for (auto const& [name, item] : providers) {
-        if (auto const parsed = routing::parse_url(item.base_url); !parsed) {
-            return "provider " + name + ": " + parsed.error();
-        }
-        if (item.forward_credentials && !settings.client_key_env.empty()) {
-            return "provider " + name + " forwards the client's credentials, which cannot also carry the gateway key: remove client_key_env";
+        if (auto problem = provider_problem(name, item, settings); !problem.empty()) {
+            return problem;
         }
     }
     return selection::route_problem(role_routes(settings), provider_names(providers));
@@ -166,6 +182,8 @@ struct stats {
     repair_counts repairs{};
     std::map<std::string, std::string> repair_examples{};
     routing::beta_counts betas{};
+    std::map<std::string, std::uint64_t> dropped_fields{};
+    std::map<std::string, std::uint64_t> ignored_events{};
     [[= json::skip]] std::map<std::string, provider_stats> providers;
 };
 
@@ -197,8 +215,13 @@ void copy_present(http::header_map& to, http::header_map const& from, std::strin
     }
 }
 
-void copy_request_headers(http::header_map& to, http::header_map const& from) {
-    for (auto const name : std::to_array<std::string_view>({"content-type", "accept", "anthropic-version", "anthropic-beta"})) {
+void copy_request_headers(http::header_map& to, http::header_map const& from, wire_protocol const wire) {
+    constexpr auto shared = std::to_array<std::string_view>({"content-type", "accept"});
+    constexpr auto anthropic_only = std::to_array<std::string_view>({"anthropic-version", "anthropic-beta"});
+    for (auto const name : shared) {
+        copy_present(to, from, name, name);
+    }
+    for (auto const name : wire == wire_protocol::anthropic ? std::span<std::string_view const>{anthropic_only} : std::span<std::string_view const>{}) {
         copy_present(to, from, name, name);
     }
 }
@@ -222,9 +245,9 @@ void add_missing(http::header_map& to, std::span<std::pair<std::string_view, std
 }
 
 http::header_map upstream_headers(httpio::request const& incoming, std::map<std::string, std::string> const& extra, bool const copilot_client,
-                                  bool const forward_credentials, std::string_view const token) {
+                                  bool const forward_credentials, std::string_view const token, wire_protocol const wire) {
     http::header_map fields;
-    copy_request_headers(fields, incoming.head.fields);
+    copy_request_headers(fields, incoming.head.fields, wire);
     if (forward_credentials) {
         forward_client_credentials(fields, incoming.head.fields);
     }
@@ -324,6 +347,7 @@ struct relay_state {
     bool buffer_overflow = false;
     sse::parser parser{};
     anthropic::stream_guard guard{};
+    std::optional<responses::stream_translator> translator{};
     std::deque<std::string> pending{};
     usage::observer observed{};
     std::uint64_t repairs_seen = 0;
@@ -343,11 +367,18 @@ struct relay_state {
         }
     }
 
+    void accept(sse::event const& item) {
+        auto const guarded = [this](sse::event const& event) { guard.on_event(event, [this](auto const& out) { emit(out); }, [this](auto const& fix) { note(fix); }); };
+        if (translator) {
+            translator->on_event(item, guarded);
+        } else {
+            guarded(item);
+        }
+    }
+
     void on_chunk(std::span<std::byte const> bytes) {
         if (streaming) {
-            parser.feed(bytes, [this](sse::event const& item) {
-                guard.on_event(item, [this](auto const& out) { emit(out); }, [this](auto const& fix) { note(fix); });
-            });
+            parser.feed(bytes, [this](sse::event const& item) { accept(item); });
             return;
         }
         if (buffer_limit < buffered.size() + bytes.size()) {
@@ -364,9 +395,7 @@ struct relay_state {
     }
 
     void finish_stream() {
-        parser.finish([this](sse::event const& item) {
-            guard.on_event(item, [this](auto const& out) { emit(out); }, [this](auto const& fix) { note(fix); });
-        });
+        parser.finish([this](sse::event const& item) { accept(item); });
         guard.on_end([this](auto const& out) { emit(out); }, [this](auto const& fix) { note(fix); });
     }
 
@@ -410,6 +439,37 @@ attempt_result refused(routing::reply_body problem, health const state) {
     held_reply reply{.status = problem.status, .fields = {}, .body = std::move(problem.body)};
     reply.fields.add("Content-Type", "application/json");
     return {.held = std::move(reply), .state = state};
+}
+
+constexpr int http_error_floor = 400;
+constexpr std::size_t cache_key_chars = 32;
+constexpr std::string_view cache_key_label = "llmgate-prompt-cache";
+
+std::string prompt_cache_key(httpio::request const& incoming) {
+    auto const session = incoming.head.fields.find("x-claude-code-session-id");
+    return session ? proof::hmac_sha256_hex(cache_key_label, *session).substr(0, cache_key_chars) : std::string{};
+}
+
+std::expected<std::string, attempt_result> to_responses_body(std::string const& body, httpio::request const& incoming, stats& counters) {
+    auto done = responses::translate_request(body, {.prompt_cache_key = prompt_cache_key(incoming)});
+    if (!done) {
+        return std::unexpected{refused(routing::error_reply(400, "invalid_request_error", done.error().message), health::neutral)};
+    }
+    if (!done->client_streams) {
+        return std::unexpected{refused(routing::error_reply(400, "invalid_request_error", "stream must be true for a provider with the openai_responses protocol"), health::neutral)};
+    }
+    for (auto const& name : done->dropped) {
+        ++counters.dropped_fields[name];
+    }
+    return std::move(done->body);
+}
+
+bool translates_errors(wire_protocol const wire, int const status) {
+    return wire == wire_protocol::openai_responses && status >= http_error_floor;
+}
+
+std::string client_error_body(wire_protocol const wire, int const status, std::string body) {
+    return translates_errors(wire, status) ? responses::error_body(status, body) : std::move(body);
 }
 
 attempt_result delivered(net::result_void client, health const state) {
@@ -807,6 +867,26 @@ private:
         return detail::refused(routing::error_reply(status, "api_error", "cannot reach the upstream: " + failure.message()), detail::health::failing);
     }
 
+    std::expected<std::string, detail::attempt_result> upstream_body(detail::provider_runtime const& chosen, httpio::request const& incoming, std::string body) {
+        if (chosen.settings.protocol != wire_protocol::openai_responses) {
+            return body;
+        }
+        return detail::to_responses_body(body, incoming, counters_);
+    }
+
+    async::task<std::expected<std::string, detail::attempt_result>> upstream_token(std::size_t const index) {
+        auto& chosen = providers_[index];
+        if (chosen.settings.forward_credentials) {
+            co_return std::string{};
+        }
+        auto bearer = co_await chosen.creds->bearer();
+        if (!bearer) {
+            co_return std::unexpected{detail::refused(
+                routing::error_reply(401, "authentication_error", "no upstream credential: run llmgate login (" + bearer.error().message() + ")"), detail::health::neutral)};
+        }
+        co_return std::move(*bearer);
+    }
+
     async::task<std::expected<httpio::request_spec, detail::attempt_result>> build_spec(std::size_t const index, std::optional<std::string> upstream_model, httpio::request const& incoming) {
         auto& chosen = providers_[index];
         if (!chosen.url) {
@@ -816,14 +896,13 @@ private:
         if (!prepared) {
             co_return std::unexpected{detail::refused(std::move(prepared.error()), detail::health::neutral)};
         }
-        std::string token;
-        if (!chosen.settings.forward_credentials) {
-            auto bearer = co_await chosen.creds->bearer();
-            if (!bearer) {
-                co_return std::unexpected{detail::refused(
-                    routing::error_reply(401, "authentication_error", "no upstream credential: run llmgate login (" + bearer.error().message() + ")"), detail::health::neutral)};
-            }
-            token = std::move(*bearer);
+        auto body = upstream_body(chosen, incoming, std::move(prepared->body));
+        if (!body) {
+            co_return std::unexpected{std::move(body.error())};
+        }
+        auto token = co_await upstream_token(index);
+        if (!token) {
+            co_return std::unexpected{std::move(token.error())};
         }
         if (auto const dynamic = chosen.creds->endpoint()) {
             if (auto parsed = detail::parsed_url(*dynamic)) {
@@ -831,10 +910,11 @@ private:
             }
         }
         co_return httpio::request_spec{.method = "POST",
-                                       .target = chosen.url->base_path + chosen.settings.messages_path,
+                                       .target = chosen.url->base_path + effective_messages_path(chosen.settings.protocol, chosen.settings.messages_path),
                                        .host = chosen.url->host,
-                                       .fields = detail::upstream_headers(incoming, chosen.settings.headers, chosen.settings.copilot.has_value(), chosen.settings.forward_credentials, token),
-                                       .body = std::move(prepared->body)};
+                                       .fields = detail::upstream_headers(incoming, chosen.settings.headers, chosen.settings.copilot.has_value(), chosen.settings.forward_credentials, *token,
+                                                                          chosen.settings.protocol),
+                                       .body = std::move(*body)};
     }
 
     async::task<std::optional<detail::attempt_result>> send_request(net::any_stream& upstream, httpio::request_spec spec) {
@@ -932,7 +1012,11 @@ private:
     async::task<detail::attempt_result> read_reply(std::size_t const index, net::any_stream& upstream, httpio::response_writer<Client>& out,
                                                    detail::request_note note) {
         detail::relay_state state{.counters = &counters_, .buffer_limit = buffer_limit};
+        if (providers_[index].settings.protocol == wire_protocol::openai_responses) {
+            state.translator.emplace(note.requested);
+        }
         auto const drained = co_await pump(upstream, state, out);
+        absorb_translator_counts(state);
         auto const& provider = providers_[index].name;
         if (detail::client_gone(drained)) {
             ++counters_.client_disconnects;
@@ -953,6 +1037,14 @@ private:
         co_return detail::delivered(std::move(concluded), detail::health_of(state, drained.failure));
     }
 
+    void absorb_translator_counts(detail::relay_state const& state) {
+        if (state.translator) {
+            for (auto const& [name, count] : state.translator->ignored()) {
+                counters_.ignored_events[name] += count;
+            }
+        }
+    }
+
     detail::attempt_result hold(std::size_t const index, net::any_stream& upstream, detail::relay_state& state, std::error_code const failure) {
         if (failure) {
             (failure == std::errc::timed_out ? counters_.upstream_timeouts : counters_.upstream_failures) += 1;
@@ -962,7 +1054,9 @@ private:
         if (state.head->keep_alive) {
             pool_.give_back(endpoint_key(index), std::move(upstream));
         }
-        return {.held = detail::held_reply{.status = state.head->status, .fields = routing::downstream_headers(state.head->fields), .body = std::move(state.buffered)},
+        return {.held = detail::held_reply{.status = state.head->status,
+                                           .fields = routing::downstream_headers(state.head->fields),
+                                           .body = detail::client_error_body(providers_[index].settings.protocol, state.head->status, std::move(state.buffered))},
                 .state = detail::health::failing};
     }
 
@@ -1011,6 +1105,9 @@ private:
         }
         settle_connection(index, upstream, *state.head);
         auto const fields = routing::downstream_headers(state.head->fields);
+        if (detail::translates_errors(providers_[index].settings.protocol, state.head->status)) {
+            co_return co_await out.send(state.head->status, fields, responses::error_body(state.head->status, state.buffered));
+        }
         co_return co_await out.send(state.head->status, fields, state.buffered);
     }
 

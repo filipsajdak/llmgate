@@ -238,7 +238,7 @@ httpio::request_spec control_request(std::string body, std::string_view const ke
 constexpr std::int64_t fixed_time = 1760659200;
 
 constexpr std::string_view golden_statistics =
-    R"({"requests":3,"streamed":1,"upstream_failures":0,"upstream_timeouts":0,"client_disconnects":0,"refused":0,"connections_opened":1,"connections_reused":1,"budget_refused":0,"no_provider":0,"repairs":{"duplicate_message_start":2},"repair_examples":{},"betas":{"tools-2024":3},"providers":{"default":{"attempts":2,"answered":2,"failures":0,"skipped":0,"circuit":"closed"}},"usage":{"today":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"month":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"budget":{"state":"ok","window":"daily","used":18,"limit":100,"percent":18}}})";
+    R"({"requests":3,"streamed":1,"upstream_failures":0,"upstream_timeouts":0,"client_disconnects":0,"refused":0,"connections_opened":1,"connections_reused":1,"budget_refused":0,"no_provider":0,"repairs":{"duplicate_message_start":2},"repair_examples":{},"betas":{"tools-2024":3},"dropped_fields":{},"ignored_events":{},"providers":{"default":{"attempts":2,"answered":2,"failures":0,"skipped":0,"circuit":"closed"}},"usage":{"today":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"month":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"budget":{"state":"ok","window":"daily","used":18,"limit":100,"percent":18}}})";
 constexpr std::string_view golden_models = R"json({"data":[{"type":"model","id":"opus","display_name":"opus","created_at":"1970-01-01T00:00:00Z"},{"type":"model","id":"claude-opus-upstream@default","display_name":"claude-opus-upstream (default)","created_at":"1970-01-01T00:00:00Z","description":"served by the provider default"}],"has_more":false})json";
 constexpr std::string_view golden_error = R"({"type":"error","error":{"type":"invalid_request_error","message":"a \"q\" \n b"}})";
 
@@ -890,6 +890,67 @@ const suite gateway_suite = [] {
         expect(seen.at("other") == 5_u);
         routing::count_betas(seen, "token-0");
         expect(seen.at("token-0") == 2_u);
+    };
+
+    "capability_a_responses_provider_receives_the_translated_request_on_its_own_path_without_anthropic_headers"_test = [] {
+        duo d{[](gateway::config& built) { built.providers["b"].protocol = gateway::wire_protocol::openai_responses; }};
+
+        (void)d.chat_with("claude-model-b@b", true);
+
+        expect(d.first.seen.empty() && d.second.seen.size() == 1_u);
+        auto const& seen = d.second.seen.at(0);
+        expect(seen.target == "/responses") << seen.target;
+        expect(seen.body.contains(R"("input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}])") && seen.body.contains(R"("store":false)") &&
+               seen.body.contains(R"("stream":true)") && seen.body.contains(R"("model":"model-b")"));
+        expect(!seen.body.contains("max_tokens"));
+        expect(seen.headers.at("Authorization") == "Bearer token-b" && seen.headers.at("content-type") == "application/json");
+        expect(!seen.headers.contains("anthropic-beta") && !seen.headers.contains("anthropic-version"));
+    };
+
+    "capability_a_responses_provider_with_an_explicit_path_keeps_it"_test = [] {
+        duo d{[](gateway::config& built) {
+            built.providers["b"].protocol = gateway::wire_protocol::openai_responses;
+            built.providers["b"].messages_path = "/v1/responses";
+        }};
+
+        (void)d.chat_with("claude-model-b@b", true);
+
+        expect(d.second.seen.at(0).target == "/v1/responses");
+    };
+
+    "limit_a_responses_provider_refuses_a_request_that_is_not_streamed_without_calling_upstream"_test = [] {
+        duo d{[](gateway::config& built) { built.providers["b"].protocol = gateway::wire_protocol::openai_responses; }};
+
+        auto const answer = d.chat_with("claude-model-b@b", false);
+
+        expect(answer.status == 400 && answer.body.contains("stream") && d.second.seen.empty());
+    };
+
+    "limit_a_responses_provider_refuses_a_server_tool_with_the_recognised_wording_before_sending"_test = [] {
+        duo d{[](gateway::config& built) { built.providers["b"].protocol = gateway::wire_protocol::openai_responses; }};
+        auto spec = messages_request(R"({"model":"claude-model-b@b","max_tokens":8,"stream":true,"messages":[{"role":"user","content":"hi"}],"tools":[{"type":"advisor_20260301","name":"advisor"}]})",
+                                     "/anthropic/v1/messages", "");
+
+        auto const answer = d.ask(std::move(spec));
+
+        expect(answer.status == 400 && answer.body.contains("Input tag 'advisor_20260301'") && d.second.seen.empty());
+    };
+
+    "capability_the_statistics_count_fields_dropped_from_a_translated_request"_test = [] {
+        duo d{[](gateway::config& built) { built.providers["b"].protocol = gateway::wire_protocol::openai_responses; }};
+        auto spec = messages_request(R"({"model":"claude-model-b@b","max_tokens":8,"temperature":0.5,"stream":true,"messages":[{"role":"user","content":"hi"}]})", "/anthropic/v1/messages", "");
+
+        (void)d.ask(std::move(spec));
+        auto const body = d.stats().body;
+
+        expect(body.contains(R"json("dropped_fields":{"max_tokens":1,"temperature":1})json")) << body;
+    };
+
+    "limit_a_responses_provider_cannot_forward_the_clients_credentials"_test = [] {
+        gateway::config built;
+        built.providers["a"] = {.base_url = "http://127.0.0.1:1", .protocol = gateway::wire_protocol::openai_responses, .forward_credentials = true};
+
+        expect(gateway::config_problem(built).contains("provider a") && gateway::config_problem(built).contains("forward_credentials"));
     };
 
     "capability_a_picked_target_goes_to_exactly_that_provider_with_its_upstream_model"_test = [] {
