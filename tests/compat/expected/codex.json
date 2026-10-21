@@ -1,0 +1,20 @@
+{
+  "compaction": "PASS",
+  "fallback": "UNSUPPORTED",
+  "hooks": "PASS",
+  "image": "PASS",
+  "long-session": "PASS",
+  "mcp": "PASS",
+  "plan-mode": "PASS",
+  "skill": "PASS",
+  "slash-command": "PASS",
+  "subagent": "PASS",
+  "switch-mid-session": "UNSUPPORTED",
+  "switch-with-thinking": "UNSUPPORTED",
+  "text-haiku": "PASS",
+  "text-opus": "PASS",
+  "text-turn": "PASS",
+  "thinking": "PASS",
+  "tool-loop": "PASS",
+  "write-file": "PASS"
+}

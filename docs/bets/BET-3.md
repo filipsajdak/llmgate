@@ -46,3 +46,7 @@ sign-in on a loopback port, not a device-code login.
 
 Effect on the plan: S5 (translation spec) must obey the preview limitations above; S8 builds the
 documented sign-in and refresh, with `store: false` and `stream: true`. Decision (the user, 2026-10-21): proceed with the\ndocumented sign-in for their own Plus account. Their data controls decide whether the content is used for\ntraining, so only the invented sample project and the public repository go through it.
+
+## Evidence: first real run (2026-10-21)
+
+Sign-in with a ChatGPT Plus account worked through the documented flow. Defects found by the real route and fixed test-first: the stream carries no Content-Type, refusals use a `detail` string. All 15 non-switching compat scenarios (text on three model slots, tool loop, write-file, thinking, image, subagent, skill, slash command, hook, MCP, plan mode, compaction, 12-turn session) passed; see the Codex column of the README matrix.

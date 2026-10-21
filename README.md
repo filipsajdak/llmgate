@@ -1,6 +1,6 @@
 # llmgate
 
-A gateway that lets Claude Code talk to GitHub Copilot and Anthropic backends without losing anything silently; a ChatGPT plan backend is built and awaits its first real run; other providers (local OpenAI-compatible models, Gemini, Grok) are planned and are not built yet. C++26 with static reflection, Apache-2.0.
+A gateway that lets Claude Code talk to GitHub Copilot and Anthropic backends without losing anything silently; a ChatGPT plan backend (Codex models) has passed the compatibility scenarios on a real Plus account; other providers (local OpenAI-compatible models, Gemini, Grok) are planned and are not built yet. C++26 with static reflection, Apache-2.0.
 
 Status: walking-skeleton phase (BET-1, decision on 2026-11-06). The Anthropic passthrough works end to end with the real Claude Code CLI against a scripted upstream (`tests/e2e/claude_through_gateway.sh`); the first run against GitHub Copilot needs your device login.
 
@@ -226,36 +226,37 @@ Several accounts of one provider are several provider entries. A Claude subscrip
 `tests/compat/` holds one directory per Claude Code feature (`scenario.json` with the prompt, `check.sh` asserting what the run changed, `stub.sh` for the self-test). `python3 tests/compat/run.py --backend NAME [--config PATH]` runs them through `llmgate claude`, writes `build/compat/NAME.json` (status, detail, the Claude Code version, the `anthropic-beta` tokens the gateway saw) and compares the statuses with `tests/compat/expected/NAME.json`. A scenario a backend does not provide is `unsupported` without a run. The self-test (`ctest -L compat-selftest`) runs every scenario against a scripted backend with a stub in place of Claude Code, and again with a stub that does nothing, which must fail every check. The table is generated from the committed expectations; a backend shows `not run` until a real run is recorded.
 
 <!-- compat-matrix:begin -->
-| Scenario | GitHub Copilot | Anthropic (Claude login) | Copilot then Anthropic (switch) | Copilot down, then Anthropic (fallback) | Scripted (selftest) |
-|---|---|---|---|---|---|
-| The session is compacted and still knows what came before (`compaction`) | pass | pass | - | - | unsupported |
-| Fall back to the next provider when the first is down (`fallback`) | unsupported | unsupported | - | pass | pass |
-| A PostToolUse hook fires after a tool call (`hooks`) | pass | pass | - | - | pass |
-| An image is read and understood (`image`) | pass | pass | - | - | pass |
-| A twelve-turn session keeps its context (`long-session`) | pass | pass | - | - | unsupported |
-| A tool from an MCP server is listed and called (`mcp`) | pass | pass | - | - | pass |
-| Plan mode answers with a plan and changes no file (`plan-mode`) | pass | pass | - | - | pass |
-| A project skill is discovered and used (`skill`) | pass | pass | - | - | pass |
-| A project slash command runs (`slash-command`) | pass | pass | - | - | pass |
-| Delegate to a subagent (`subagent`) | pass | pass | - | - | pass |
-| Switch provider in the middle of one session (`switch-mid-session`) | unsupported | unsupported | pass | - | pass |
-| Switch provider after a turn with thinking (`switch-with-thinking`) | unsupported | unsupported | pass | - | pass |
-| One text turn on the haiku model (`text-haiku`) | pass | pass | - | - | pass |
-| One text turn on the opus model (`text-opus`) | pass | pass | - | - | pass |
-| One text turn (`text-turn`) | pass | pass | - | - | pass |
-| A thinking block is returned and accepted back (`thinking`) | pass | pass | - | - | pass |
-| Fix a bug through a tool loop (read, edit, run) (`tool-loop`) | pass | pass | - | - | pass |
-| Create a file with the Write tool (`write-file`) | pass | pass | - | - | pass |
+| Scenario | GitHub Copilot | Anthropic (Claude login) | ChatGPT plan (Codex models) | Copilot then Anthropic (switch) | Copilot down, then Anthropic (fallback) | Scripted (selftest) |
+|---|---|---|---|---|---|---|
+| The session is compacted and still knows what came before (`compaction`) | pass | pass | pass | - | - | unsupported |
+| Fall back to the next provider when the first is down (`fallback`) | unsupported | unsupported | unsupported | - | pass | pass |
+| A PostToolUse hook fires after a tool call (`hooks`) | pass | pass | pass | - | - | pass |
+| An image is read and understood (`image`) | pass | pass | pass | - | - | pass |
+| A twelve-turn session keeps its context (`long-session`) | pass | pass | pass | - | - | unsupported |
+| A tool from an MCP server is listed and called (`mcp`) | pass | pass | pass | - | - | pass |
+| Plan mode answers with a plan and changes no file (`plan-mode`) | pass | pass | pass | - | - | pass |
+| A project skill is discovered and used (`skill`) | pass | pass | pass | - | - | pass |
+| A project slash command runs (`slash-command`) | pass | pass | pass | - | - | pass |
+| Delegate to a subagent (`subagent`) | pass | pass | pass | - | - | pass |
+| Switch provider in the middle of one session (`switch-mid-session`) | unsupported | unsupported | unsupported | pass | - | pass |
+| Switch provider after a turn with thinking (`switch-with-thinking`) | unsupported | unsupported | unsupported | pass | - | pass |
+| One text turn on the haiku model (`text-haiku`) | pass | pass | pass | - | - | pass |
+| One text turn on the opus model (`text-opus`) | pass | pass | pass | - | - | pass |
+| One text turn (`text-turn`) | pass | pass | pass | - | - | pass |
+| A thinking block is returned and accepted back (`thinking`) | pass | pass | pass | - | - | pass |
+| Fix a bug through a tool loop (read, edit, run) (`tool-loop`) | pass | pass | pass | - | - | pass |
+| Create a file with the Write tool (`write-file`) | pass | pass | pass | - | - | pass |
 <!-- compat-matrix:end -->
 
-## ChatGPT plan (built, awaiting its first real run)
+## ChatGPT plan (Codex models)
 
 A provider with `protocol: "openai_responses"` and a `chatgpt` object sends Claude Code's requests to the
 OpenAI Responses API, signed in with your ChatGPT plan through OpenAI's documented sign-in for open-source
 tools. The translation (requests, streamed events, tool calls, thinking, usage and errors) is specified in
 [docs/translation-responses.md](docs/translation-responses.md) and is covered by unit, property and end-to-end
-tests against a scripted upstream. No real Claude Code turn has passed through OpenAI yet, so this README
-claims no OpenAI support until one does.
+tests against a scripted upstream, and on 2026-10-21 every non-switching scenario of the compatibility suite
+passed through a real ChatGPT Plus plan (column above). The plan route is OpenAI's, so its availability and
+model list can change; `llmgate doctor` checks the sign-in.
 
 ```jsonc
 { "providers": { "codex": {
