@@ -264,7 +264,7 @@ httpio::request_spec in_session(std::string body, std::string_view const session
 constexpr std::int64_t fixed_time = 1760659200;
 
 constexpr std::string_view golden_statistics =
-    R"({"requests":3,"streamed":1,"upstream_failures":0,"upstream_timeouts":0,"client_disconnects":0,"refused":0,"connections_opened":1,"connections_reused":1,"budget_refused":0,"no_provider":0,"repairs":{"duplicate_message_start":2},"repair_examples":{},"betas":{"tools-2024":3},"thinking_blocks_stripped":0,"classifier_requests":{},"classifier_unparseable":{},"dropped_fields":{},"ignored_events":{},"providers":{"default":{"attempts":2,"answered":2,"failures":0,"skipped":0,"circuit":"closed"}},"usage":{"today":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"month":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"budget":{"state":"ok","window":"daily","used":18,"limit":100,"percent":18}}})";
+    R"({"requests":3,"streamed":1,"upstream_failures":0,"upstream_timeouts":0,"client_disconnects":0,"refused":0,"connections_opened":1,"connections_reused":1,"budget_refused":0,"no_provider":0,"repairs":{"duplicate_message_start":2},"repair_examples":{},"betas":{"tools-2024":3},"thinking_blocks_stripped":0,"max_tokens_clamped":0,"classifier_requests":{},"classifier_unparseable":{},"dropped_fields":{},"ignored_events":{},"providers":{"default":{"attempts":2,"answered":2,"failures":0,"skipped":0,"circuit":"closed"}},"usage":{"today":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"month":{"input":11,"output":7,"cache_read":3,"cache_creation":0,"requests":2},"budget":{"state":"ok","window":"daily","used":18,"limit":100,"percent":18}}})";
 constexpr std::string_view golden_models = R"json({"data":[{"type":"model","id":"opus","display_name":"opus","created_at":"1970-01-01T00:00:00Z"},{"type":"model","id":"claude-opus-upstream@default","display_name":"claude-opus-upstream (default)","created_at":"1970-01-01T00:00:00Z","description":"served by the provider default"}],"has_more":false})json";
 constexpr std::string_view golden_error = R"({"type":"error","error":{"type":"invalid_request_error","message":"a \"q\" \n b"}})";
 
@@ -1280,6 +1280,39 @@ const suite gateway_suite = [] {
 
         expect(body.contains(R"("id":"claude-model-a@a")") && body.contains(R"("id":"claude-model-b@b")") && body.contains(R"("id":"claude-model-extra@b")"));
         expect(body.contains(R"json("display_name":"model-b (b)")json"));
+    };
+
+    "capability_the_models_endpoint_publishes_the_pinned_limits_of_a_target"_test = [] {
+        duo d{[](gateway::config& built) { built.providers["b"].limits = {{"model-b", {.context_tokens = 300000, .prompt_tokens = 200000, .output_tokens = 64000}}}; }};
+        auto request = messages_request("");
+        request.method = "GET";
+        request.target = "/anthropic/v1/models";
+
+        auto const body = d.ask(std::move(request)).body;
+
+        expect(body.contains(R"json("id":"claude-model-b@b")json") && body.contains(R"("max_input_tokens":200000,"max_tokens":64000)"));
+    };
+
+    "capability_max_tokens_above_the_pinned_output_limit_is_clamped_and_counted"_test = [] {
+        duo d{[](gateway::config& built) { built.providers["b"].limits = {{"model-b", {.output_tokens = 1000}}}; }};
+        auto over = messages_request(R"({"model":"claude-model-b@b","max_tokens":5000,"stream":true,"messages":[{"role":"user","content":"hi"}]})", "/anthropic/v1/messages", "");
+        auto under = messages_request(R"({"model":"claude-model-b@b","max_tokens":500,"stream":true,"messages":[{"role":"user","content":"hi"}]})", "/anthropic/v1/messages", "");
+
+        (void)d.ask(std::move(over));
+        (void)d.ask(std::move(under));
+
+        expect(d.second.seen.size() == 2_u);
+        expect(d.second.seen.at(0).body.contains(R"("max_tokens":1000)") && d.second.seen.at(1).body.contains(R"("max_tokens":500)"));
+        expect(d.stats().body.contains(R"("max_tokens_clamped":1)")) << d.stats().body;
+    };
+
+    "limit_a_missing_or_zero_limit_leaves_max_tokens_alone"_test = [] {
+        duo d{[](gateway::config& built) { built.providers["b"].limits = {{"other-model", {.output_tokens = 10}}, {"model-b", {.context_tokens = 5}}}; }};
+        auto big = messages_request(R"({"model":"claude-model-b@b","max_tokens":99999,"stream":true,"messages":[{"role":"user","content":"hi"}]})", "/anthropic/v1/messages", "");
+
+        (void)d.ask(std::move(big));
+
+        expect(d.second.seen.at(0).body.contains(R"("max_tokens":99999)") && d.stats().body.contains(R"("max_tokens_clamped":0)"));
     };
 
     "capability_a_clean_stream_passes_through_event_for_event"_test = [] {

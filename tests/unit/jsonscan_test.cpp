@@ -40,6 +40,20 @@ const suite scan_suite = [] {
         expect(swapped->contains(R"(hi {\"model\":\"x\"})"));
     };
 
+    "capability_a_numeric_member_is_replaced_only_at_the_top_level"_test = [] {
+        auto const swapped = replace_number_member(R"({"max_tokens":128000,"note":"max_tokens":1,"nested":{"max_tokens":5}})", "max_tokens", 64000);
+        auto const clean = replace_number_member(R"({"max_tokens":128000,"nested":{"max_tokens":5},"text":"{\"max_tokens\":1}"})", "max_tokens", 64000);
+
+        expect(!swapped.has_value());
+        expect(clean.has_value() && *clean == R"({"max_tokens":64000,"nested":{"max_tokens":5},"text":"{\"max_tokens\":1}"})");
+    };
+
+    "limit_a_numeric_replacement_refuses_a_missing_or_non_numeric_member"_test = [] {
+        expect(replace_number_member(R"({"a":1})", "max_tokens", 5).error() == errc::member_missing);
+        expect(replace_number_member(R"({"max_tokens":"big"})", "max_tokens", 5).error() == errc::member_not_a_number);
+        expect(replace_number_member(R"({"max_tokens":null})", "max_tokens", 5).error() == errc::member_not_a_number);
+    };
+
     "limit_an_escaped_spelling_of_the_key_is_still_the_model_key"_test = [] {
         auto const swapped = replace_string_member(R"({"model":"a","x":1})", "model", "b");
 

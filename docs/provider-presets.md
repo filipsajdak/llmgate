@@ -1,6 +1,6 @@
 # Provider presets: a working default per provider, discovery, limits and token counting
 
-Status: design (BET-4, requirement R6 and its follow-ups). Built so far: slice L0 (`llmgate models`, the doctor drift check). Decisions are the user's
+Status: design (BET-4, requirement R6 and its follow-ups). Built so far: slice L0 (`llmgate models`, the doctor drift check) and slice L1 (`limits` per model, the `max_tokens` clamp, limits in `/v1/models`). Decisions are the user's
 answers of 2026-10-21; evidence is marked as measured, documented or reported.
 
 ## Problem

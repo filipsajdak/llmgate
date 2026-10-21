@@ -186,6 +186,7 @@ struct stats {
     routing::beta_counts betas{};
     std::map<std::string, std::uint64_t> dropped_fields{};
     std::uint64_t thinking_blocks_stripped = 0;
+    std::uint64_t max_tokens_clamped = 0;
     std::map<std::string, std::uint64_t> classifier_requests{};
     std::map<std::string, std::uint64_t> classifier_unparseable{};
     std::map<std::string, std::uint64_t> ignored_events{};
@@ -277,6 +278,8 @@ struct model_entry {
     std::string display_name{};
     std::string created_at = std::string{model_epoch};
     std::optional<std::string> description{};
+    std::optional<std::uint64_t> max_input_tokens{};
+    std::optional<std::uint64_t> max_tokens{};
 };
 
 struct model_list {
@@ -289,13 +292,23 @@ struct provider_report {
     selection::circuit circuit = selection::circuit::closed;
 };
 
-std::string models_json(std::set<std::string> const& aliases, std::span<control::target const> const targets) {
+constexpr std::optional<std::uint64_t> known_limit(std::uint64_t const value) {
+    return value == 0 ? std::nullopt : std::optional{value};
+}
+
+template <std::invocable<control::target const&> Limits>
+std::string models_json(std::set<std::string> const& aliases, std::span<control::target const> const targets, Limits const& limits_of) {
     model_list listing;
     for (auto const& alias : aliases) {
         listing.data.push_back({.id = alias, .display_name = alias});
     }
     for (auto const& item : targets) {
-        listing.data.push_back({.id = item.id, .display_name = item.display_name, .description = std::format("served by the provider {}", item.provider)});
+        auto const limits = limits_of(item);
+        listing.data.push_back({.id = item.id,
+                                .display_name = item.display_name,
+                                .description = std::format("served by the provider {}", item.provider),
+                                .max_input_tokens = known_limit(limits.prompt_tokens),
+                                .max_tokens = known_limit(limits.output_tokens)});
     }
     return json::write(json::to_value(listing));
 }
@@ -333,6 +346,10 @@ std::string stats_json(stats const& counters, std::string_view const usage_json,
 std::optional<std::string> alias_of(std::map<std::string, std::string> const& models, std::string const& requested) {
     auto const mapped = models.find(requested);
     return mapped == models.end() ? std::nullopt : std::optional<std::string>{mapped->second};
+}
+
+std::string upstream_name_of(std::map<std::string, std::string> const& models, std::optional<std::string> const& pinned, std::string const& requested) {
+    return pinned ? *pinned : alias_of(models, requested).value_or(requested);
 }
 
 struct request_note {
@@ -634,7 +651,7 @@ private:
 
     std::optional<std::string> json_body(routing::route const which, std::string_view const target) const {
         switch (which) {
-            case routing::route::models: return detail::models_json(alias_names(), targets_);
+            case routing::route::models: return detail::models_json(alias_names(), targets_, [this](control::target const& item) { return limits_of(item); });
             case routing::route::health: return health_body(target);
             case routing::route::route_view: return route_body(target);
             case routing::route::session_view: return session_body(target);
@@ -844,7 +861,7 @@ private:
 
     void remember_served(detail::request_note const& note, detail::planned_route const& order, detail::planned const& step) {
         auto const& chosen = providers_[step.index];
-        auto const upstream = step.upstream ? *step.upstream : detail::alias_of(chosen.settings.models, note.requested).value_or(note.requested);
+        auto const upstream = detail::upstream_name_of(chosen.settings.models, step.upstream, note.requested);
         control::record(served_, note.session,
                         {.provider = chosen.name, .upstream = upstream, .source = order.source, .fallback = step.index != order.steps.front().index});
     }
@@ -924,6 +941,25 @@ private:
         return std::move(done->body);
     }
 
+    std::string clamp_output(detail::provider_runtime const& chosen, std::string const& upstream_name, std::string body) {
+        auto const found = chosen.settings.limits.find(upstream_name);
+        if (found == chosen.settings.limits.end()) {
+            return body;
+        }
+        auto clamped = routing::clamp_max_tokens(body, found->second.output_tokens);
+        counters_.max_tokens_clamped += clamped.changed ? 1U : 0U;
+        return std::move(clamped.body);
+    }
+
+    model_limits limits_of(control::target const& item) const {
+        auto const provider = std::ranges::find(providers_, item.provider, &detail::provider_runtime::name);
+        if (provider == providers_.end()) {
+            return {};
+        }
+        auto const found = provider->settings.limits.find(item.upstream);
+        return found == provider->settings.limits.end() ? model_limits{} : found->second;
+    }
+
     std::expected<std::string, detail::attempt_result> upstream_body(detail::provider_runtime const& chosen, httpio::request const& incoming, std::string body) {
         if (chosen.settings.protocol != wire_protocol::openai_responses) {
             return body;
@@ -954,7 +990,8 @@ private:
         if (!prepared) {
             co_return std::unexpected{detail::refused(std::move(prepared.error()), detail::health::neutral)};
         }
-        auto body = upstream_body(chosen, incoming, history_for(chosen, session, std::move(prepared->body)));
+        auto const upstream_name = detail::upstream_name_of(chosen.settings.models, upstream_model, prepared->requested);
+        auto body = upstream_body(chosen, incoming, history_for(chosen, session, clamp_output(chosen, upstream_name, std::move(prepared->body))));
         if (!body) {
             co_return std::unexpected{std::move(body.error())};
         }

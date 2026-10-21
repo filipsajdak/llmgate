@@ -6,7 +6,7 @@ import llmgate.require;
 
 export namespace llmgate::jsonscan {
 
-enum class [[=reflect::error_enum]] errc { not_an_object = 1, malformed, too_deep, trailing_bytes, member_missing, member_not_a_string };
+enum class [[=reflect::error_enum]] errc { not_an_object = 1, malformed, too_deep, trailing_bytes, member_missing, member_not_a_string, member_not_a_number };
 static_assert(reflect::unique_values<errc>() && reflect::starts_at_one<errc>());
 
 using reflect::make_error_code;
@@ -481,4 +481,31 @@ constexpr std::expected<std::string, errc> replace_string_member(std::string_vie
     return out;
 }
 
+constexpr std::expected<std::string, errc> replace_number_member(std::string_view const text, std::string_view const key, std::uint64_t const replacement) {
+    auto const members = top_level_members(text);
+    if (!members) {
+        return std::unexpected{members.error()};
+    }
+    auto const matches = members_named(*members, key);
+    if (matches.empty()) {
+        return std::unexpected{errc::member_missing};
+    }
+    if (!std::ranges::all_of(matches, [](member const& item) { return item.kind == value_kind::number; })) {
+        return std::unexpected{errc::member_not_a_number};
+    }
+    std::array<char, 24> digits{};
+    auto const written = std::string_view{digits.data(), std::to_chars(digits.data(), digits.data() + digits.size(), replacement).ptr};
+    std::string out;
+    std::size_t copied = 0;
+    for (auto const& item : matches) {
+        out.append(text.substr(copied, item.value_begin - copied));
+        out.append(written);
+        copied = item.value_end;
+    }
+    out.append(text.substr(copied));
+    return out;
+}
+
 }  // namespace llmgate::jsonscan
+
+template class std::expected<std::string, llmgate::jsonscan::errc>;

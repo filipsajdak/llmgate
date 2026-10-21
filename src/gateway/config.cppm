@@ -43,6 +43,12 @@ static_assert(reflect::unique_values<wire_protocol>());
 constexpr std::string_view default_messages_path = "/v1/messages";
 constexpr std::string_view default_responses_path = "/responses";
 
+struct model_limits {
+    [[= reflect::doc{"Context window of the model in tokens; 0 means unknown."}]] std::uint64_t context_tokens = 0;
+    [[= reflect::doc{"Largest prompt the model accepts, in tokens; 0 means unknown. Published as max_input_tokens in the model list."}]] std::uint64_t prompt_tokens = 0;
+    [[= reflect::doc{"Largest reply the model produces, in tokens; 0 means unknown. A request with a larger max_tokens is clamped to it, and the model list publishes it as max_tokens."}]] std::uint64_t output_tokens = 0;
+};
+
 struct upstream_config {
     [[= json::required]] [[= reflect::doc{"Base URL of the single upstream; together with the other top-level keys it acts as one provider named default."}]]
     [[= reflect::example{R"("https://api.githubcopilot.com")"}]] std::string base_url{};
@@ -52,6 +58,8 @@ struct upstream_config {
     [[= reflect::doc{"Extra headers sent to the upstream on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here."}]]
     [[= reflect::example{R"({ "Editor-Version": "vscode/1.99.0", "Copilot-Integration-Id": "vscode-chat" })"}]]
     std::map<std::string, std::string> headers{};
+    [[= reflect::doc{"Limits per upstream model id, as the provider reports them (llmgate models lists them). max_tokens above output_tokens is clamped; the model list carries prompt_tokens and output_tokens."}]]
+    [[= reflect::example{R"({ "claude-sonnet-5.5": { "context_tokens": 328000, "prompt_tokens": 200000, "output_tokens": 128000 } })"}]] [[= reflect::commented]] std::map<std::string, model_limits> limits{};
     [[= reflect::doc{"Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen."}]] [[= reflect::commented]] bool forward_credentials = false;
     [[= reflect::doc{"Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER."}]] [[= reflect::example{R"(["claude-sonnet-5-5"])"}]] [[= reflect::commented]] std::vector<std::string> offer{};
 };
@@ -77,6 +85,8 @@ struct provider_config {
     [[= reflect::doc{"Wire protocol of the provider: anthropic (the Messages API, the default) or openai_responses (the OpenAI Responses API; Claude Code requests are translated, see docs/translation-responses.md). With openai_responses the messages_path default becomes /responses."}]]
     wire_protocol protocol = wire_protocol::anthropic;
     [[= reflect::doc{"Extra headers sent to the provider on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here."}]] std::map<std::string, std::string> headers{};
+    [[= reflect::doc{"Limits per upstream model id, as the provider reports them (llmgate models lists them). max_tokens above output_tokens is clamped; the model list carries prompt_tokens and output_tokens."}]]
+    [[= reflect::example{R"({ "claude-sonnet-5.5": { "context_tokens": 328000, "prompt_tokens": 200000, "output_tokens": 128000 } })"}]] [[= reflect::commented]] std::map<std::string, model_limits> limits{};
     [[= reflect::doc{"Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen."}]] [[= reflect::commented]] bool forward_credentials = false;
     [[= reflect::doc{"Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER."}]] [[= reflect::example{R"(["claude-sonnet-5-5"])"}]] [[= reflect::commented]] std::vector<std::string> offer{};
     [[= reflect::doc{"Name of the environment variable that holds the API key sent as the bearer token."}]]

@@ -352,6 +352,47 @@ constexpr std::expected<prepared_request, reply_body> prepare(std::string_view c
     return prepared_request{.body = std::move(text), .stream = *stream, .requested = requested};
 }
 
+struct clamped_body {
+    std::string body;
+    bool changed = false;
+};
+
+constexpr std::optional<std::uint64_t> whole_number(std::string_view const text) {
+    std::uint64_t value = 0;
+    auto const parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (text.empty() || parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+constexpr std::optional<std::uint64_t> max_tokens_of(std::string_view const body) {
+    auto const members = jsonscan::top_level_members(body);
+    if (!members) {
+        return std::nullopt;
+    }
+    auto const found = jsonscan::members_named(*members, "max_tokens");
+    if (found.size() != 1 || found.front().kind != jsonscan::value_kind::number) {
+        return std::nullopt;
+    }
+    return whole_number(body.substr(found.front().value_begin, found.front().value_end - found.front().value_begin));
+}
+
+constexpr clamped_body clamp_max_tokens(std::string_view const body, std::uint64_t const limit) {
+    auto const current = max_tokens_of(body);
+    if (limit == 0 || !current || *current <= limit) {
+        return {.body = std::string{body}};
+    }
+    auto replaced = jsonscan::replace_number_member(body, "max_tokens", limit);
+    return replaced ? clamped_body{.body = std::move(*replaced), .changed = true} : clamped_body{.body = std::string{body}};
+}
+
+static_assert(clamp_max_tokens(R"({"max_tokens":128000,"x":{"max_tokens":9}})", 64000).body == R"({"max_tokens":64000,"x":{"max_tokens":9}})" &&
+              clamp_max_tokens(R"({"max_tokens":128000})", 64000).changed);
+static_assert(!clamp_max_tokens(R"({"max_tokens":500})", 1000).changed && !clamp_max_tokens(R"({"max_tokens":500})", 0).changed && !clamp_max_tokens(R"({"max_tokens":500})", 500).changed);
+static_assert(!clamp_max_tokens(R"({"a":1})", 10).changed && !clamp_max_tokens(R"({"max_tokens":"big"})", 10).changed && !clamp_max_tokens(R"({"max_tokens":1e9})", 10).changed);
+static_assert(!clamp_max_tokens(R"({"max_tokens":9,"max_tokens":99})", 10).changed && !clamp_max_tokens("nope", 10).changed);
+
 consteval bool route_table_holds() {
     auto const fallbacks = std::to_array({route::unknown_path, route::wrong_method});
     auto const own_route = [](route_entry const& item) { return route_of(item.where.verb(), item.where.target()) == item.which; };
