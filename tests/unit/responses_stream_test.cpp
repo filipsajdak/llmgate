@@ -340,6 +340,12 @@ const suite stream_suite = [] {
         expect(responses::error_body(500, "").contains("the upstream answered 500"));
     };
 
+    "defect_the_plan_route_answers_a_refused_model_as_a_detail_string"_test = [] {
+        auto const body = responses::error_body(400, R"({"detail":"The 'm' model is not supported when using Codex with a ChatGPT account."})");
+
+        expect(body.contains("not supported when using Codex") && body.contains("invalid_request_error")) << body;
+    };
+
     "capability_the_documented_plan_route_error_codes_get_a_plain_next_step"_test = [] {
         auto const body = [](std::string_view const code, std::string_view const message = "x", std::string_view const param = "") {
             auto const text = [](std::string_view const value) { return json::value{std::string{value}}; };

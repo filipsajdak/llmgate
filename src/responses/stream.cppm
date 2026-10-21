@@ -163,6 +163,9 @@ constexpr std::string error_body(int const status, std::string_view const upstre
     std::string_view type = detail::error_type_for_status(status);
     if (parsed) {
         message = json::text_at(*parsed, {"error", "message"});
+        if (message.empty()) {
+            message = json::text_at(*parsed, {"detail"});
+        }
         if (auto const known = detail::plan_error_for(json::text_at(*parsed, {"error", "code"}))) {
             type = known->type;
             message = known->next_step;
