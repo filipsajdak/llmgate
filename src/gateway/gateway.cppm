@@ -414,7 +414,8 @@ struct relay_state {
     void on_head(http::message_head const& incoming) {
         head = incoming;
         auto const type = incoming.fields.find("content-type").value_or("");
-        streaming = incoming.status >= 200 && incoming.status < 300 && type.starts_with("text/event-stream");
+        auto const success = incoming.status >= http_success_floor && incoming.status < http_success_floor + http_success_span;
+        streaming = success && (type.starts_with("text/event-stream") || (translator && type.empty()));
     }
 
     bool unusable_success() const {

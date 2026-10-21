@@ -34,6 +34,7 @@ enum class behaviour {
     json_usage,
     sse_usage,
     sse_clean,
+    sse_without_content_type,
     sse_done_marker,
     sse_unparseable_event,
     sse_duplicate_start,
@@ -143,6 +144,11 @@ struct fake_upstream {
                 co_return net::result_void{};
             }
             case behaviour::sse_clean: co_return co_await script(out, {start, block, text, end_block, delta, stop});
+            case behaviour::sse_without_content_type: {
+                (void)co_await out.begin_stream(200, http::header_map{});
+                (void)co_await emit(out, "response.created", R"({"type":"response.created","response":{"id":"resp_1","status":"in_progress","output":[]}})");
+                co_return co_await out.end_stream();
+            }
             case behaviour::sse_done_marker: co_return co_await script(out, {start, block, text, end_block, delta, stop, {"", "[DONE]"}});
             case behaviour::sse_unparseable_event: co_return co_await script(out, {start, block, {"note", "hello"}, text, end_block, delta, stop});
             case behaviour::sse_duplicate_start: co_return co_await script(out, {start, start, start, block, text, end_block, delta, stop});
@@ -936,6 +942,15 @@ const suite gateway_suite = [] {
         (void)d.chat_with("claude-model-b@b", true);
 
         expect(d.second.seen.at(0).target == "/v1/responses");
+    };
+
+    "defect_the_plan_route_streams_events_without_a_content_type_and_is_still_translated"_test = [] {
+        duo d{[](gateway::config& built) { built.providers["b"].protocol = gateway::wire_protocol::openai_responses; }};
+        d.second.mode = behaviour::sse_without_content_type;
+
+        auto const answer = d.chat_with("claude-model-b@b", true);
+
+        expect(answer.status == 200 && !answer.body.contains("not a Message")) << answer.status << answer.body;
     };
 
     "limit_a_responses_provider_refuses_a_request_that_is_not_streamed_without_calling_upstream"_test = [] {
