@@ -11,6 +11,8 @@ import llmgate.claude;
 import llmgate.commands;
 import llmgate.config_docs;
 import llmgate.copilot;
+import llmgate.discovery;
+import llmgate.model_list;
 import llmgate.gateway;
 import llmgate.httpio;
 import llmgate.json;
@@ -29,6 +31,7 @@ constexpr std::string_view version_text = "llmgate " LLMGATE_VERSION;
 constexpr int exit_usage = 2;
 constexpr int exit_config = 3;
 constexpr int exit_runtime = 1;
+constexpr int http_ok = 200;
 
 std::expected<gateway::config, std::string> load_config(std::string_view const path) {
     std::ifstream in{process::expand_home(path)};
@@ -231,6 +234,58 @@ int login(gateway::config const& settings, std::string_view const provider) {
     return login_with(settings, std::get<gateway::copilot_config>(*target));
 }
 
+std::expected<std::string, std::string> fetch_listing(tls::group_policy const tls_groups, gateway::provider_config const& provider) {
+    async::reactor loop;
+    auto tls_context = tls::client_context::make(tls_groups);
+    if (!tls_context) {
+        return std::unexpected{std::string{"cannot start TLS"}};
+    }
+    auto const credential = make_credential(loop, *tls_context, provider);
+    auto const listed = loop.run(discovery::fetch_models(loop, *tls_context, provider, *credential));
+    if (!listed) {
+        return std::unexpected{listed.error()};
+    }
+    if (listed->status != http_ok) {
+        return std::unexpected{std::format("the provider answered {}: {}", listed->status, model_list::printable(listed->body, model_list::longest_text))};
+    }
+    return listed->body;
+}
+
+commands::model_lister provider_lister(tls::group_policy const tls_groups) {
+    return [groups = tls_groups](std::string const&, gateway::provider_config const& provider) -> std::expected<std::vector<model_list::entry>, std::string> {
+        auto const body = fetch_listing(groups, provider);
+        if (!body) {
+            return std::unexpected{body.error()};
+        }
+        return model_list::parse(*body);
+    };
+}
+
+int models_command(commands::context const& where) {
+    auto const chosen = commands::models_choice(where.settings, where.options.provider);
+    if (!chosen) {
+        return fail(exit_config, chosen.error());
+    }
+    auto const body = fetch_listing(where.settings.tls_groups, chosen->second);
+    if (!body) {
+        return fail(exit_runtime, body.error());
+    }
+    if (where.options.as_json) {
+        auto const document = json::parse(*body, {.jsonc = false});
+        if (!document) {
+            return fail(exit_runtime, "the provider's reply is not JSON");
+        }
+        std::println("{}", json::write(*document));
+        return 0;
+    }
+    auto const models = model_list::parse(*body);
+    if (!models) {
+        return fail(exit_runtime, models.error());
+    }
+    std::print("{}", model_list::render(*models));
+    return 0;
+}
+
 int serve_command(commands::context const& where) {
     return serve(where.settings);
 }
@@ -259,6 +314,7 @@ constexpr auto handlers = std::to_array<std::pair<arguments::command, command_ha
     {arguments::command::use, &commands::run_use},
     {arguments::command::targets, &commands::run_targets},
     {arguments::command::route, &commands::run_route},
+    {arguments::command::models, &models_command},
     {arguments::command::statusline, &statusline_command},
 });
 
@@ -305,10 +361,12 @@ int print_document(arguments::document const which) {
 }
 
 commands::context make_context(arguments::options const& parsed, std::expected<gateway::config, std::string> settings, char const* const program) {
+    auto lister = provider_lister(settings ? settings->tls_groups : gateway::config{}.tls_groups);
     return {.options = parsed,
             .settings = settings ? std::move(*settings) : gateway::config{},
             .binary = process::current_executable().value_or(std::filesystem::path{program}),
-            .config_error = settings ? std::string{} : settings.error()};
+            .config_error = settings ? std::string{} : settings.error(),
+            .list_models = std::move(lister)};
 }
 
 std::optional<int> apply_profile(arguments::options const& parsed, std::expected<gateway::config, std::string>& settings) {

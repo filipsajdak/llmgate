@@ -1,6 +1,6 @@
 # Provider presets: a working default per provider, discovery, limits and token counting
 
-Status: design (BET-4, requirement R6 and its follow-ups). Nothing here is built. Decisions are the user's
+Status: design (BET-4, requirement R6 and its follow-ups). Built so far: slice L0 (`llmgate models`, the doctor drift check). Decisions are the user's
 answers of 2026-10-21; evidence is marked as measured, documented or reported.
 
 ## Problem
@@ -46,7 +46,7 @@ that change (model ids, limits) from the provider instead of from a table that g
 | Provider | Path | Limit fields |
 |---|---|---|
 | chatgpt | `GET /models` on the plan route (measured 2026-10-21: nine models, each with `context_window`, `max_context_window`, `visibility`, `supported_reasoning_levels`, `default_reasoning_level`, `input_modalities`) | `context_window` is the usable window, `max_context_window` the ceiling |
-| copilot | `GET /models` (reported by third parties, not measured here) | `max_context_window_tokens`, `max_prompt_tokens`, `max_output_tokens`; the prompt limit is smaller than the window |
+| copilot | `GET /models` (measured 2026-10-21: 53 entries) | `capabilities.limits.max_context_window_tokens`, `max_prompt_tokens`, `max_output_tokens` (the prompt limit is smaller than the window), `capabilities.tokenizer` (`o200k_base` on the Claude entries), `supported_endpoints`, and `policy.state` (`enabled` or `disabled`); a model with `policy.state: disabled` is refused with `The requested model is not supported` |
 | anthropic | `GET /v1/models` (documented) | `max_input_tokens`, `max_tokens` |
 | openai-chat | `GET /v1/models` on the vLLM server | `max_model_len` |
 

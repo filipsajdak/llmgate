@@ -20,6 +20,7 @@ import llmgate.copilot;
 import llmgate.doctor;
 import llmgate.gateway;
 import llmgate.json;
+import llmgate.model_list;
 import llmgate.process;
 import llmgate.proof;
 import llmgate.quota;
@@ -34,13 +35,46 @@ using outcome = std::expected<void, std::string>;
 
 using program_runner = int (*)(std::filesystem::path const&, std::vector<std::string> const&);
 
+using model_lister = std::function<std::expected<std::vector<model_list::entry>, std::string>(std::string const&, gateway::provider_config const&)>;
+
 struct context {
     arguments::options options;
     gateway::config settings;
     std::filesystem::path binary;
     std::string config_error{};
     program_runner run_program = &process::run_and_wait;
+    model_lister list_models{};
 };
+
+struct model_findings {
+    std::vector<doctor::model_fact> models{};
+    std::string error{};
+};
+
+inline doctor::model_state state_among(std::span<model_list::entry const> const listed, std::string_view const upstream) {
+    auto const found = std::ranges::find(listed, upstream, &model_list::entry::id);
+    if (found == listed.end()) {
+        return doctor::model_state::missing;
+    }
+    return model_list::usable(*found) ? doctor::model_state::listed : doctor::model_state::disabled;
+}
+
+inline model_findings model_facts(gateway::config const& settings, model_lister const& list_models) {
+    model_findings found;
+    for (auto const& [name, provider] : gateway::effective_providers(settings)) {
+        if (provider.models.empty()) {
+            continue;
+        }
+        auto const listed = list_models(name, provider);
+        if (!listed) {
+            return {.models = {}, .error = std::format("provider {}: {}", name, listed.error())};
+        }
+        for (auto const& [alias, upstream] : provider.models) {
+            found.models.push_back({.provider = name, .alias = alias, .upstream = upstream, .state = state_among(*listed, upstream)});
+        }
+    }
+    return found;
+}
 
 constexpr std::string_view state_log_name = "gateway.log";
 constexpr std::string_view state_pid_name = "gateway.pid";
@@ -639,6 +673,15 @@ void copy_budget(usage::budget const& from, doctor::facts& seen) {
     copy_matching_members(from, seen);
 }
 
+void describe_models(context const& where, doctor::facts& seen) {
+    if (where.options.offline || !where.list_models) {
+        return;
+    }
+    auto checked = model_facts(where.settings, where.list_models);
+    seen.models = std::move(checked.models);
+    seen.models_error = std::move(checked.error);
+}
+
 doctor::facts gather_facts(context const& where) {
     doctor::facts seen;
     seen.config_error = where.config_error;
@@ -659,6 +702,7 @@ doctor::facts gather_facts(context const& where) {
     if (!where.options.offline && seen.copilot_configured && seen.token_valid) {
         probe_network(where.settings, seen);
     }
+    describe_models(where, seen);
     return seen;
 }
 
@@ -1065,6 +1109,22 @@ inline std::expected<login_target, std::string> login_choice(gateway::config con
         return login_target{*found->second.copilot};
     }
     return std::unexpected{std::format("provider {} has no sign-in: give it a copilot or chatgpt object with a token_file", provider)};
+}
+
+inline std::expected<std::pair<std::string, gateway::provider_config>, std::string> models_choice(gateway::config const& settings, std::string_view const provider) {
+    auto const providers = gateway::effective_providers(settings);
+    if (provider.empty() && providers.size() == 1) {
+        return *providers.begin();
+    }
+    if (provider.empty()) {
+        auto const names = std::ranges::to<std::string>(std::views::keys(providers) | std::views::join_with(std::string_view{", "}));
+        return std::unexpected{std::format("name a provider with --provider ({})", names)};
+    }
+    auto const found = providers.find(std::string{provider});
+    if (found == providers.end()) {
+        return std::unexpected{std::format("no provider named {}", provider)};
+    }
+    return *found;
 }
 
 inline std::optional<gateway::copilot_config> copilot_login_target(gateway::config const& settings) {

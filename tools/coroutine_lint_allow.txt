@@ -38,3 +38,5 @@ src/http/io.cppm|operator ( )|incoming|awaited immediately by serve_connection, 
 src/http/io.cppm|operator ( )|out|awaited immediately by serve_connection, whose frame owns the writer
 src/gateway/chatgpt.cpp|operator ( )|incoming|awaited immediately by serve_connection, whose frame owns the request
 src/gateway/chatgpt.cpp|operator ( )|out|awaited immediately by serve_connection, whose frame owns the writer
+src/gateway/discovery.cpp|fetch_models|provider|the caller runs the task to completion with loop.run while the provider settings are alive
+src/gateway/discovery.cpp|fetch_models|credential|the caller runs the task to completion with loop.run while the credential is alive

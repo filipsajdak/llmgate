@@ -29,7 +29,8 @@ enum class command {
     quota,
     use,
     targets,
-    route
+    route,
+    models
 };
 static_assert(reflect::unique_values<command>());
 
@@ -80,13 +81,13 @@ struct options {
     [[= flag{"--print-example"}]] [[= prints{document::example}]] bool print_example = false;
     [[= flag{"--print-schema"}]] [[= prints{document::schema}]] bool print_schema = false;
     [[= flag{"--print-config-table"}]] [[= prints{document::config_table}]] bool print_config_table = false;
-    [[= flag{"--json"}]] [[= applies_to{command::env, command::usage, command::doctor, command::quota}]] bool as_json = false;
+    [[= flag{"--json"}]] [[= applies_to{command::env, command::usage, command::doctor, command::quota, command::models}]] bool as_json = false;
     [[= flag{"--vscode"}]] [[= applies_to{command::env, command::setup}]] [[= operand{"FILE"}]] std::optional<std::string> vscode{};
     [[= flag{"--service"}]] [[= applies_to{command::setup}]] bool service = false;
     [[= flag{"--dry-run"}]] [[= applies_to{command::setup}]] bool dry_run = false;
     [[= flag{"--offline"}]] [[= applies_to{command::doctor}]] bool offline = false;
     [[= flag{"--days"}]] [[= operand{"N"}]] [[= applies_to{command::usage}]] [[= limits{1, longest_report_days}]] unsigned days = default_days;
-    [[= flag{"--provider"}]] [[= applies_to{command::login}]] [[= operand{"NAME"}]] std::string provider{};
+    [[= flag{"--provider"}]] [[= applies_to{command::login, command::models}]] [[= operand{"NAME"}]] std::string provider{};
     [[= flag{"--session"}]] [[= applies_to{command::use, command::route}]] [[= operand{"ID"}]] std::string session{};
     [[= operand{"ARGS..."}]] [[= applies_to{command::claude, command::use, command::route}]] std::vector<std::string> passthrough{};
 };

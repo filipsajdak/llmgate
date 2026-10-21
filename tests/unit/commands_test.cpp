@@ -5,7 +5,9 @@
 import llmgate.arguments;
 import llmgate.commands;
 import llmgate.control;
+import llmgate.doctor;
 import llmgate.gateway;
+import llmgate.model_list;
 import llmgate.process;
 import std;
 
@@ -355,6 +357,57 @@ const suite commands_suite = [] {
 
         expect(chatgpt.has_value() && std::get<gateway::chatgpt_config>(*chatgpt).token_file == "/tmp/c.json");
         expect(copilot.has_value() && std::get<gateway::copilot_config>(*copilot).token_file == "/tmp/token-b.json");
+    };
+
+    "capability_the_models_a_provider_maps_are_checked_against_what_it_lists"_test = [] {
+        gateway::config settings;
+        settings.providers.emplace("p", gateway::provider_config{.base_url = "https://p.invalid", .models = {{"claude-a", "up-ok"}, {"claude-b", "up-off"}, {"claude-c", "up-gone"}}});
+        settings.providers.emplace("q", gateway::provider_config{.base_url = "https://q.invalid"});
+        auto const lister = [](std::string const& name, gateway::provider_config const&) -> std::expected<std::vector<model_list::entry>, std::string> {
+            if (name != "p") {
+                return std::unexpected{std::string{"must not be asked"}};
+            }
+            return std::vector<model_list::entry>{{.id = "up-ok"}, {.id = "up-off", .policy = model_list::access::disabled}};
+        };
+
+        auto const checked = commands::model_facts(settings, lister);
+
+        expect(checked.error.empty() && checked.models.size() == 3_u);
+        auto state_of = [&](std::string_view alias) { return std::ranges::find(checked.models, alias, &doctor::model_fact::alias)->state; };
+        expect(state_of("claude-a") == doctor::model_state::listed && state_of("claude-b") == doctor::model_state::disabled && state_of("claude-c") == doctor::model_state::missing);
+    };
+
+    "limit_a_provider_whose_list_cannot_be_read_gives_one_error_not_a_guess"_test = [] {
+        gateway::config settings;
+        settings.providers.emplace("p", gateway::provider_config{.base_url = "https://p.invalid", .models = {{"claude-a", "up-ok"}}});
+        auto const lister = [](std::string const&, gateway::provider_config const&) -> std::expected<std::vector<model_list::entry>, std::string> { return std::unexpected{std::string{"timed out"}}; };
+
+        auto const checked = commands::model_facts(settings, lister);
+
+        expect(checked.models.empty() && checked.error.contains("p") && checked.error.contains("timed out"));
+    };
+
+    "capability_models_picks_the_named_provider_or_the_only_one"_test = [] {
+        gateway::config many;
+        many.providers.emplace("a", gateway::provider_config{.base_url = "https://a.invalid"});
+        many.providers.emplace("b", gateway::provider_config{.base_url = "https://b.invalid"});
+        gateway::config single;
+        single.providers.emplace("only", gateway::provider_config{.base_url = "https://o.invalid"});
+
+        auto const named = commands::models_choice(many, "b");
+        auto const alone = commands::models_choice(single, "");
+
+        expect(named.has_value() && named->first == "b" && named->second.base_url == "https://b.invalid");
+        expect(alone.has_value() && alone->first == "only");
+    };
+
+    "limit_models_names_the_candidates_when_the_provider_is_missing_or_unknown"_test = [] {
+        gateway::config many;
+        many.providers.emplace("a", gateway::provider_config{.base_url = "https://a.invalid"});
+        many.providers.emplace("b", gateway::provider_config{.base_url = "https://b.invalid"});
+
+        expect(commands::models_choice(many, "").error().contains("a") && commands::models_choice(many, "").error().contains("--provider"));
+        expect(commands::models_choice(many, "ghost").error().contains("ghost"));
     };
 
     "limit_login_names_the_problem_for_an_unknown_provider_one_without_a_sign_in_or_nothing_configured"_test = [] {

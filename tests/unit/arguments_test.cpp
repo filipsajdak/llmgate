@@ -52,6 +52,12 @@ const suite arguments_suite = [] {
         expect(parse(words({"targets"}))->which == command::targets);
     };
 
+    "capability_models_lists_a_providers_models_and_takes_the_provider_flag"_test = [] {
+        auto const parsed = parse(words({"models", "--provider", "codex", "--json"}));
+
+        expect(parsed.has_value() && parsed->which == command::models && parsed->provider == "codex" && parsed->as_json);
+    };
+
     "capability_the_statusline_input_carries_the_session_id"_test = [] {
         expect(statusline_input(R"({"session_id":"abc-1","model":{"id":"m"}})").session_id == "abc-1");
         expect(statusline_input("{}").session_id.empty());
@@ -194,7 +200,7 @@ const suite arguments_suite = [] {
     "capability_the_usage_text_is_pinned"_test = [] {
         expect(usage_text ==
                "usage: llmgate [--config PATH] [--profile NAME] [serve | login [--provider NAME] | claude ARGS... | env [--json] [--vscode [FILE]] | setup [--vscode [FILE]] [--service] [--dry-run] | "
-               "statusline | status | stop | usage [--json] [--days N] | doctor [--json] [--offline] | quota [--json] | use [--session ID] ARGS... | targets | route [--session ID] ARGS...] | --check-config | --version | --print-example | --print-schema | --print-config-table")
+               "statusline | status | stop | usage [--json] [--days N] | doctor [--json] [--offline] | quota [--json] | use [--session ID] ARGS... | targets | route [--session ID] ARGS... | models [--json] [--provider NAME]] | --check-config | --version | --print-example | --print-schema | --print-config-table")
             << usage_text;
     };
 

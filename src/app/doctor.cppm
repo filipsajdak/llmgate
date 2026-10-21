@@ -11,7 +11,7 @@ import llmgate.text;
 export namespace llmgate::doctor {
 
 enum class status { pass, warn, fail };
-enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, ledger, budget, quota };
+enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, models, ledger, budget, quota };
 static_assert(reflect::unique_values<check>());
 
 enum class port_state { free, ours, foreign };
@@ -19,8 +19,9 @@ enum class settings_state { no_profile, no_settings, outdated, current, invalid 
 enum class ledger_state { disabled, writable, not_writable };
 enum class exchange_state { skipped, accepted, login_required, unreachable, rejected };
 enum class quota_state { skipped, unavailable, read };
+enum class model_state { listed, missing, disabled };
 static_assert(reflect::unique_values<status>() && reflect::unique_values<port_state>() && reflect::unique_values<settings_state>() &&
-              reflect::unique_values<ledger_state>() && reflect::unique_values<exchange_state>() && reflect::unique_values<quota_state>());
+              reflect::unique_values<ledger_state>() && reflect::unique_values<exchange_state>() && reflect::unique_values<quota_state>() && reflect::unique_values<model_state>());
 
 constexpr std::size_t longest_text = 300;
 constexpr unsigned others_mask = 077;
@@ -48,6 +49,13 @@ struct chatgpt_fact {
     bool plan_scope = false;
 };
 
+struct model_fact {
+    std::string provider{};
+    std::string alias{};
+    std::string upstream{};
+    model_state state = model_state::listed;
+};
+
 struct facts {
     std::string config_error{};
     std::string listen{};
@@ -73,6 +81,8 @@ struct facts {
     unsigned warn_percent = 0;
     quota_state quota = quota_state::skipped;
     std::optional<quota::summary> quota_summary{};
+    std::vector<model_fact> models{};
+    std::string models_error{};
 };
 
 }  // namespace llmgate::doctor
@@ -308,6 +318,33 @@ constexpr std::optional<finding> quota_finding(facts const& seen) {
     return make(check::quota, status::pass, "Copilot quota is healthy (" + seen.quota_summary->plan + ")");
 }
 
+constexpr std::string_view reason_of(model_state const state) {
+    return state == model_state::disabled ? "disabled by the account's policy" : "not listed by the provider";
+}
+
+constexpr void add_models(std::vector<finding>& out, facts const& seen) {
+    if (!seen.models_error.empty()) {
+        out.push_back(make(check::models, status::warn, "the model lists could not be read: " + seen.models_error, "run llmgate models"));
+        return;
+    }
+    if (seen.models.empty()) {
+        return;
+    }
+    bool drifted = false;
+    for (auto const& model : seen.models) {
+        if (model.state == model_state::listed) {
+            continue;
+        }
+        drifted = true;
+        std::string detail;
+        text::append_all(detail, "provider ", model.provider, " maps ", model.alias, " to ", model.upstream, ", which is ", reason_of(model.state));
+        out.push_back(make(check::models, status::warn, detail, "enable it for the account, or map the alias to a model that llmgate models --provider " + model.provider + " lists as usable"));
+    }
+    if (!drifted) {
+        out.push_back(make(check::models, status::pass, "every mapped model is listed and enabled"));
+    }
+}
+
 constexpr void add(std::vector<finding>& out, std::optional<finding> item) {
     if (item) {
         out.push_back(std::move(*item));
@@ -344,6 +381,7 @@ constexpr std::vector<finding> diagnose(facts const& seen) {
     detail::add(out, detail::port_finding(seen));
     out.push_back(detail::profile_finding(seen));
     detail::add_credential(out, seen);
+    detail::add_models(out, seen);
     out.push_back(detail::ledger_finding(seen));
     out.push_back(detail::budget_finding(seen));
     detail::add(out, detail::quota_finding(seen));

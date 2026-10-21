@@ -243,6 +243,30 @@ const suite doctor_suite = [] {
         expect(named(diagnose(seen), "quota").check == "missing");
     };
 
+    "capability_a_mapped_model_the_provider_disables_or_no_longer_lists_is_a_warning_with_the_fix"_test = [] {
+        auto seen = healthy();
+        seen.models = {{.provider = "copilot", .alias = "claude-sonnet-9", .upstream = "claude-sonnet-9.1", .state = model_state::disabled},
+                       {.provider = "copilot", .alias = "claude-haiku-9", .upstream = "claude-haiku-9", .state = model_state::missing},
+                       {.provider = "copilot", .alias = "claude-opus-9", .upstream = "claude-opus-9", .state = model_state::listed}};
+
+        auto const found = diagnose(seen);
+        auto const drift = std::ranges::count_if(found, [](finding const& item) { return item.check == "models" && item.status == status::warn; });
+
+        expect(drift == 2_i);
+        auto const first = named(found, "models");
+        expect(first.detail.contains("claude-sonnet-9.1") && first.detail.contains("disabled") && first.remedy.contains("llmgate models --provider copilot"));
+    };
+
+    "capability_models_that_are_all_listed_and_enabled_pass_and_an_unchecked_list_is_silent"_test = [] {
+        auto seen = healthy();
+        expect(named(diagnose(seen), "models").check == "missing");
+        seen.models = {{.provider = "copilot", .alias = "a", .upstream = "b", .state = model_state::listed}};
+
+        expect(state_of(seen, "models") == status::pass);
+        seen.models_error = "the provider did not answer";
+        expect(state_of(seen, "models") == status::warn);
+    };
+
     "limit_control_bytes_in_externally_supplied_text_never_reach_the_report"_test = [] {
         auto seen = healthy();
         seen.config_error = "bad \x1b[31m input\x07\n";
