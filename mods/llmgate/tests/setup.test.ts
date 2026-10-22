@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { addInvocation, formFor, kinds, nextStep, validateForm } from '../hooks/setup'
+import { addInvocation, followUp, formFor, kinds, nextStep, validateForm } from '../hooks/setup'
 
 const bin = '/opt/llmgate'
 const config = '/etc/all.jsonc'
@@ -39,7 +39,9 @@ test('a form is refused with a plain reason before anything runs', () => {
 test('the next step names the exact command to type, with the hidden prompt for a secret', () => {
   expect(nextStep(bin, config, { ...formFor('chatgpt'), name: 'codex' })).toBe(`! ${bin} --config ${config} login --provider codex`)
   expect(nextStep(bin, config, { ...formFor('apikey'), name: 'partner' })).toBe(`! ${bin} secret set partner`)
-  expect(nextStep(bin, config, { ...formFor('claude'), name: 'private' })).toContain('/login')
+  expect(nextStep(bin, config, { ...formFor('claude'), name: 'private' })).toContain('restart Claude Code')
+  expect(followUp(bin, config, { ...formFor('claude'), name: 'private' })).toEqual([bin, '--config', config, 'config', 'set', 'claude.credential', 'login', '--yes'])
+  expect(followUp(bin, config, { ...formFor('chatgpt'), name: 'x' })).toBeUndefined()
   expect(nextStep(bin, config, { ...formFor('local'), name: 'thor' })).toBe('nothing more to do')
 })
 

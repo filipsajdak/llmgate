@@ -340,3 +340,35 @@ test('an API key provider names the secret command and never asks for the key in
   await must(ui, { type: 'Text', text: /hidden/ })
   await ui.unmount()
 })
+
+test('adding a Claude login provider also sets the credential mode to login and says to restart', async ($, on) => {
+  mock.env(on, env)
+  mock.clock(on)
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: setupOverview() } }))
+  const runs: string[][] = []
+  on('process.run', (_, e) => {
+    runs.push([...e.argv])
+    return { value: { exitCode: 0, stdout: 'ok\n', stderr: '' } }
+  })
+  on('command.register', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc-123' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'llmgate', args: 'setup' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'kind-claude' })
+  await ui.input({ key: 'field-name', text: 'private' })
+  runs.length = 0
+  await ui.press({ key: 'apply' })
+
+  expect(runs).toEqual([
+    ['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'provider', 'add', 'private', '--preset', 'anthropic', '--yes'],
+    ['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'config', 'set', 'claude.credential', 'login', '--yes'],
+  ])
+  await must(ui, { type: 'Text', text: /restart Claude Code/ })
+  await ui.unmount()
+})

@@ -1,6 +1,6 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
-import { addInvocation, describeForm, formFor, kinds, nextStep, validateForm } from './setup'
+import { addInvocation, followUp, formFor, kinds, nextStep } from './setup'
 import type { Form, KindId } from './setup'
 import { changes, describeTargets, describeTotals, providerTable, routeTable, spendTable, unpricedNote, gatewayRoot, invocation, parseCommand, parseOverview, printable, printableBlock, resolveTarget, roles, statusText } from './model'
 import type { Change, Command, Role, Scope, Snapshot } from './model'
@@ -78,6 +78,10 @@ async function runAdd($: Engine, write: boolean): Promise<void> {
       const ran = await $.process.run(plan.argv)
       const out = printableBlock((ran.exitCode === 0 ? ran.stdout : ran.stderr.replace(/^llmgate: /, '') || `exit ${ran.exitCode}`).trim())
       preview = out
+      if (write && ran.exitCode === 0) {
+        const more = followUp(bin as string, config, form)
+        if (more !== undefined) await $.process.run(more)
+      }
       next = write && ran.exitCode === 0 ? nextStep(bin as string, config, form) : ''
     } catch (error) {
       preview = printable(`llmgate did not run: ${String(error)}`)

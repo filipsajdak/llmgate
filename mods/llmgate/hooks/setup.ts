@@ -66,11 +66,16 @@ export function addInvocation(bin: string | undefined, config: string | undefine
   return { argv: [bin, ...(config ? ['--config', config] : []), 'provider', 'add', form.name, ...words(form), ...(write ? ['--yes'] : [])] }
 }
 
+export function followUp(bin: string, config: string | undefined, form: Form): string[] | undefined {
+  if (form.kind !== 'claude') return undefined
+  return [bin, ...(config ? ['--config', config] : []), 'config', 'set', 'claude.credential', 'login', '--yes']
+}
+
 export function nextStep(bin: string, config: string | undefined, form: Form): string {
   const base = config ? `${bin} --config ${config}` : bin
   if (form.kind === 'chatgpt' || form.kind === 'copilot') return `! ${base} login --provider ${form.name}`
   if (form.kind === 'apikey') return `! ${bin} secret set ${form.name}`
-  if (form.kind === 'claude') return 'in this profile type /login once and pick the Claude account, and set claude.credential to login in the llmgate config'
+  if (form.kind === 'claude') return 'restart Claude Code, then type /login once and pick the Claude account (the credential mode is now login)'
   return 'nothing more to do'
 }
 
