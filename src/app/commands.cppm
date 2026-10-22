@@ -355,6 +355,14 @@ inline bool gateway_verified(arguments::gateway_address const& address) {
     return answer && answer->status == 200 && routing::secrets_equal(detail::proof_in(answer->body), proof::hmac_sha256_hex(*key, proof::identity_message(std::format("{}:{}", address.host, address.port), *challenge)));
 }
 
+inline std::vector<claude::picker_row> picker_rows_of(gateway::config const& settings) {
+    std::vector<claude::picker_row> rows;
+    for (auto const& target : control::catalogue(gateway::offers_of_config(settings))) {
+        rows.push_back({.model = target.id, .label = target.display_name, .description = std::format("served by the provider {}", target.provider)});
+    }
+    return rows;
+}
+
 inline outcome ensure_profile(context const& where, bool const dry_run) {
     auto const directory = std::filesystem::path{process::expand_home(where.settings.claude.profile_dir)};
     auto const settings_path = directory / "settings.json";
@@ -362,13 +370,15 @@ inline outcome ensure_profile(context const& where, bool const dry_run) {
     if (!existing) {
         return std::unexpected{existing.error()};
     }
-    auto merged = claude::merge_settings(std::move(*existing), where.settings.claude.effort, detail::status_line_command(where));
+    auto merged = claude::with_model_picker(claude::merge_settings(std::move(*existing), where.settings.claude.effort, detail::status_line_command(where)), picker_rows_of(where.settings));
     if (auto written = detail::write_json(settings_path, merged, dry_run, true); !written) {
         return written;
     }
     return detail::write_text(directory / "commands" / "gateway.md",
                               claude::gateway_command_file(where.binary.string(), process::expand_home(where.options.config_path)), dry_run);
 }
+
+inline bool refresh_profile(context const& where) { return ensure_profile(where, false).has_value(); }
 
 inline outcome ensure_gateway(context const& where) {
     auto const address = detail::address_of(where.settings);

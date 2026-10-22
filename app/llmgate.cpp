@@ -338,6 +338,18 @@ std::expected<config_edit::change, std::string> planned_edit(arguments::options 
                               .offer = std::move(*offer)});
 }
 
+void refresh_picker(commands::context const& where, std::filesystem::path const& config_file) {
+    auto fresh = load_config(config_file.string());
+    if (!fresh) {
+        return;
+    }
+    auto changed = where;
+    changed.settings = std::move(*fresh);
+    if (!commands::refresh_profile(changed)) {
+        std::println("the /model list in the llmgate profile could not be refreshed; run llmgate setup");
+    }
+}
+
 int edit_command(commands::context const& where) {
     auto const& chosen = where.options;
     auto const planned = planned_edit(chosen);
@@ -360,6 +372,7 @@ int edit_command(commands::context const& where) {
         return fail(exit_runtime, std::format("cannot write {}", path.string()));
     }
     std::println("written to {}", path.string());
+    refresh_picker(where, path);
     if (commands::run_reload(where) != 0) {
         std::println("the gateway did not reload (is it running?); it picks the change up when it starts");
     }
@@ -468,6 +481,7 @@ int apply_recipe(commands::context const& where, recipes::recipe const& item) {
         return fail(exit_runtime, std::format("cannot write {}", path.string()));
     }
     std::println("written to {}", path.string());
+    refresh_picker(where, path);
     if (commands::run_reload(where) != 0) {
         std::println("the gateway did not reload (is it running?); it picks the change up when it starts");
     }

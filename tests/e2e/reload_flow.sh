@@ -114,4 +114,12 @@ check sh -c "grep -q 'not written' '$work/dry-recipe.out' && ! grep -q '\"opus\"
 run recipe apply quality-first --yes > "$work/recipe.out" 2>&1 || true
 check sh -c "grep -q '\"opus\": \\[\"ant\"\\]' '$work/config.jsonc' && grep -q '\"haiku\": \\[\"ant\"\\]' '$work/config.jsonc'"
 
+run setup > "$work/setup.out" 2>&1 || true
+label="setup writes one picker row per target into the profile settings so /model lists them under a login"
+check sh -c "grep -q 'modelPicker' '$work/home/.claude-llmgate/settings.json' && grep -q 'claude-m-two@alpha' '$work/home/.claude-llmgate/settings.json'"
+
+run provider add late --base-url http://127.0.0.1:9 --auth none --offer m-late --yes > /dev/null 2>&1 || true
+label="provider add refreshes the picker rows of the profile at once"
+check sh -c "grep -q 'claude-m-late@late' '$work/home/.claude-llmgate/settings.json'"
+
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }

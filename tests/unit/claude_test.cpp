@@ -75,6 +75,23 @@ const suite claude_suite = [] {
         expect(text.ends_with(R"("claudeCode.disableLoginPrompt":true})"));
     };
 
+    "capability_the_model_picker_gets_one_row_per_target_and_a_later_call_replaces_the_rows_but_keeps_the_rest"_test = [] {
+        std::vector<claude::picker_row> const rows{{.model = "claude-x@a", .label = "x (a)", .description = "served by a"}, {.model = "claude-y@b", .label = "y (b)"}};
+        auto const existing = parse_value(R"x({"theme":"dark","modelPicker":{"replaceBuiltInOptions":false,"options":[{"model":"old"}]}})x");
+
+        auto const text = json::write(claude::with_model_picker(existing, rows));
+
+        expect(text.contains(R"x("theme":"dark")x") && text.contains(R"x("replaceBuiltInOptions":false)x"));
+        expect(text.contains(R"x({"model":"claude-x@a","label":"x (a)","description":"served by a"})x") && text.contains(R"x({"model":"claude-y@b","label":"y (b)"})x"));
+        expect(!text.contains("old"));
+        expect(json::write(claude::with_model_picker(claude::with_model_picker(existing, rows), rows)) == text);
+    };
+
+    "limit_no_targets_leave_the_settings_without_a_picker_and_a_non_object_is_replaced"_test = [] {
+        expect(json::write(claude::with_model_picker(parse_value(R"x({"theme":"dark"})x"), {})) == R"x({"theme":"dark"})x");
+        expect(json::write(claude::with_model_picker(parse_value("[1]"), std::vector<claude::picker_row>{{.model = "m"}})) == R"x({"modelPicker":{"options":[{"model":"m"}]}})x");
+    };
+
     "capability_a_new_profile_gets_denials_effort_and_the_status_line"_test = [] {
         auto const merged = claude::merge_settings(json::value{}, "medium", "/bin/llmgate statusline");
         auto const text = json::write(merged);

@@ -252,6 +252,17 @@ const suite commands_suite = [] {
         expect(!commands::credential_warning(plain).has_value());
     };
 
+    "capability_the_profile_picker_rows_are_the_catalogue_targets_with_their_labels"_test = [] {
+        gateway::config built;
+        built.providers["work"] = {.base_url = "http://127.0.0.1:1", .offer = {"claude-x"}, .labels = {"customer"}, .models = {{"claude-sonnet-5-5", "gpt-6-sol"}}};
+
+        auto const rows = commands::picker_rows_of(built);
+
+        expect(rows.size() == 2_u);
+        expect(rows.front().model == "claude-gpt-6-sol@work" && rows.front().label == "gpt-6-sol (work) [customer]" && rows.front().description == "served by the provider work");
+        expect(rows.back().model == "claude-x@work");
+    };
+
     "capability_the_reload_command_body_is_the_reload_action"_test = [] {
         expect(commands::reload_body() == R"({"action":"reload","role":"","provider":"","upstream":"","target":"","session":""})");
     };

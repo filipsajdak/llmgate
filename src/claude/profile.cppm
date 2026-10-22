@@ -271,6 +271,40 @@ constexpr json::value merge_settings(json::value existing, std::string_view cons
     return existing;
 }
 
+struct picker_row {
+    std::string model{};
+    std::string label{};
+    std::string description{};
+};
+
+constexpr json::value with_model_picker(json::value existing, std::span<picker_row const> const rows) {
+    if (!std::holds_alternative<json::object>(existing.data)) {
+        existing = json::value{json::object{}};
+    }
+    if (rows.empty()) {
+        return existing;
+    }
+    json::array options;
+    for (auto const& row : rows) {
+        json::object entry;
+        entry.emplace_back("model", json::make_string(row.model));
+        if (!row.label.empty()) {
+            entry.emplace_back("label", json::make_string(row.label));
+        }
+        if (!row.description.empty()) {
+            entry.emplace_back("description", json::make_string(row.description));
+        }
+        options.push_back(json::value{std::move(entry)});
+    }
+    auto& picker = detail::object_member(std::get<json::object>(existing.data), "modelPicker");
+    if (auto* current = detail::find_member(picker, "options")) {
+        *current = json::value{std::move(options)};
+    } else {
+        picker.emplace_back("options", json::value{std::move(options)});
+    }
+    return existing;
+}
+
 constexpr json::value merge_vscode(json::value existing, environment_list const& list) {
     if (!std::holds_alternative<json::object>(existing.data)) {
         existing = json::value{json::object{}};
