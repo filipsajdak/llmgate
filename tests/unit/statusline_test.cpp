@@ -33,10 +33,10 @@ const suite statusline_suite = [] {
 
     "capability_a_fallback_or_a_switch_is_marked_and_a_profile_is_named"_test = [] {
         auto const fell = render({.model = "S", .directory = "/w/a", .provider = "anthropic", .upstream_model = "m", .fallback = true});
-        auto const moved = render({.model = "S", .directory = "/w/a", .provider = "anthropic", .upstream_model = "m", .switched = true, .profile = "siili"});
+        auto const moved = render({.model = "S", .directory = "/w/a", .provider = "anthropic", .upstream_model = "m", .switched = true, .profile = "employer"});
 
         expect(fell.starts_with("[llmgate] S via anthropic/m FALLBACK | a\n"));
-        expect(moved.starts_with("[llmgate] S via anthropic/m switched as siili | a\n"));
+        expect(moved.starts_with("[llmgate] S via anthropic/m switched as employer | a\n"));
     };
 
     "limit_no_provider_yet_leaves_the_first_line_as_before"_test = [] {
@@ -44,10 +44,10 @@ const suite statusline_suite = [] {
     };
 
     "capability_a_profile_name_comes_from_the_config_directory_name"_test = [] {
-        expect(profile_of("/home/me/.claude-llmgate-siili") == "siili");
+        expect(profile_of("/home/me/.claude-llmgate-employer") == "employer");
         expect(profile_of("/home/me/.claude-llmgate").empty());
         expect(profile_of("").empty());
-        expect(profile_of("/home/me/.claude-llmgate-siili/") == "siili");
+        expect(profile_of("/home/me/.claude-llmgate-employer/") == "employer");
     };
 
     "capability_both_lines_show_model_directory_branch_context_and_gateway"_test = [] {

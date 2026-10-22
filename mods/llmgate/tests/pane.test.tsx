@@ -151,3 +151,111 @@ test('with no loopback gateway the mod says so, talks to nothing and runs nothin
   expect(String(answer.text)).toContain('no llmgate gateway')
   expect(touched).toBe(0)
 })
+
+function started(on: Parameters<Parameters<typeof test>[1]>[1], placed = true) {
+  mock.env(on, env)
+  mock.clock(on)
+  gateway(on, [])
+  on('command.register', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc-123' }))
+  const opened = { count: 0 }
+  on('ui.open', () => {
+    opened.count += 1
+    return { value: { isPlaced: placed } }
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  return opened
+}
+
+test('subcommands answer as text without opening the pane', async ($, on) => {
+  const opened = started(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+  const status = await $.command.run({ command: 'llmgate', args: 'status' })
+  expect(String(status.text)).toContain('sonnet -> work (sonnet-9)  via config')
+  expect(String(status.text)).toContain('llmgate: work sonnet-9 (switched)')
+  const targets = await $.command.run({ command: 'llmgate', args: 'targets' })
+  expect(String(targets.text)).toContain('claude-gpt-6-sol@codex  gpt-6-sol (codex)')
+  const usage = await $.command.run({ command: 'llmgate', args: 'usage' })
+  expect(String(usage.text)).toContain('work  sonnet-9  2k in 100 out  3 req  $0.01')
+  const wrong = await $.command.run({ command: 'llmgate', args: 'frobnicate' })
+  expect(String(wrong.text)).toContain('unknown subcommand frobnicate')
+  expect(opened.count).toBe(0)
+})
+
+test('use runs llmgate for this session, or for every session with default, and refuses a target that is not offered', async ($, on) => {
+  started(on)
+  const runs: string[][] = []
+  on('process.run', (_, e) => {
+    runs.push([...e.argv])
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+  const one = await $.command.run({ command: 'llmgate', args: 'use sonnet gpt-6-sol' })
+  expect(String(one.text)).toBe('sonnet now uses claude-gpt-6-sol@codex for this session')
+  const two = await $.command.run({ command: 'llmgate', args: 'use haiku claude-sonnet-9@work default' })
+  expect(String(two.text)).toBe('haiku now uses claude-sonnet-9@work for every session')
+  const clear = await $.command.run({ command: 'llmgate', args: 'use sonnet clear' })
+  expect(String(clear.text)).toBe('sonnet override removed for this session')
+  const bad = await $.command.run({ command: 'llmgate', args: 'use sonnet nothing' })
+  expect(String(bad.text)).toBe('no target nothing (see /llmgate targets)')
+
+  expect(runs).toEqual([
+    ['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'use', 'sonnet', 'claude-gpt-6-sol@codex', '--session', 'abc-123'],
+    ['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'use', 'haiku', 'claude-sonnet-9@work'],
+    ['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'use', 'sonnet', 'clear', '--session', 'abc-123'],
+  ])
+})
+
+test('the status entry follows the last reply and a change raises a toast', async ($, on) => {
+  started(on)
+  const statuses: (string | undefined)[] = []
+  const toasts: string[] = []
+  on('ui.status', (_, e) => {
+    statuses.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'llmgate', args: 'status' })
+  expect(statuses.at(-1)).toBe('llmgate: work sonnet-9 (switched)')
+  expect(toasts).toEqual([])
+})
+
+test('a reply that arrives as a fallback between two reads raises one toast', async ($, on) => {
+  mock.env(on, env)
+  mock.clock(on)
+  let reads = 0
+  on('http.fetch', () => {
+    reads += 1
+    const document = JSON.parse(overview('work'))
+    document.served.fallback = reads > 1
+    document.served.switched = false
+    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(document) } }
+  })
+  on('command.register', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc-123' }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  const statuses: (string | undefined)[] = []
+  on('ui.status', (_, e) => {
+    statuses.push(e.text)
+    return { value: undefined }
+  })
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'llmgate', args: 'status' })
+  await $.command.run({ command: 'llmgate', args: 'status' })
+  await $.command.run({ command: 'llmgate', args: 'status' })
+
+  expect(toasts).toEqual(['llmgate: work answered as a fallback'])
+  expect(statuses.at(-1)).toBe('llmgate: work sonnet-9 (fallback)')
+})

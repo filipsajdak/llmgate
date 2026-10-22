@@ -156,7 +156,7 @@ const suite claude_suite = [] {
     };
 
     "capability_a_named_profile_is_its_own_directory_next_to_the_default"_test = [] {
-        expect(claude::profile_directory("siili") == "~/.claude-llmgate-siili");
+        expect(claude::profile_directory("employer") == "~/.claude-llmgate-employer");
         expect(claude::profile_directory("a_b-2") == "~/.claude-llmgate-a_b-2");
     };
 

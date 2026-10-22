@@ -97,9 +97,9 @@ check sh -c "'$binary' --config '$config' use opus claude-model-b@b --session s1
 label="the status line names the provider that answered the session"
 curl -s -X POST "http://127.0.0.1:$port/anthropic/v1/messages" -H 'content-type: application/json' -H 'x-claude-code-session-id: sess-e2e' \
   -d '{"model":"claude-opus-5-5","max_tokens":8,"messages":[]}' > /dev/null
-check sh -c "echo '{\"session_id\":\"sess-e2e\",\"model\":{\"display_name\":\"Opus\"},\"workspace\":{\"current_dir\":\"/w/p\"}}' | CLAUDE_CONFIG_DIR=/x/.claude-llmgate-siili '$binary' --config '$config' statusline | head -1 | grep -q 'Opus via a/model-a as siili'"
+check sh -c "echo '{\"session_id\":\"sess-e2e\",\"model\":{\"display_name\":\"Opus\"},\"workspace\":{\"current_dir\":\"/w/p\"}}' | CLAUDE_CONFIG_DIR=/x/.claude-llmgate-employer '$binary' --config '$config' statusline | head -1 | grep -q 'Opus via a/model-a as employer'"
 label="--profile NAME points Claude Code at its own profile directory"
-check sh -c "'$binary' --config '$config' --profile siili env | grep -q 'CLAUDE_CONFIG_DIR=.*claude-llmgate-siili'"
+check sh -c "'$binary' --config '$config' --profile employer env | grep -q 'CLAUDE_CONFIG_DIR=.*claude-llmgate-employer'"
 label="a profile name that could leave the home directory is refused"
 check sh -c "! '$binary' --config '$config' --profile ../x env 2>/dev/null"
 label="an unknown target is refused with a non-zero exit"

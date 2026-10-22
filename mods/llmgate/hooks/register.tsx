@@ -1,7 +1,7 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
-import { describeProvider, describeRoute, describeSpend, describeTotals, gatewayRoot, invocation, parseOverview, printable, roles } from './model'
-import type { Change, Role, Scope, Snapshot } from './model'
+import { changes, describeProvider, describeRoute, describeSpend, describeTargets, describeTotals, gatewayRoot, invocation, parseCommand, parseOverview, printable, resolveTarget, roles, statusText } from './model'
+import type { Change, Command, Role, Scope, Snapshot } from './model'
 
 const PANE = 'llmgate'
 const pollMilliseconds = 5000
@@ -14,6 +14,7 @@ let selected: Role = 'sonnet'
 let view: View = 'now'
 let message = ''
 let isOpen = false
+let hasRead = false
 
 async function load($: Engine): Promise<Snapshot> {
   const root = gatewayRoot(await $.env.get('ANTHROPIC_BASE_URL'))
@@ -31,11 +32,15 @@ async function load($: Engine): Promise<Snapshot> {
 }
 
 async function refresh($: Engine): Promise<void> {
+  const before = hasRead ? snapshot : undefined
   snapshot = await load($)
+  hasRead = true
+  await $.ui.status(statusText(snapshot))
+  for (const note of changes(before, snapshot)) await $.ui.toast(note)
   $.ui.invalidate('ui.render')
 }
 
-async function change($: Engine, what: Change): Promise<void> {
+async function change($: Engine, what: Change): Promise<string> {
   const [bin, config] = await Promise.all([$.env.get('LLMGATE_BIN'), $.env.get('LLMGATE_CONFIG')])
   const plan = invocation(bin, config, snapshot.sessionId, snapshot.targets, what)
   if ('refused' in plan) {
@@ -49,6 +54,7 @@ async function change($: Engine, what: Change): Promise<void> {
     }
   }
   await refresh($)
+  return message
 }
 
 function done(what: Change): string {
@@ -61,17 +67,33 @@ function summary(): string {
   return [...snapshot.roles.map(describeRoute), describeTotals(snapshot)].join('\n')
 }
 
+async function answer($: Engine, command: Command): Promise<string> {
+  if (command.kind === 'error') return command.message
+  if (snapshot.error) return snapshot.error
+  if (command.kind === 'targets') return describeTargets(snapshot.targets)
+  if (command.kind === 'usage') return [describeTotals(snapshot), ...snapshot.spendToday.map(describeSpend), ...snapshot.providers.map(describeProvider)].join('\n')
+  if (command.kind === 'use') return useTarget($, command)
+  return [summary(), statusText(snapshot)].join('\n')
+}
+
+async function useTarget($: Engine, command: Extract<Command, { kind: 'use' }>): Promise<string> {
+  if (command.word === 'clear') return change($, { role: command.role, clear: true, scope: command.scope })
+  const target = resolveTarget(snapshot.targets, command.word)
+  if ('refused' in target) return target.refused
+  return change($, { role: command.role, target: target.id, scope: command.scope })
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'llmgate', description: 'Show and switch the llmgate route of this session', immediate: true })
-    $.clock.every(pollMilliseconds, () => {
-      if (isOpen) void refresh($)
-    })
+    $.clock.every(pollMilliseconds, () => void refresh($))
     return next(e)
   })
 
-  on('command.run', { command: 'llmgate' }, async $ => {
+  on('command.run', { command: 'llmgate' }, async ($, e) => {
     await refresh($)
+    const command = parseCommand(e.args)
+    if (command.kind !== 'pane') return { text: await answer($, command) }
     const opened = await $.ui.open({ id: PANE, title: 'llmgate', focus: true, closeOnEscape: true })
     isOpen = opened.isPlaced
     return opened.isPlaced ? {} : { text: summary() }

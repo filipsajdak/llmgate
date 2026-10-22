@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { compact, describeProvider, describeSpend, describeTotals, gatewayRoot, invocation, parseOverview, printable, describeRoute } from '../hooks/model'
+import { changes, compact, describeProvider, describeSpend, describeTotals, gatewayRoot, invocation, parseOverview, parseCommand, printable, describeRoute, resolveTarget, statusText, describeTargets } from '../hooks/model'
 
 const overview = JSON.stringify({
   schema_version: 1,
@@ -91,4 +91,52 @@ test('a change that is not in the catalogue or has no binary or session is refus
 test('provider text never carries control bytes to the screen', () => {
   expect(printable('a\x1b[2Jb')).toBe('a?[2Jb')
   expect(printable('abcdef', 3)).toBe('abc')
+})
+
+const found = parseOverview('s1', overview)
+
+test('parseCommand reads the subcommands and refuses the rest with the list of what exists', () => {
+  expect(parseCommand('')).toEqual({ kind: 'pane' })
+  expect(parseCommand('  pane ')).toEqual({ kind: 'pane' })
+  expect(parseCommand('status')).toEqual({ kind: 'status' })
+  expect(parseCommand('targets')).toEqual({ kind: 'targets' })
+  expect(parseCommand('usage')).toEqual({ kind: 'usage' })
+  expect(parseCommand('use sonnet gpt-6-sol')).toEqual({ kind: 'use', role: 'sonnet', word: 'gpt-6-sol', scope: 'session' })
+  expect(parseCommand('use opus claude-x@y default')).toEqual({ kind: 'use', role: 'opus', word: 'claude-x@y', scope: 'global' })
+  expect(parseCommand('use sonnet clear')).toEqual({ kind: 'use', role: 'sonnet', word: 'clear', scope: 'session' })
+  expect(parseCommand('use banana x')).toEqual({ kind: 'error', message: 'unknown role banana (opus, sonnet, haiku)' })
+  expect(parseCommand('use sonnet')).toEqual({ kind: 'error', message: 'use ROLE TARGET [default]' })
+  expect(parseCommand('rm -rf')).toEqual({ kind: 'error', message: 'unknown subcommand rm (status, targets, usage, use, pane)' })
+})
+
+test('resolveTarget takes a full id, or an upstream name that names one target', () => {
+  expect(resolveTarget(found.targets, 'claude-gpt-6-sol@codex')).toEqual({ id: 'claude-gpt-6-sol@codex' })
+  expect(resolveTarget(found.targets, 'gpt-6-sol')).toEqual({ id: 'claude-gpt-6-sol@codex' })
+  expect(resolveTarget(found.targets, 'nothing')).toEqual({ refused: 'no target nothing (see /llmgate targets)' })
+  const twice = [...found.targets, { id: 'claude-gpt-6-sol@other', label: 'gpt-6-sol (other)', provider: 'other' }]
+  expect(resolveTarget(twice, 'gpt-6-sol')).toEqual({ refused: 'gpt-6-sol is offered by more than one provider: claude-gpt-6-sol@codex, claude-gpt-6-sol@other' })
+})
+
+test('statusText names the provider and model of the last reply with its markers, or the problem', () => {
+  expect(statusText(found)).toBe('llmgate: work sonnet-9 (fallback)')
+  expect(statusText({ ...found, served: { ...found.served!, fallback: false, switched: true } })).toBe('llmgate: work sonnet-9 (switched)')
+  expect(statusText({ ...found, served: undefined })).toBe('llmgate: no reply yet')
+  expect(statusText({ ...found, error: 'the gateway answered 404' })).toBe('llmgate: the gateway answered 404')
+})
+
+test('changes reports a fallback, a new provider, an opened circuit and a blocked limit once, and nothing on the first read', () => {
+  expect(changes(undefined, found)).toEqual([])
+  expect(changes(found, found)).toEqual([])
+  const calm = { ...found, served: { ...found.served!, fallback: false }, providers: found.providers.map(p => ({ ...p, circuit: 'closed' })) }
+  expect(changes(calm, found)).toEqual(['llmgate: work answered as a fallback', 'llmgate: codex circuit is open'])
+  const moved = { ...calm, served: { ...calm.served!, provider: 'codex' } }
+  expect(changes(calm, moved)).toEqual(['llmgate: now served by codex'])
+  const blocked = { ...calm, providers: calm.providers.map(p => (p.name === 'work' ? { ...p, limits: { 'anthropic-ratelimit-unified-status': 'rejected' } } : p)) }
+  expect(changes(calm, blocked)).toEqual(['llmgate: work limit rejected'])
+  expect(changes(calm, { ...found, error: 'down' })).toEqual([])
+})
+
+test('describeTargets lists every target with its provider', () => {
+  expect(describeTargets(found.targets)).toBe('claude-gpt-6-sol@codex  gpt-6-sol (codex)\nclaude-sonnet-9@work  sonnet-9 (work)')
+  expect(describeTargets([])).toBe('no targets offered; add offer to a provider in the llmgate config')
 })

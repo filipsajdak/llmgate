@@ -220,3 +220,67 @@ export function invocation(bin: string | undefined, config: string | undefined, 
   const argv = [bin, ...(config ? ['--config', config] : []), 'use', change.role, word, ...(change.scope === 'session' ? ['--session', session] : [])]
   return { argv }
 }
+
+export type Command =
+  | { kind: 'pane' | 'status' | 'targets' | 'usage' }
+  | { kind: 'use'; role: Role; word: string; scope: Scope }
+  | { kind: 'error'; message: string }
+
+const subcommands = ['status', 'targets', 'usage', 'use', 'pane']
+
+export function parseCommand(args: string): Command {
+  const [first = '', ...rest] = args.trim().split(/\s+/).filter(word => word !== '')
+  if (first === '' || first === 'pane') return { kind: 'pane' }
+  if (first === 'status' || first === 'targets' || first === 'usage') return { kind: first }
+  if (first !== 'use') return { kind: 'error', message: `unknown subcommand ${printable(first, 32)} (${subcommands.join(', ')})` }
+  const [role = '', word = '', flag] = rest
+  if (role === '' || word === '') return { kind: 'error', message: 'use ROLE TARGET [default]' }
+  if (!(roles as readonly string[]).includes(role)) return { kind: 'error', message: `unknown role ${printable(role, 32)} (${roles.join(', ')})` }
+  return { kind: 'use', role: role as Role, word: printable(word, 128), scope: flag === 'default' ? 'global' : 'session' }
+}
+
+export type Resolved = { id: string } | { refused: string }
+
+export function resolveTarget(targets: readonly Target[], word: string): Resolved {
+  const exact = targets.find(item => item.id === word)
+  if (exact !== undefined) return { id: exact.id }
+  const named = targets.filter(item => item.id.slice('claude-'.length, item.id.lastIndexOf('@')) === word)
+  if (named.length === 1) return { id: named[0].id }
+  if (named.length > 1) return { refused: `${word} is offered by more than one provider: ${named.map(item => item.id).join(', ')}` }
+  return { refused: `no target ${word} (see /llmgate targets)` }
+}
+
+export function statusText(found: Snapshot): string {
+  if (found.error) return `llmgate: ${found.error}`
+  const served = found.served
+  if (served === undefined) return 'llmgate: no reply yet'
+  const marker = served.fallback ? ' (fallback)' : served.switched ? ' (switched)' : ''
+  return `llmgate: ${served.provider} ${served.upstream}${marker}`
+}
+
+function blocked(item: ProviderHealth): string | undefined {
+  const status = item.limits['anthropic-ratelimit-unified-status']
+  return status !== undefined && status !== 'allowed' ? status : undefined
+}
+
+export function changes(before: Snapshot | undefined, after: Snapshot): string[] {
+  if (before === undefined || before.error || after.error) return []
+  const notes: string[] = []
+  const was = before.served
+  const now = after.served
+  if (now !== undefined && now.fallback && !was?.fallback) notes.push(`llmgate: ${now.provider} answered as a fallback`)
+  else if (now !== undefined && was !== undefined && now.provider !== was.provider) notes.push(`llmgate: now served by ${now.provider}`)
+  for (const item of after.providers) {
+    const prior = before.providers.find(p => p.name === item.name)
+    if (prior === undefined) continue
+    if (item.circuit === 'open' && prior.circuit !== 'open') notes.push(`llmgate: ${item.name} circuit is open`)
+    const status = blocked(item)
+    if (status !== undefined && status !== blocked(prior)) notes.push(`llmgate: ${item.name} limit ${status}`)
+  }
+  return notes
+}
+
+export function describeTargets(targets: readonly Target[]): string {
+  if (targets.length === 0) return 'no targets offered; add offer to a provider in the llmgate config'
+  return targets.map(item => `${item.id}  ${item.label}`).join('\n')
+}

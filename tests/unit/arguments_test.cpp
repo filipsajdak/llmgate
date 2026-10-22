@@ -77,9 +77,9 @@ const suite arguments_suite = [] {
     };
 
     "capability_profile_is_a_global_flag_before_the_command"_test = [] {
-        auto const parsed = parse(words({"--profile", "siili", "claude", "-p", "hi"}));
+        auto const parsed = parse(words({"--profile", "employer", "claude", "-p", "hi"}));
 
-        expect(parsed->profile == "siili" && parsed->which == command::claude && parsed->passthrough == words({"-p", "hi"}));
+        expect(parsed->profile == "employer" && parsed->which == command::claude && parsed->passthrough == words({"-p", "hi"}));
         expect(parse(words({"claude"}))->profile.empty());
         expect(!parse(words({"--profile"})).has_value());
     };
