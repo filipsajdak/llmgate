@@ -239,6 +239,19 @@ const suite commands_suite = [] {
         expect(!policy.has_value());
     };
 
+    "capability_a_forwarding_provider_with_the_gateway_credential_mode_gets_a_launch_warning_naming_the_fix"_test = [] {
+        gateway::config forwarding;
+        forwarding.providers["anthropic"] = {.base_url = "https://api.anthropic.com", .forward_credentials = true};
+        auto const warning = commands::credential_warning(forwarding);
+
+        expect(warning.has_value() && warning->contains("anthropic") && warning->contains("claude.credential") && warning->contains("login"));
+        forwarding.claude.credential = decltype(forwarding.claude.credential)::login;
+        expect(!commands::credential_warning(forwarding).has_value());
+        gateway::config plain;
+        plain.providers["a"] = {.base_url = "http://127.0.0.1:1"};
+        expect(!commands::credential_warning(plain).has_value());
+    };
+
     "capability_the_reload_command_body_is_the_reload_action"_test = [] {
         expect(commands::reload_body() == R"({"action":"reload","role":"","provider":"","upstream":"","target":"","session":""})");
     };

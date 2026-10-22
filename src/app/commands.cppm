@@ -470,7 +470,22 @@ inline int run_setup(context const& where) {
     return 0;
 }
 
+inline std::optional<std::string> credential_warning(gateway::config const& settings) {
+    if (settings.claude.credential == claude::credential_mode::login) {
+        return std::nullopt;
+    }
+    for (auto const& [name, item] : gateway::effective_providers(settings)) {
+        if (item.forward_credentials) {
+            return std::format("provider {} forwards your Claude login, but claude.credential is gateway, so Claude Code sends a placeholder token and Anthropic answers 401; run: llmgate config set claude.credential login --yes, restart Claude Code, then type /login once", name);
+        }
+    }
+    return std::nullopt;
+}
+
 inline int run_claude(context const& where) {
+    if (auto const warning = credential_warning(where.settings)) {
+        std::println(stderr, "llmgate: warning: {}", *warning);
+    }
     auto const list = detail::environment_for(where.settings);
     if (!list) {
         std::println(stderr, "llmgate: {}", list.error());
