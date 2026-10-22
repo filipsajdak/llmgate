@@ -350,6 +350,46 @@ struct route_report {
     std::optional<std::string> upstream{};
 };
 
+struct overview_target {
+    std::string id{};
+    std::string provider{};
+    std::string upstream{};
+    std::string label{};
+    std::optional<std::uint64_t> max_input_tokens{};
+    std::optional<std::uint64_t> max_tokens{};
+};
+
+struct overview_provider {
+    std::string name{};
+    [[= json::flatten]] provider_stats counts{};
+    selection::circuit circuit = selection::circuit::closed;
+    std::map<std::string, std::string> rate_limits{};
+};
+
+struct overview_spend {
+    std::vector<usage::spend> today{};
+    std::vector<usage::spend> month{};
+};
+
+struct overview_document {
+    int schema_version = 1;
+    std::vector<route_report> roles{};
+    std::optional<control::served> served{};
+    std::vector<overview_target> targets{};
+    std::vector<overview_provider> providers{};
+    overview_spend spend{};
+    usage::summary totals{};
+};
+
+constexpr std::string_view rate_limit_prefix = "anthropic-ratelimit-";
+constexpr std::size_t most_rate_limit_headers = 16;
+
+std::string lowercase(std::string_view const text) {
+    std::string out{text};
+    std::ranges::transform(out, out.begin(), [](unsigned char const c) { return static_cast<char>(std::tolower(c)); });
+    return out;
+}
+
 struct planned {
     std::size_t index = 0;
     std::optional<std::string> upstream{};
@@ -409,6 +449,7 @@ struct relay_state {
     bool streaming = false;
     bool complete = false;
     std::string buffered{};
+    std::map<std::string, std::string> rate_limits{};
     bool buffer_overflow = false;
     sse::parser parser{};
     anthropic::stream_guard guard{};
@@ -460,6 +501,12 @@ struct relay_state {
 
     void on_head(http::message_head const& incoming) {
         head = incoming;
+        for (auto const& field : incoming.fields.all()) {
+            auto const name = lowercase(field.name);
+            if (name.starts_with(rate_limit_prefix) && rate_limits.size() < most_rate_limit_headers) {
+                rate_limits[name] = usage::label(field.value);
+            }
+        }
         auto const type = incoming.fields.find("content-type").value_or("");
         auto const success = incoming.status >= http_success_floor && incoming.status < http_success_floor + http_success_span;
         streaming = success && (type.starts_with("text/event-stream") || (translator && type.empty()));
@@ -684,6 +731,7 @@ private:
             case routing::route::models: return detail::models_json(alias_names(), targets_, [this](control::target const& item) { return limits_of(item); });
             case routing::route::health: return health_body(target);
             case routing::route::route_view: return route_body(target);
+            case routing::route::overview: return overview_body(target);
             case routing::route::session_view: return session_body(target);
             case routing::route::statistics: return detail::stats_json(counters_, usage::summary_json(ledger_, settings_.usage.budget, clock_()), providers_object());
             default: return std::nullopt;
@@ -744,17 +792,53 @@ private:
         return found == served_.items.end() ? std::string{"{}"} : json::write(json::to_value(found->second));
     }
 
-    std::string route_body(std::string_view const target) const {
-        auto const requested = routing::query_value(target, "requested");
-        auto const role = std::string{roles::name_of(roles::of(requested.empty() ? routing::query_value(target, "role") : requested))};
-        auto const chosen = control::resolve({.requested = requested, .role = role, .session = routing::query_value(target, "session")}, targets_, overrides_,
-                                             selection::order_for(routes_, role, declared_));
+    detail::route_report route_for(std::string_view const requested, std::string const& role, std::string_view const session) const {
+        auto const chosen = control::resolve({.requested = requested, .role = role, .session = session}, targets_, overrides_, selection::order_for(routes_, role, declared_));
         detail::route_report report{.role = role, .via = std::string{reflect::enum_name(chosen.source)}};
         for (auto const& item : chosen.steps) {
             report.providers.push_back(item.provider);
             report.upstream = item.upstream;
         }
-        return json::write(json::to_value(report));
+        return report;
+    }
+
+    std::string route_body(std::string_view const target) const {
+        auto const requested = routing::query_value(target, "requested");
+        auto const role = std::string{roles::name_of(roles::of(requested.empty() ? routing::query_value(target, "role") : requested))};
+        return json::write(json::to_value(route_for(requested, role, routing::query_value(target, "session"))));
+    }
+
+    std::string overview_body(std::string_view const target) const {
+        auto const session = routing::query_value(target, "session");
+        detail::overview_document document;
+        for (auto const role : reflect::enum_values<roles::role>) {
+            auto const name = std::string{roles::name_of(role)};
+            document.roles.push_back(route_for(name, name, session));
+        }
+        if (auto const found = served_.items.find(session); found != served_.items.end()) {
+            document.served = found->second;
+        }
+        for (auto const& item : targets_) {
+            auto const limits = limits_of(item);
+            document.targets.push_back({.id = item.id,
+                                        .provider = item.provider,
+                                        .upstream = item.upstream,
+                                        .label = item.display_name,
+                                        .max_input_tokens = detail::known_limit(limits.prompt_tokens),
+                                        .max_tokens = detail::known_limit(limits.output_tokens)});
+        }
+        for (auto const& item : providers_) {
+            auto const seen = rate_limits_.find(item.name);
+            document.providers.push_back({.name = item.name,
+                                          .counts = counters_.providers.at(item.name),
+                                          .circuit = selection::state_of(item.circuit, breaker_, breaker_clock_()),
+                                          .rate_limits = seen == rate_limits_.end() ? std::map<std::string, std::string>{} : seen->second});
+        }
+        auto const today = usage::day_of(clock_());
+        document.spend = {.today = usage::spend_between(ledger_, today, today, settings_.pricing),
+                          .month = usage::spend_between(ledger_, usage::first_day_of_month(today), today, settings_.pricing)};
+        document.totals = usage::summary_of(ledger_, settings_.usage.budget, clock_());
+        return json::write(json::to_value(document));
     }
 
     std::string health_body(std::string_view const target) const {
@@ -1189,6 +1273,9 @@ private:
         auto const drained = co_await pump(upstream, state, out);
         absorb_translator_counts(state);
         auto const& provider = providers_[index].name;
+        if (!state.rate_limits.empty()) {
+            rate_limits_[provider] = state.rate_limits;
+        }
         if (detail::client_gone(drained)) {
             ++counters_.client_disconnects;
         }
@@ -1311,6 +1398,7 @@ private:
     std::vector<control::target> targets_;
     control::overrides overrides_;
     control::registry served_;
+    std::map<std::string, std::map<std::string, std::string>> rate_limits_;
     std::function<void(control::overrides const&)> persist_overrides_;
     std::function<void(std::string const&)> capture_;
     std::vector<std::string> declared_;

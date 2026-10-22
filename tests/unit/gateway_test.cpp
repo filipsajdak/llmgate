@@ -112,6 +112,8 @@ struct fake_upstream {
             case behaviour::json_usage: {
                 http::header_map fields;
                 fields.add("Content-Type", "application/json");
+                fields.add("anthropic-ratelimit-unified-5h-utilization", "0.42");
+                fields.add("Anthropic-RateLimit-Unified-Status", "allowed");
                 co_return co_await out.send(200, fields, R"({"type":"message","model":"claude-opus-upstream","usage":{"input_tokens":11,"output_tokens":5,"cache_read_input_tokens":3}})");
             }
             case behaviour::sse_usage: {
@@ -1280,6 +1282,44 @@ const suite gateway_suite = [] {
 
         expect(body.contains(R"("id":"claude-model-a@a")") && body.contains(R"("id":"claude-model-b@b")") && body.contains(R"("id":"claude-model-extra@b")"));
         expect(body.contains(R"json("display_name":"model-b (b)")json"));
+    };
+
+    "capability_the_overview_gathers_routes_targets_health_spend_and_limits_without_a_secret"_test = [] {
+        duo d{[](gateway::config& built) {
+            built.providers["b"].limits = {{"model-b", {.prompt_tokens = 200000, .output_tokens = 64000}}};
+            built.pricing = {{"claude-opus-upstream", {.input = 1000000.0}}};
+        }};
+        d.second.mode = behaviour::json_usage;
+        auto first = messages_request(R"({"model":"claude-model-b@b","max_tokens":8,"messages":[{"role":"user","content":"hi"}]})", "/anthropic/v1/messages", "");
+        first.fields.add("x-claude-code-session-id", "sess-1");
+        (void)d.ask(std::move(first));
+        auto request = messages_request("");
+        request.method = "GET";
+        request.target = "/llmgate/overview?session=sess-1";
+
+        auto const answer = d.ask(std::move(request));
+        auto const& body = answer.body;
+
+        expect(answer.status == 200 && body.contains(R"("schema_version":1)")) << body;
+        expect(body.contains(R"("role":"opus")") && body.contains(R"("role":"sonnet")") && body.contains(R"("role":"haiku")")) << body;
+        expect(body.contains(R"("id":"claude-model-b@b")") && body.contains(R"("max_input_tokens":200000)")) << body;
+        expect(body.contains(R"("name":"b")") && body.contains(R"("circuit":"closed")")) << body;
+        expect(body.contains(R"("anthropic-ratelimit-unified-5h-utilization":"0.42")") && body.contains(R"("anthropic-ratelimit-unified-status":"allowed")")) << body;
+        expect(body.contains(R"("provider":"b")") && body.contains(R"("model":"claude-opus-upstream")") && body.contains(R"("cost":11)")) << body;
+        expect(body.contains(R"("served":{"provider":"b")")) << body;
+        expect(!body.contains("token-b") && !body.contains("127.0.0.1")) << body;
+    };
+
+    "limit_an_unpriced_model_has_no_cost_in_the_overview_and_a_quiet_gateway_has_empty_spend"_test = [] {
+        duo d;
+        auto request = messages_request("");
+        request.method = "GET";
+        request.target = "/llmgate/overview";
+
+        auto const quiet = d.ask(std::move(request)).body;
+
+        expect(quiet.contains(R"("today":[])") && quiet.contains(R"("month":[])")) << quiet;
+        expect(!quiet.contains("cost")) << quiet;
     };
 
     "capability_the_models_endpoint_publishes_the_pinned_limits_of_a_target"_test = [] {

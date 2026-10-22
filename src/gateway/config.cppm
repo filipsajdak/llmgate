@@ -164,6 +164,8 @@ struct config {
   "anthropic": { "base_url": "https://api.anthropic.com", "static_token_env": "ANTHROPIC_UPSTREAM_KEY" }
 })"}]]
     [[= reflect::commented]] std::map<std::string, provider_config> providers{};
+    [[= reflect::doc{"Prices in US dollars per million tokens, by the model name the usage ledger records (the model of the reply). The overview prices the spend of a model that is listed here; any other model's cost is left unknown, never guessed."}]]
+    [[= reflect::example{R"({ "claude-sonnet-5.5": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_creation": 3.75 } })"}]] [[= reflect::commented]] std::map<std::string, usage::price> pricing{};
     [[= reflect::doc{"Per role (opus, sonnet, haiku, fable, other) the providers to try in order. A role without a list uses the other list, then every provider."}]]
     [[= reflect::example{R"({ "opus": ["anthropic", "copilot"], "sonnet": ["copilot", "anthropic"], "other": ["copilot"] })"}]]
     [[= reflect::commented]] std::map<std::string, std::vector<std::string>> routes{};

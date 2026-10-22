@@ -96,6 +96,11 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `providers.<name>.chatgpt.callback_port` | integer | `1455` | Port on 127.0.0.1 that receives the browser's callback during the sign-in. |
 | `providers.<name>.chatgpt.agent_name` | string | `"llmgate"` | Name OpenAI shows the user when this tool is registered at the first sign-in. |
 | `providers.<name>.models` | map of string | `{}` | Model names this provider expects: the name Claude Code sends maps to the id here; unknown names pass through unchanged. |
+| `pricing` | map of object | `{}` | Prices in US dollars per million tokens, by the model name the usage ledger records (the model of the reply). The overview prices the spend of a model that is listed here; any other model's cost is left unknown, never guessed. |
+| `pricing.<name>.input` | number | `0` | US dollars per million input tokens. |
+| `pricing.<name>.output` | number | `0` | US dollars per million output tokens. |
+| `pricing.<name>.cache_read` | number | `0` | US dollars per million cache-read tokens. |
+| `pricing.<name>.cache_creation` | number | `0` | US dollars per million cache-write tokens. |
 | `routes` | map of array of string | `{}` | Per role (opus, sonnet, haiku, fable, other) the providers to try in order. A role without a list uses the other list, then every provider. |
 | `fallback` | object | - | A provider that fails before any response byte reaches Claude Code (connect error, no response head in time, 5xx, 429) is retried on the next one of the role's list; after failures consecutive failures it is skipped for cooldown. |
 | `fallback.failures` | integer | `3` | Consecutive failures after which a provider is skipped. |
@@ -299,6 +304,10 @@ slice). `/llmgate` opens a pane (beside the transcript where the app has room, a
 
 - **Now:** for opus, sonnet and haiku the providers and upstream model in force and why (`via`), and the provider
   that answered the last reply, with `fallback` and `switched` marks.
+- **Usage:** tokens and requests today and this month, spend per provider and model priced from the `pricing` table of the
+  config (a model with no price shows `price unknown`), each provider's circuit state and counters, and the
+  `anthropic-ratelimit-unified-*` limits an Anthropic provider last reported (5h and 7d use, and a limit that is not
+  `allowed`).
 - **Targets:** every model your providers offer (`offer` in the provider), with `use for ROLE` (this session) and
   `make default` (every session) buttons, and `clear session override`.
 
@@ -311,8 +320,7 @@ LLMGATE_BIN="$(command -v llmgate)" LLMGATE_CONFIG=~/.config/llmgate/config.json
 
 A mod is code that runs with your permissions, so check what this one does first:
 `claude plugin validate mods/llmgate`. It reads `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `LLMGATE_BIN` and
-`LLMGATE_CONFIG`; it fetches only from a loopback gateway (`/anthropic/v1/models`, `/llmgate/route`,
-`/llmgate/session`), sending the gateway key only there; and its one other action is running the `llmgate` binary by
+`LLMGATE_CONFIG`; it fetches only from a loopback gateway (`/anthropic/v1/models`, `/llmgate/overview`), sending the gateway key only there; and its one other action is running the `llmgate` binary by
 argument list (`llmgate use ROLE TARGET [--session ID]`) with a target taken from the gateway's own list, never
 through a shell. Its tests run with `claude plugin test` from `mods/llmgate`, and `tests/e2e/mod_flow.sh` runs the
 command against a real gateway (skipped when `claude` is not installed).
