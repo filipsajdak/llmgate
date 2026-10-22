@@ -304,14 +304,14 @@ slice). `/llmgate` opens a pane (beside the transcript where the app has room, a
 
 - **Now:** for opus, sonnet and haiku the providers and upstream model in force and why (`via`), and the provider
   that answered the last reply, with `fallback` and `switched` marks.
-- **Usage:** tokens and requests today and this month, spend per provider and model priced from the `pricing` table of the
+- **Usage:** tokens and requests today and this month, spend per provider and model as aligned tables, priced from the `pricing` table of the
   config (a model with no price shows `price unknown`), each provider's circuit state and counters, and the
   `anthropic-ratelimit-unified-*` limits an Anthropic provider last reported (5h and 7d use, and a limit that is not
   `allowed`).
 - **Subcommands** answer as text and do not open the pane: `/llmgate status`, `targets`, `usage`, and
   `use ROLE TARGET [default]` (`TARGET` is a full id or an upstream name that one provider offers; `clear` removes the
   session override; `default` applies to every session).
-- **Status entry:** the status line shows `llmgate: PROVIDER MODEL` of the last reply with `(fallback)` or
+- **Status entry:** the status line shows `PROVIDER MODEL` of the last reply with `(fallback)` or
   `(switched)`, and a toast appears when a reply first comes as a fallback, the provider changes, a circuit opens or
   a provider reports a blocked limit. The gateway is read every 5 seconds.
 - **Targets:** every model your providers offer (`offer` in the provider), with `use for ROLE` (this session) and

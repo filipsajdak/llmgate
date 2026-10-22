@@ -1,6 +1,6 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
-import { changes, describeProvider, describeRoute, describeSpend, describeTargets, describeTotals, gatewayRoot, invocation, parseCommand, parseOverview, printable, resolveTarget, roles, statusText } from './model'
+import { changes, describeTargets, describeTotals, providerTable, routeTable, spendTable, unpricedNote, gatewayRoot, invocation, parseCommand, parseOverview, printable, resolveTarget, roles, statusText } from './model'
 import type { Change, Command, Role, Scope, Snapshot } from './model'
 
 const PANE = 'llmgate'
@@ -48,7 +48,7 @@ async function change($: Engine, what: Change): Promise<string> {
   } else {
     try {
       const ran = await $.process.run(plan.argv)
-      message = ran.exitCode === 0 ? done(what) : printable(`llmgate: ${ran.stderr.trim() || `exit ${ran.exitCode}`}`)
+      message = ran.exitCode === 0 ? done(what) : printable(`llmgate: ${ran.stderr.trim().replace(/^llmgate: /, '') || `exit ${ran.exitCode}`}`)
     } catch (error) {
       message = printable(`llmgate did not run: ${String(error)}`)
     }
@@ -64,14 +64,31 @@ function done(what: Change): string {
 
 function summary(): string {
   if (snapshot.error) return snapshot.error
-  return [...snapshot.roles.map(describeRoute), describeTotals(snapshot)].join('\n')
+  return [...routeTable(snapshot.roles), '', describeTotals(snapshot)].join('\n')
+}
+
+function usageText(): string[] {
+  const note = unpricedNote([...snapshot.spendToday, ...snapshot.spendMonth])
+  return [
+    describeTotals(snapshot),
+    '',
+    'Today',
+    ...(snapshot.spendToday.length === 0 ? ['no requests yet today'] : spendTable(snapshot.spendToday)),
+    '',
+    'This month',
+    ...(snapshot.spendMonth.length === 0 ? ['no requests this month'] : spendTable(snapshot.spendMonth)),
+    ...(note === undefined ? [] : ['', note]),
+    '',
+    'Providers',
+    ...providerTable(snapshot.providers),
+  ]
 }
 
 async function answer($: Engine, command: Command): Promise<string> {
   if (command.kind === 'error') return command.message
   if (snapshot.error) return snapshot.error
   if (command.kind === 'targets') return describeTargets(snapshot.targets)
-  if (command.kind === 'usage') return [describeTotals(snapshot), ...snapshot.spendToday.map(describeSpend), ...snapshot.providers.map(describeProvider)].join('\n')
+  if (command.kind === 'usage') return usageText().join('\n')
   if (command.kind === 'use') return useTarget($, command)
   return [summary(), statusText(snapshot)].join('\n')
 }
@@ -125,28 +142,29 @@ export const register: Register = on => {
       </Box>
     )
 
+    const lines = (rows: string[]) =>
+      rows.map((row, at) => (
+        <Text bold={at === 0} dimColor={at === 1}>
+          {row}
+        </Text>
+      ))
+
     if (view === 'usage') {
+      const note = unpricedNote([...snapshot.spendToday, ...snapshot.spendMonth])
       return (
         <Box flexDirection="column">
           {header}
           <Text bold>{describeTotals(snapshot)}</Text>
           <Text> </Text>
           <Text bold>Today</Text>
-          {snapshot.spendToday.length === 0 && <Text dimColor>no requests yet today</Text>}
-          {snapshot.spendToday.map(row => (
-            <Text>{describeSpend(row)}</Text>
-          ))}
+          {snapshot.spendToday.length === 0 ? <Text dimColor>no requests yet today</Text> : lines(spendTable(snapshot.spendToday))}
           <Text> </Text>
           <Text bold>This month</Text>
-          {snapshot.spendMonth.length === 0 && <Text dimColor>no requests this month</Text>}
-          {snapshot.spendMonth.map(row => (
-            <Text>{describeSpend(row)}</Text>
-          ))}
+          {snapshot.spendMonth.length === 0 ? <Text dimColor>no requests this month</Text> : lines(spendTable(snapshot.spendMonth))}
+          {note && <Text dimColor>{note}</Text>}
           <Text> </Text>
           <Text bold>Providers</Text>
-          {snapshot.providers.map(item => (
-            <Text>{describeProvider(item)}</Text>
-          ))}
+          {lines(providerTable(snapshot.providers))}
         </Box>
       )
     }
@@ -161,8 +179,10 @@ export const register: Register = on => {
             {snapshot.served.switched ? ' (switched)' : ''}
           </Text>
         )}
-        {snapshot.roles.map(route => (
-          <Text dimColor={route.role !== selected}>{describeRoute(route)}</Text>
+        {routeTable(snapshot.roles).map((row, at) => (
+          <Text bold={at === 0} dimColor={at === 1 || (at > 1 && snapshot.roles[at - 2].role !== selected)}>
+            {row}
+          </Text>
         ))}
         <Text> </Text>
         <Box flexDirection="row" columnGap={2}>

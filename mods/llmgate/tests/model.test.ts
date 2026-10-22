@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { changes, compact, describeProvider, describeSpend, describeTotals, gatewayRoot, invocation, parseOverview, parseCommand, printable, describeRoute, resolveTarget, statusText, describeTargets } from '../hooks/model'
+import { changes, compact, describeTotals, providerTable, routeTable, spendTable, table, unpricedNote, gatewayRoot, invocation, parseOverview, parseCommand, printable, resolveTarget, statusText, describeTargets } from '../hooks/model'
 
 const overview = JSON.stringify({
   schema_version: 1,
@@ -32,7 +32,13 @@ test('an overview becomes routes, targets, providers, spend and totals', () => {
   const found = parseOverview('abc-123', overview)
   expect(found.sessionId).toBe('abc-123')
   expect(found.roles.map(route => route.role)).toEqual(['opus', 'sonnet', 'haiku'])
-  expect(describeRoute(found.roles[1])).toBe('sonnet -> codex (gpt-6-sol)  via session_remap')
+  expect(routeTable(found.roles)).toEqual([
+    'role    provider  model      via',
+    '------  --------  ---------  -------------',
+    'opus    work      opus-9     config',
+    'sonnet  codex     gpt-6-sol  session_remap',
+    'haiku   none      -          config',
+  ])
   expect(found.served?.fallback).toBe(true)
   expect(found.targets.map(item => item.id)).toEqual(['claude-gpt-6-sol@codex', 'claude-sonnet-9@work'])
   expect(found.providers.map(item => item.name)).toEqual(['work', 'codex'])
@@ -51,10 +57,20 @@ test('numbers, money, spend rows, providers and totals are written for a person'
   expect(compact(999)).toBe('999')
   expect(compact(1250000)).toBe('1.3M')
   expect(compact(412345)).toBe('412k')
-  expect(describeSpend(found.spendToday[0])).toBe('work  sonnet-9  1.2M in 300k out 5.0M cached  9 req  $4.50')
-  expect(describeSpend(found.spendToday[1])).toBe('codex  gpt-6-sol  800 in 90 out  2 req  price unknown')
-  expect(describeProvider(found.providers[0])).toBe('work  closed  5 tried, 4 answered, 1 failed  5h limit 42%')
-  expect(describeProvider(found.providers[1])).toBe('codex  open  2 tried, 2 answered, 0 failed')
+  expect(spendTable(found.spendToday)).toEqual([
+    'provider  model        in   out  cached  req   cost',
+    '--------  ---------  ----  ----  ------  ---  -----',
+    'work      sonnet-9   1.2M  300k    5.0M    9  $4.50',
+    'codex     gpt-6-sol   800    90       -    2      -',
+  ])
+  expect(unpricedNote(found.spendToday)).toContain('add the model to pricing')
+  expect(unpricedNote([found.spendToday[0]])).toBeUndefined()
+  expect(providerTable(found.providers)).toEqual([
+    'provider  circuit  tried  answered  failed  limits',
+    '--------  -------  -----  --------  ------  ------------',
+    'work      closed       5         4       1  5h limit 42%',
+    'codex     open         2         2       0  -',
+  ])
   expect(describeTotals(found)).toBe('today 1.5M tokens (11 req)  month 9.0M  budget warning 83% of daily 1.8M')
 })
 
@@ -118,10 +134,10 @@ test('resolveTarget takes a full id, or an upstream name that names one target',
 })
 
 test('statusText names the provider and model of the last reply with its markers, or the problem', () => {
-  expect(statusText(found)).toBe('llmgate: work sonnet-9 (fallback)')
-  expect(statusText({ ...found, served: { ...found.served!, fallback: false, switched: true } })).toBe('llmgate: work sonnet-9 (switched)')
-  expect(statusText({ ...found, served: undefined })).toBe('llmgate: no reply yet')
-  expect(statusText({ ...found, error: 'the gateway answered 404' })).toBe('llmgate: the gateway answered 404')
+  expect(statusText(found)).toBe('work sonnet-9 (fallback)')
+  expect(statusText({ ...found, served: { ...found.served!, fallback: false, switched: true } })).toBe('work sonnet-9 (switched)')
+  expect(statusText({ ...found, served: undefined })).toBe('no reply yet')
+  expect(statusText({ ...found, error: 'the gateway answered 404' })).toBe('the gateway answered 404')
 })
 
 test('changes reports a fallback, a new provider, an opened circuit and a blocked limit once, and nothing on the first read', () => {

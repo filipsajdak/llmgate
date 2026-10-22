@@ -26,7 +26,20 @@ const overview = (sonnet: string) =>
     totals: { today: { input: 2000, output: 100, cache_read: 0, cache_creation: 0, requests: 3 }, month: { input: 2000, output: 100, cache_read: 0, cache_creation: 0, requests: 3 }, budget: { state: 'ok', window: '', used: 0, limit: 0, percent: 0 } },
   })
 
+const statuses: (string | undefined)[] = []
+const toasts: string[] = []
+
 function gateway(on: Parameters<Parameters<typeof test>[1]>[1], calls: string[], sonnet = 'work') {
+  statuses.length = 0
+  toasts.length = 0
+  on('ui.status', (_, e) => {
+    statuses.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
   on('http.fetch', ($, e) => {
     calls.push(e.url)
     return { value: { status: 200, ok: true, headers: {}, text: overview(sonnet) } }
@@ -51,7 +64,7 @@ test('the command opens the pane, which shows the routes, the last reply and the
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /last reply: work sonnet-9 \(switched\)/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /sonnet -> work \(sonnet-9\)  via config/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /sonnet  work      sonnet-9  config/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'gpt-6-sol (codex)' })).toBeDefined()
   expect(await ui.find({ key: 'use-claude-gpt-6-sol@codex' })).toBeDefined()
   expect(fetched).toEqual(['http://127.0.0.1:9482/llmgate/overview?session=abc-123'])
@@ -102,7 +115,7 @@ test('a failing llmgate is reported in the pane and the choice of role follows t
   await ui.press({ key: 'role-haiku' })
   expect(await ui.find({ type: 'Button', key: 'use-claude-gpt-6-sol@codex' })).toBeDefined()
   await ui.press({ key: 'clear' })
-  expect(await ui.find({ type: 'Text', text: 'llmgate: llmgate: the gateway is down?[2J' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'llmgate: the gateway is down?[2J' })).toBeDefined()
   await ui.unmount()
 })
 
@@ -121,8 +134,8 @@ test('the Usage view shows the totals, the spend of today with its price, and th
   await ui.press({ key: 'view-usage' })
 
   expect(await ui.find({ type: 'Text', text: /today 2k tokens \(3 req\)/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'work  sonnet-9  2k in 100 out  3 req  $0.01' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'work  closed  3 tried, 3 answered, 0 failed' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^work +sonnet-9 +2k +100 +- +3 +\$0\.01$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^work +closed +3 +3 +0 +-$/ })).toBeDefined()
   await ui.press({ key: 'view-now' })
   expect(await ui.find({ key: 'use-claude-gpt-6-sol@codex' })).toBeDefined()
   await ui.unmount()
@@ -172,12 +185,12 @@ test('subcommands answer as text without opening the pane', async ($, on) => {
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
 
   const status = await $.command.run({ command: 'llmgate', args: 'status' })
-  expect(String(status.text)).toContain('sonnet -> work (sonnet-9)  via config')
-  expect(String(status.text)).toContain('llmgate: work sonnet-9 (switched)')
+  expect(String(status.text)).toContain('sonnet  work      sonnet-9  config')
+  expect(String(status.text)).toContain('work sonnet-9 (switched)')
   const targets = await $.command.run({ command: 'llmgate', args: 'targets' })
   expect(String(targets.text)).toContain('claude-gpt-6-sol@codex  gpt-6-sol (codex)')
   const usage = await $.command.run({ command: 'llmgate', args: 'usage' })
-  expect(String(usage.text)).toContain('work  sonnet-9  2k in 100 out  3 req  $0.01')
+  expect(String(usage.text)).toContain('work      sonnet-9  2k  100       -    3  $0.01')
   const wrong = await $.command.run({ command: 'llmgate', args: 'frobnicate' })
   expect(String(wrong.text)).toContain('unknown subcommand frobnicate')
   expect(opened.count).toBe(0)
@@ -210,19 +223,9 @@ test('use runs llmgate for this session, or for every session with default, and 
 
 test('the status entry follows the last reply and a change raises a toast', async ($, on) => {
   started(on)
-  const statuses: (string | undefined)[] = []
-  const toasts: string[] = []
-  on('ui.status', (_, e) => {
-    statuses.push(e.text)
-    return { value: undefined }
-  })
-  on('ui.toast', (_, e) => {
-    toasts.push(e.text)
-    return { value: undefined }
-  })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.command.run({ command: 'llmgate', args: 'status' })
-  expect(statuses.at(-1)).toBe('llmgate: work sonnet-9 (switched)')
+  expect(statuses.at(-1)).toBe('work sonnet-9 (switched)')
   expect(toasts).toEqual([])
 })
 
@@ -240,12 +243,12 @@ test('a reply that arrives as a fallback between two reads raises one toast', as
   on('command.register', () => ({ value: undefined }))
   on('session.id', () => ({ value: 'abc-123' }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  const toasts: string[] = []
+  statuses.length = 0
+  toasts.length = 0
   on('ui.toast', (_, e) => {
     toasts.push(e.text)
     return { value: undefined }
   })
-  const statuses: (string | undefined)[] = []
   on('ui.status', (_, e) => {
     statuses.push(e.text)
     return { value: undefined }
@@ -257,5 +260,5 @@ test('a reply that arrives as a fallback between two reads raises one toast', as
   await $.command.run({ command: 'llmgate', args: 'status' })
 
   expect(toasts).toEqual(['llmgate: work answered as a fallback'])
-  expect(statuses.at(-1)).toBe('llmgate: work sonnet-9 (fallback)')
+  expect(statuses.at(-1)).toBe('work sonnet-9 (fallback)')
 })

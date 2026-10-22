@@ -50,11 +50,11 @@ check sh -c "claude plugin validate '$root/mods/llmgate' > '$work/validate.out' 
 export LLMGATE_BIN="$binary" LLMGATE_CONFIG="$work/config.jsonc"
 "$binary" --config "$work/config.jsonc" claude -p "/llmgate" --plugin-dir "$root/mods/llmgate" < /dev/null > "$work/command.out" 2>&1 || true
 label="the command, run against a real gateway, reports the route of every role"
-check sh -c "grep -q 'sonnet -> alpha' '$work/command.out' && grep -q 'opus' '$work/command.out' && grep -q 'haiku' '$work/command.out'"
+check sh -c "grep -Eq '^sonnet +alpha ' '$work/command.out' && grep -q 'opus' '$work/command.out' && grep -q 'haiku' '$work/command.out'"
 
 "$binary" --config "$work/config.jsonc" use sonnet claude-m-beta@beta > "$work/use.out" 2>&1 || true
 "$binary" --config "$work/config.jsonc" claude -p "/llmgate" --plugin-dir "$root/mods/llmgate" < /dev/null > "$work/after.out" 2>&1 || true
 label="after llmgate use the command reports the new route"
-check sh -c "grep -q 'sonnet -> beta' '$work/after.out'"
+check sh -c "grep -Eq '^sonnet +beta ' '$work/after.out'"
 
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; cat "$work/command.out" | head -5; exit 1; }

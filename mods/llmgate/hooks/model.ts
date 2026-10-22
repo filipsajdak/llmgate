@@ -171,32 +171,9 @@ export function compact(value: number): string {
   return String(value)
 }
 
-export function describeRoute(route: RoleRoute): string {
-  const where = route.providers.length === 0 ? 'no provider' : route.providers.join(', ')
-  return `${route.role.padEnd(6)} -> ${where}${route.upstream ? ` (${route.upstream})` : ''}  via ${route.via}`
-}
-
-export function describeSpend(row: SpendRow): string {
-  const cached = row.cacheRead > 0 ? ` ${compact(row.cacheRead)} cached` : ''
-  const money = row.cost === undefined ? 'price unknown' : `$${row.cost.toFixed(2)}`
-  return `${row.provider}  ${row.model}  ${compact(row.input)} in ${compact(row.output)} out${cached}  ${row.requests} req  ${money}`
-}
-
 const limitLabels: Record<string, string> = {
   'anthropic-ratelimit-unified-5h-utilization': '5h limit',
   'anthropic-ratelimit-unified-7d-utilization': '7d limit',
-}
-
-export function describeProvider(item: ProviderHealth): string {
-  const limits = Object.entries(item.limits).flatMap(([key, value]) => {
-    const label = limitLabels[key]
-    const fraction = Number(value)
-    return label !== undefined && Number.isFinite(fraction) ? [`${label} ${Math.round(fraction * 100)}%`] : []
-  })
-  const status = item.limits['anthropic-ratelimit-unified-status']
-  const blocked = status !== undefined && status !== 'allowed' ? [`limit ${status}`] : []
-  const tail = [...limits, ...blocked].join(', ')
-  return `${item.name}  ${item.circuit}  ${item.attempts} tried, ${item.answered} answered, ${item.failures} failed${tail === '' ? '' : `  ${tail}`}`
 }
 
 export function describeTotals(found: Snapshot): string {
@@ -251,11 +228,11 @@ export function resolveTarget(targets: readonly Target[], word: string): Resolve
 }
 
 export function statusText(found: Snapshot): string {
-  if (found.error) return `llmgate: ${found.error}`
+  if (found.error) return found.error
   const served = found.served
-  if (served === undefined) return 'llmgate: no reply yet'
+  if (served === undefined) return 'no reply yet'
   const marker = served.fallback ? ' (fallback)' : served.switched ? ' (switched)' : ''
-  return `llmgate: ${served.provider} ${served.upstream}${marker}`
+  return `${served.provider} ${served.upstream}${marker}`
 }
 
 function blocked(item: ProviderHealth): string | undefined {
@@ -283,4 +260,51 @@ export function changes(before: Snapshot | undefined, after: Snapshot): string[]
 export function describeTargets(targets: readonly Target[]): string {
   if (targets.length === 0) return 'no targets offered; add offer to a provider in the llmgate config'
   return targets.map(item => `${item.id}  ${item.label}`).join('\n')
+}
+
+export function table(header: readonly string[], rows: readonly (readonly string[])[], right: readonly number[] = []): string[] {
+  const widths = header.map((title, at) => Math.max(title.length, ...rows.map(row => (row[at] ?? '').length)))
+  const line = (cells: readonly string[]) =>
+    cells
+      .map((cell, at) => (right.includes(at) ? cell.padStart(widths[at]) : cell.padEnd(widths[at])))
+      .join('  ')
+      .trimEnd()
+  return [line(header), widths.map(width => '-'.repeat(width)).join('  '), ...rows.map(line)]
+}
+
+export function routeTable(routes: readonly RoleRoute[]): string[] {
+  return table(
+    ['role', 'provider', 'model', 'via'],
+    routes.map(route => [route.role, route.providers.length === 0 ? 'none' : route.providers.join(', '), route.upstream ?? '-', route.via]),
+  )
+}
+
+export function spendTable(rows: readonly SpendRow[]): string[] {
+  return table(
+    ['provider', 'model', 'in', 'out', 'cached', 'req', 'cost'],
+    rows.map(row => [row.provider, row.model, compact(row.input), compact(row.output), row.cacheRead > 0 ? compact(row.cacheRead) : '-', String(row.requests), row.cost === undefined ? '-' : `$${row.cost.toFixed(2)}`]),
+    [2, 3, 4, 5, 6],
+  )
+}
+
+export function unpricedNote(rows: readonly SpendRow[]): string | undefined {
+  return rows.some(row => row.cost === undefined) ? '- no price: add the model to pricing in the llmgate config' : undefined
+}
+
+function limitsOf(item: ProviderHealth): string {
+  const shown = Object.entries(item.limits).flatMap(([key, value]) => {
+    const label = limitLabels[key]
+    const fraction = Number(value)
+    return label !== undefined && Number.isFinite(fraction) ? [`${label} ${Math.round(fraction * 100)}%`] : []
+  })
+  const status = item.limits['anthropic-ratelimit-unified-status']
+  return [...shown, ...(status !== undefined && status !== 'allowed' ? [`limit ${status}`] : [])].join(', ')
+}
+
+export function providerTable(items: readonly ProviderHealth[]): string[] {
+  return table(
+    ['provider', 'circuit', 'tried', 'answered', 'failed', 'limits'],
+    items.map(item => [item.name, item.circuit, String(item.attempts), String(item.answered), String(item.failures), limitsOf(item) || '-']),
+    [2, 3, 4],
+  )
 }
