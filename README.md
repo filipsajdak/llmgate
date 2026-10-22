@@ -226,7 +226,7 @@ Anthropic's gateway guide says that with only `ANTHROPIC_BASE_URL` set, Claude C
 
 ## Switching providers, models and accounts
 
-Every model a provider serves is a target with an id of the form `claude-MODEL@PROVIDER` (the `claude` keeps it in Claude Code's `/model` list). Set `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` and `/model` lists them next to the aliases; picking one sends the session to exactly that provider and model, with no fallback. A provider's `offer` list adds models that are not in its `models` map.
+Every model a provider serves is a target with an id of the form `claude-MODEL@PROVIDER` (the `claude` keeps it in Claude Code's `/model` list). `llmgate claude` and `llmgate env` set `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, so `/model` lists them next to the aliases (and `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`, which makes Claude Code send the request class and agent type); picking one sends the session to exactly that provider and model, with no fallback. A provider's `offer` list adds models that are not in its `models` map.
 
 A request is routed by the first rule that applies: a picked target, a remap for this session, a remap for the role, then `routes` and `fallback`.
 

@@ -98,6 +98,8 @@ constexpr environment_list behaviour_variables(launch_config const& settings) {
         {"CLAUDE_CODE_AUTO_COMPACT_WINDOW", decimal(settings.context_tokens)},
         {"CLAUDE_CODE_AUTO_MODE_SERVER", "0"},
         {"CLAUDE_CODE_ATTRIBUTION_HEADER", "0"},
+        {"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1"},
+        {"CLAUDE_CODE_GATEWAY_HINT_HEADERS", "1"},
     };
 }
 
@@ -353,8 +355,8 @@ WantedBy=default.target
 
 static_assert(shell_quote("it's") == R"('it'\''s')");
 static_assert(decimal(180000) == "180000" && decimal(-5) == "-5");
-static_assert(environment(launch_config{}, "http://127.0.0.1:9480/anthropic", "", "/p").size() == 16);
-static_assert(environment(launch_config{.telemetry = true}, "u", "k", "/p").size() == 13);
+static_assert(environment(launch_config{}, "http://127.0.0.1:9480/anthropic", "", "/p").size() == 18);
+static_assert(environment(launch_config{.telemetry = true}, "u", "k", "/p").size() == 15);
 static_assert(json::write(merge_settings(json::value{}, "medium", "llmgate statusline")) == json::write(merge_settings(merge_settings(json::value{}, "medium", "llmgate statusline"), "medium", "llmgate statusline")));
 
 }  // namespace llmgate::claude

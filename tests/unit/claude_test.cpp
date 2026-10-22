@@ -32,6 +32,7 @@ const suite claude_suite = [] {
         expect(value_of(list, "ANTHROPIC_DEFAULT_FABLE_MODEL") == "claude-fable-5-1");
         expect(value_of(list, "CLAUDE_CONFIG_DIR") == "/home/me/.claude-llmgate");
         expect(value_of(list, "CLAUDE_CODE_AUTO_MODE_SERVER") == "0");
+        expect(value_of(list, "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY") == "1" && value_of(list, "CLAUDE_CODE_GATEWAY_HINT_HEADERS") == "1");
     };
 
     "capability_the_context_window_feeds_both_limits"_test = [] {
@@ -194,6 +195,8 @@ export CLAUDE_CODE_MAX_CONTEXT_TOKENS='180000'
 export CLAUDE_CODE_AUTO_COMPACT_WINDOW='180000'
 export CLAUDE_CODE_AUTO_MODE_SERVER='0'
 export CLAUDE_CODE_ATTRIBUTION_HEADER='0'
+export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY='1'
+export CLAUDE_CODE_GATEWAY_HINT_HEADERS='1'
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1'
 export DISABLE_TELEMETRY='1'
 export DISABLE_ERROR_REPORTING='1'
