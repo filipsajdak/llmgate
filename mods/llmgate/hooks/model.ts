@@ -210,16 +210,16 @@ export function invocation(bin: string | undefined, config: string | undefined, 
 }
 
 export type Command =
-  | { kind: 'pane' | 'status' | 'targets' | 'usage' | 'setup' }
+  | { kind: 'pane' | 'status' | 'targets' | 'usage' | 'setup' | 'recipes' }
   | { kind: 'use'; role: Role; word: string; scope: Scope }
   | { kind: 'error'; message: string }
 
-const subcommands = ['status', 'targets', 'usage', 'use', 'setup', 'pane']
+const subcommands = ['status', 'targets', 'usage', 'use', 'setup', 'recipes', 'pane']
 
 export function parseCommand(args: string): Command {
   const [first = '', ...rest] = args.trim().split(/\s+/).filter(word => word !== '')
   if (first === '' || first === 'pane') return { kind: 'pane' }
-  if (first === 'status' || first === 'targets' || first === 'usage' || first === 'setup') return { kind: first }
+  if (first === 'status' || first === 'targets' || first === 'usage' || first === 'setup' || first === 'recipes') return { kind: first }
   if (first !== 'use') return { kind: 'error', message: `unknown subcommand ${printable(first, 32)} (${subcommands.join(', ')})` }
   const [role = '', word = '', flag] = rest
   if (role === '' || word === '') return { kind: 'error', message: 'use ROLE TARGET [default]' }

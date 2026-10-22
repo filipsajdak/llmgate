@@ -116,6 +116,7 @@ test('parseCommand reads the subcommands and refuses the rest with the list of w
   expect(parseCommand('  pane ')).toEqual({ kind: 'pane' })
   expect(parseCommand('status')).toEqual({ kind: 'status' })
   expect(parseCommand('setup')).toEqual({ kind: 'setup' })
+  expect(parseCommand('recipes')).toEqual({ kind: 'recipes' })
   expect(parseCommand('targets')).toEqual({ kind: 'targets' })
   expect(parseCommand('usage')).toEqual({ kind: 'usage' })
   expect(parseCommand('use sonnet gpt-6-sol')).toEqual({ kind: 'use', role: 'sonnet', word: 'gpt-6-sol', scope: 'session' })
@@ -123,7 +124,7 @@ test('parseCommand reads the subcommands and refuses the rest with the list of w
   expect(parseCommand('use sonnet clear')).toEqual({ kind: 'use', role: 'sonnet', word: 'clear', scope: 'session' })
   expect(parseCommand('use banana x')).toEqual({ kind: 'error', message: 'unknown role banana (opus, sonnet, haiku)' })
   expect(parseCommand('use sonnet')).toEqual({ kind: 'error', message: 'use ROLE TARGET [default]' })
-  expect(parseCommand('rm -rf')).toEqual({ kind: 'error', message: 'unknown subcommand rm (status, targets, usage, use, setup, pane)' })
+  expect(parseCommand('rm -rf')).toEqual({ kind: 'error', message: 'unknown subcommand rm (status, targets, usage, use, setup, recipes, pane)' })
 })
 
 test('resolveTarget takes a full id, or an upstream name that names one target', () => {

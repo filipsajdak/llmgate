@@ -372,3 +372,40 @@ test('adding a Claude login provider also sets the credential mode to login and 
   await must(ui, { type: 'Text', text: /restart Claude Code/ })
   await ui.unmount()
 })
+
+test('the Recipes view lists cards with pros and cons and previews then applies one by argv', async ($, on) => {
+  mock.env(on, env)
+  mock.clock(on)
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: setupOverview() } }))
+  const runs: string[][] = []
+  const list = JSON.stringify([{ id: 'quality-first', title: 'Quality first, with fallback', summary: 'Claude answers every role.', pros: ['one vendor'], cons: ['spends Claude quota'], needs: ['claude'], tokens: '1x' }])
+  on('process.run', (_, e) => {
+    runs.push([...e.argv])
+    if (e.argv.includes('list')) return { value: { exitCode: 0, stdout: list, stderr: '' } }
+    return { value: { exitCode: 0, stdout: e.argv.includes('--yes') ? 'written to /c\nok\n' : '+ "routes"\nnot written: add --yes to write /c\n', stderr: '' } }
+  })
+  on('command.register', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc-123' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'llmgate', args: 'recipes' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await must(ui, { type: 'Text', text: 'Quality first, with fallback' })
+  await must(ui, { type: 'Text', text: '+ one vendor' })
+  await must(ui, { type: 'Text', text: '- spends Claude quota' })
+  await ui.press({ key: 'recipe-quality-first' })
+  await must(ui, { type: 'Text', text: 'not written: add --yes to write /c' })
+  await ui.press({ key: 'recipe-apply' })
+  await must(ui, { type: 'Text', text: 'ok' })
+
+  expect(runs).toEqual([
+    ['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'recipe', 'list', '--json'],
+    ['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'recipe', 'apply', 'quality-first'],
+    ['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'recipe', 'apply', 'quality-first', '--yes'],
+  ])
+  await ui.unmount()
+})

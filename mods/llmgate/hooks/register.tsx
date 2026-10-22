@@ -1,5 +1,7 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
+import { parseRecipes, recipeInvocation } from './recipes'
+import type { Recipe } from './recipes'
 import { addInvocation, followUp, formFor, kinds, nextStep } from './setup'
 import type { Form, KindId } from './setup'
 import { changes, describeTargets, describeTotals, providerTable, routeTable, spendTable, unpricedNote, gatewayRoot, invocation, parseCommand, parseOverview, printable, printableBlock, resolveTarget, roles, statusText } from './model'
@@ -9,7 +11,7 @@ const PANE = 'llmgate'
 const pollMilliseconds = 5000
 const unreadable: Snapshot = { sessionId: '', roles: [], targets: [], providers: [], spendToday: [], spendMonth: [] }
 
-type View = 'now' | 'usage' | 'setup'
+type View = 'now' | 'usage' | 'setup' | 'recipes'
 
 let snapshot: Snapshot = unreadable
 let selected: Role = 'sonnet'
@@ -20,6 +22,9 @@ let hasRead = false
 let form: Form | undefined
 let preview = ''
 let next = ''
+let recipes: Recipe[] = []
+let chosen = ''
+let recipeOutput = ''
 
 async function load($: Engine): Promise<Snapshot> {
   const root = gatewayRoot(await $.env.get('ANTHROPIC_BASE_URL'))
@@ -64,6 +69,38 @@ async function change($: Engine, what: Change): Promise<string> {
 
 function setField(key: keyof Form, value: string): void {
   if (form !== undefined) form = { ...form, [key]: value }
+}
+
+async function loadRecipes($: Engine): Promise<void> {
+  const [bin, config] = await Promise.all([$.env.get('LLMGATE_BIN'), $.env.get('LLMGATE_CONFIG')])
+  if (bin === undefined || bin === '') {
+    recipeOutput = 'LLMGATE_BIN is not set: start Claude Code with llmgate claude'
+    return
+  }
+  try {
+    const ran = await $.process.run([bin, ...(config ? ['--config', config] : []), 'recipe', 'list', '--json'])
+    recipes = ran.exitCode === 0 ? parseRecipes(ran.stdout) : []
+    recipeOutput = recipes.length === 0 ? printableBlock(ran.stderr || 'no recipes were listed') : ''
+  } catch (error) {
+    recipeOutput = printable(`llmgate did not run: ${String(error)}`)
+  }
+}
+
+async function runRecipe($: Engine, write: boolean): Promise<void> {
+  const [bin, config] = await Promise.all([$.env.get('LLMGATE_BIN'), $.env.get('LLMGATE_CONFIG')])
+  const plan = recipeInvocation(bin, config, recipes, chosen, write)
+  if ('refused' in plan) {
+    recipeOutput = plan.refused
+  } else {
+    try {
+      const ran = await $.process.run(plan.argv)
+      recipeOutput = printableBlock((ran.exitCode === 0 ? ran.stdout : ran.stderr.replace(/^llmgate: /, '') || `exit ${ran.exitCode}`).trim())
+    } catch (error) {
+      recipeOutput = printable(`llmgate did not run: ${String(error)}`)
+    }
+  }
+  if (write) await refresh($)
+  $.ui.invalidate('ui.render')
 }
 
 async function runAdd($: Engine, write: boolean): Promise<void> {
@@ -146,6 +183,10 @@ export const register: Register = on => {
     await refresh($)
     const command = parseCommand(e.args)
     if (command.kind === 'setup') view = 'setup'
+    else if (command.kind === 'recipes') {
+      view = 'recipes'
+      await loadRecipes($)
+    }
     else if (command.kind !== 'pane') return { text: await answer($, command) }
     const opened = await $.ui.open({ id: PANE, title: 'llmgate', focus: true, closeOnEscape: true })
     isOpen = opened.isPlaced
@@ -173,6 +214,10 @@ export const register: Register = on => {
           <Button key="view-now" label="Now" hotkey="n" plain dimColor={view !== 'now'} onPress={show('now')} />
           <Button key="view-usage" label="Usage" hotkey="u" plain dimColor={view !== 'usage'} onPress={show('usage')} />
           <Button key="view-setup" label="Setup" hotkey="s" plain dimColor={view !== 'setup'} onPress={show('setup')} />
+          <Button key="view-recipes" label="Recipes" hotkey="e" plain dimColor={view !== 'recipes'} onPress={() => {
+            view = 'recipes'
+            void loadRecipes($).then(() => redraw())
+          }} />
           <Button key="refresh" label="refresh" hotkey="r" plain onPress={() => void refresh($)} />
         </Box>
         {snapshot.error && <Text color="red">{snapshot.error}</Text>}
@@ -185,6 +230,41 @@ export const register: Register = on => {
           {row}
         </Text>
       ))
+
+    if (view === 'recipes') {
+      return (
+        <Box flexDirection="column">
+          {header}
+          <Text bold>Ready-made setups</Text>
+          <Text dimColor>Pick one to see what it would change; Apply writes it and reloads the gateway.</Text>
+          {recipes.map(item => (
+            <Box flexDirection="column">
+              <Text> </Text>
+              <Text bold>{item.title}</Text>
+              <Text>{item.summary}</Text>
+              {item.pros.map(line => (
+                <Text>{`+ ${line}`}</Text>
+              ))}
+              {item.cons.map(line => (
+                <Text dimColor>{`- ${line}`}</Text>
+              ))}
+              <Text dimColor>{`needs: ${item.needs.join(', ')}   tokens: ${item.tokens}`}</Text>
+              <Button
+                key={`recipe-${item.id}`}
+                label={chosen === item.id ? 'previewing' : 'Preview'}
+                onPress={() => {
+                  chosen = item.id
+                  recipeOutput = ''
+                  void runRecipe($, false)
+                }}
+              />
+            </Box>
+          ))}
+          {chosen !== '' && <Button key="recipe-apply" label={`Apply ${chosen}`} onPress={() => void runRecipe($, true)} />}
+          {recipeOutput !== '' && recipeOutput.split('\n').map(row => <Text>{row === '' ? ' ' : row}</Text>)}
+        </Box>
+      )
+    }
 
     if (view === 'setup') {
       const choose = (id: KindId) => () => {
