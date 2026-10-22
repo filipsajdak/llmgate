@@ -1,44 +1,61 @@
 import { expect, test } from 'claude-code/testing'
 
-import { describeRoute, gatewayRoot, invocation, parseRoute, parseServed, parseTargets, printable } from '../hooks/model'
+import { compact, describeProvider, describeSpend, describeTotals, gatewayRoot, invocation, parseOverview, printable, describeRoute } from '../hooks/model'
 
-const models = JSON.stringify({
-  data: [
-    { type: 'model', id: 'opus', display_name: 'opus' },
-    { type: 'model', id: 'claude-gpt-6-sol@codex', display_name: 'gpt-6-sol (codex)', description: 'served by the provider codex' },
-    { type: 'model', id: 'claude-sonnet-9@work', display_name: 'sonnet-9 (work)', description: 'served by the provider work' },
+const overview = JSON.stringify({
+  schema_version: 1,
+  roles: [
+    { role: 'opus', via: 'config', providers: ['work'], upstream: 'opus-9' },
+    { role: 'sonnet', via: 'session_remap', providers: ['codex'], upstream: 'gpt-6-sol' },
+    { role: 'haiku', via: 'config', providers: [] },
   ],
+  served: { provider: 'work', upstream: 'sonnet-9', source: 'config', fallback: true, switched: false },
+  targets: [
+    { id: 'claude-gpt-6-sol@codex', provider: 'codex', upstream: 'gpt-6-sol', label: 'gpt-6-sol (codex)', max_input_tokens: 272000 },
+    { id: 'claude-sonnet-9@work', provider: 'work', upstream: 'sonnet-9', label: 'sonnet-9 (work)' },
+  ],
+  providers: [
+    { name: 'work', attempts: 5, answered: 4, failures: 1, skipped: 0, circuit: 'closed', rate_limits: { 'anthropic-ratelimit-unified-5h-utilization': '0.42' } },
+    { name: 'codex', attempts: 2, answered: 2, failures: 0, skipped: 0, circuit: 'open', rate_limits: {} },
+  ],
+  spend: {
+    today: [
+      { provider: 'work', model: 'sonnet-9', input: 1200000, output: 300000, cache_read: 5000000, cache_creation: 0, requests: 9, cost: 4.5 },
+      { provider: 'codex', model: 'gpt-6-sol', input: 800, output: 90, cache_read: 0, cache_creation: 0, requests: 2 },
+    ],
+    month: [],
+  },
+  totals: { today: { input: 1200800, output: 300090, cache_read: 5000000, cache_creation: 0, requests: 11 }, month: { input: 9000000, output: 1, cache_read: 0, cache_creation: 0, requests: 40 }, budget: { state: 'warning', window: 'daily', used: 1500000, limit: 1800000, percent: 83 } },
 })
 
-test('targets are the provider-qualified entries, aliases are left out', () => {
-  const found = parseTargets(models)
-  expect(found.map(item => item.id)).toEqual(['claude-gpt-6-sol@codex', 'claude-sonnet-9@work'])
-  expect(found[0].provider).toBe('codex')
-  expect(found[0].label).toBe('gpt-6-sol (codex)')
+test('an overview becomes routes, targets, providers, spend and totals', () => {
+  const found = parseOverview('abc-123', overview)
+  expect(found.sessionId).toBe('abc-123')
+  expect(found.roles.map(route => route.role)).toEqual(['opus', 'sonnet', 'haiku'])
+  expect(describeRoute(found.roles[1])).toBe('sonnet -> codex (gpt-6-sol)  via session_remap')
+  expect(found.served?.fallback).toBe(true)
+  expect(found.targets.map(item => item.id)).toEqual(['claude-gpt-6-sol@codex', 'claude-sonnet-9@work'])
+  expect(found.providers.map(item => item.name)).toEqual(['work', 'codex'])
+  expect(found.spendToday.length).toBe(2)
+  expect(found.error).toBeUndefined()
 })
 
-test('an unreadable or foreign model list gives no targets', () => {
-  expect(parseTargets('<html>')).toEqual([])
-  expect(parseTargets('{"data":"x"}')).toEqual([])
-  expect(parseTargets('{"data":[{"id":"x@y","display_name":"a\\u001b[31m"}]}')[0].label).toBe('a?[31m')
+test('an unreadable overview is an error, never a half-drawn state', () => {
+  expect(parseOverview('s', '<html>').error).toBeDefined()
+  expect(parseOverview('s', '{"schema_version":2}').error).toContain('version')
+  expect(parseOverview('s', '{}').error).toBeDefined()
 })
 
-test('a route reply becomes a role route', () => {
-  const route = parseRoute('sonnet', '{"role":"sonnet","via":"session_remap","providers":["codex"],"upstream":"gpt-6-sol"}')
-  expect(route).toEqual({ role: 'sonnet', via: 'session_remap', providers: ['codex'], upstream: 'gpt-6-sol' })
-  expect(describeRoute(route)).toBe('sonnet -> codex (gpt-6-sol)  via session_remap')
-  expect(parseRoute('opus', 'nope')).toEqual({ role: 'opus', via: 'unknown', providers: [] })
-})
-
-test('the served view is empty until the session has had a reply', () => {
-  expect(parseServed('{}')).toBeUndefined()
-  expect(parseServed('{"provider":"work","upstream":"m","source":"config","fallback":true,"switched":false}')).toEqual({
-    provider: 'work',
-    upstream: 'm',
-    source: 'config',
-    fallback: true,
-    switched: false,
-  })
+test('numbers, money, spend rows, providers and totals are written for a person', () => {
+  const found = parseOverview('s', overview)
+  expect(compact(999)).toBe('999')
+  expect(compact(1250000)).toBe('1.3M')
+  expect(compact(412345)).toBe('412k')
+  expect(describeSpend(found.spendToday[0])).toBe('work  sonnet-9  1.2M in 300k out 5.0M cached  9 req  $4.50')
+  expect(describeSpend(found.spendToday[1])).toBe('codex  gpt-6-sol  800 in 90 out  2 req  price unknown')
+  expect(describeProvider(found.providers[0])).toBe('work  closed  5 tried, 4 answered, 1 failed  5h limit 42%')
+  expect(describeProvider(found.providers[1])).toBe('codex  open  2 tried, 2 answered, 0 failed')
+  expect(describeTotals(found)).toBe('today 1.5M tokens (11 req)  month 9.0M  budget warning 83% of daily 1.8M')
 })
 
 test('only a loopback http base is a gateway the mod may talk to', () => {
@@ -50,7 +67,7 @@ test('only a loopback http base is a gateway the mod may talk to', () => {
   expect(gatewayRoot('not a url')).toBeUndefined()
 })
 
-const targets = parseTargets(models)
+const targets = parseOverview('abc-123', overview).targets
 
 test('a change becomes an argv list for the llmgate binary, scoped to the session by default', () => {
   expect(invocation('/bin/llmgate', '/c.jsonc', 'abc-123', targets, { role: 'sonnet', target: 'claude-gpt-6-sol@codex', scope: 'session' })).toEqual({

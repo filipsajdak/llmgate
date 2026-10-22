@@ -1,6 +1,6 @@
 # The llmgate mod: control the gateway from inside Claude Code
 
-Status: design (BET-5). Built so far: M0 (the spike) and M1 (the pane with Now and Targets, `mods/llmgate/`). Decisions are the owner's answers of 2026-10-21; facts about what a
+Status: design (BET-5). Built so far: M0 (the spike), M1 (the pane with Now and Targets, `mods/llmgate/`) and most of M2 and M3: `GET /llmgate/overview`, the ledger by provider, the `pricing` table, the captured Anthropic rate-limit headers and the pane's Usage view. Not yet built from M2: the Copilot quota adapter. Decisions are the owner's answers of 2026-10-21; facts about what a
 mod can do come from the mods documentation (https://code.claude.com/docs/en/plugins/mods/overview, `interface`,
 `events`, `api`) and from the `plugin-authoring` types of Claude Code 2.1.306, marked where only documented.
 

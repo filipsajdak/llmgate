@@ -1,14 +1,17 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
-import { describeRoute, gatewayRoot, invocation, parseRoute, parseServed, parseTargets, printable, roles } from './model'
+import { describeProvider, describeRoute, describeSpend, describeTotals, gatewayRoot, invocation, parseOverview, printable, roles } from './model'
 import type { Change, Role, Scope, Snapshot } from './model'
 
 const PANE = 'llmgate'
 const pollMilliseconds = 5000
-const unreadable: Snapshot = { sessionId: '', roles: [], targets: [] }
+const unreadable: Snapshot = { sessionId: '', roles: [], targets: [], providers: [], spendToday: [], spendMonth: [] }
+
+type View = 'now' | 'usage'
 
 let snapshot: Snapshot = unreadable
 let selected: Role = 'sonnet'
+let view: View = 'now'
 let message = ''
 let isOpen = false
 
@@ -18,20 +21,10 @@ async function load($: Engine): Promise<Snapshot> {
   const token = await $.env.get('ANTHROPIC_AUTH_TOKEN')
   const init = token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } }
   const sessionId = String(await $.session.id())
-  const encoded = encodeURIComponent(sessionId)
   try {
-    const [models, served, ...routes] = await Promise.all([
-      $.http.fetch(`${root}/anthropic/v1/models`, init),
-      $.http.fetch(`${root}/llmgate/session?id=${encoded}`, init),
-      ...roles.map(role => $.http.fetch(`${root}/llmgate/route?requested=${role}&session=${encoded}`, init)),
-    ])
-    if (!models.ok) return { ...unreadable, sessionId, error: `the gateway answered ${models.status}` }
-    return {
-      sessionId,
-      targets: parseTargets(models.text),
-      served: parseServed(served.text),
-      roles: roles.map((role, at) => parseRoute(role, routes[at].text)),
-    }
+    const answer = await $.http.fetch(`${root}/llmgate/overview?session=${encodeURIComponent(sessionId)}`, init)
+    if (!answer.ok) return { ...unreadable, sessionId, error: `the gateway answered ${answer.status}` }
+    return parseOverview(sessionId, answer.text)
   } catch (error) {
     return { ...unreadable, sessionId, error: printable(`the gateway did not answer: ${String(error)}`) }
   }
@@ -65,7 +58,7 @@ function done(what: Change): string {
 
 function summary(): string {
   if (snapshot.error) return snapshot.error
-  return snapshot.roles.map(describeRoute).join('\n')
+  return [...snapshot.roles.map(describeRoute), describeTotals(snapshot)].join('\n')
 }
 
 export const register: Register = on => {
@@ -93,12 +86,52 @@ export const register: Register = on => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const redraw = () => $.ui.invalidate('ui.render')
     const apply = (scope: Scope, target: string) => () => void change($, { role: selected, target, scope })
-    const here = snapshot.targets.filter(item => item.id !== '')
+    const show = (next: View) => () => {
+      view = next
+      redraw()
+    }
+
+    const header = (
+      <Box flexDirection="column">
+        <Box flexDirection="row" columnGap={2}>
+          <Text bold>llmgate {snapshot.sessionId ? snapshot.sessionId.slice(0, 8) : ''}</Text>
+          <Button key="view-now" label="Now" hotkey="n" plain dimColor={view !== 'now'} onPress={show('now')} />
+          <Button key="view-usage" label="Usage" hotkey="u" plain dimColor={view !== 'usage'} onPress={show('usage')} />
+          <Button key="refresh" label="refresh" hotkey="r" plain onPress={() => void refresh($)} />
+        </Box>
+        {snapshot.error && <Text color="red">{snapshot.error}</Text>}
+      </Box>
+    )
+
+    if (view === 'usage') {
+      return (
+        <Box flexDirection="column">
+          {header}
+          <Text bold>{describeTotals(snapshot)}</Text>
+          <Text> </Text>
+          <Text bold>Today</Text>
+          {snapshot.spendToday.length === 0 && <Text dimColor>no requests yet today</Text>}
+          {snapshot.spendToday.map(row => (
+            <Text>{describeSpend(row)}</Text>
+          ))}
+          <Text> </Text>
+          <Text bold>This month</Text>
+          {snapshot.spendMonth.length === 0 && <Text dimColor>no requests this month</Text>}
+          {snapshot.spendMonth.map(row => (
+            <Text>{describeSpend(row)}</Text>
+          ))}
+          <Text> </Text>
+          <Text bold>Providers</Text>
+          {snapshot.providers.map(item => (
+            <Text>{describeProvider(item)}</Text>
+          ))}
+        </Box>
+      )
+    }
 
     return (
       <Box flexDirection="column">
-        <Text bold>llmgate {snapshot.sessionId ? `session ${snapshot.sessionId.slice(0, 8)}` : ''}</Text>
-        {snapshot.error && <Text color="red">{snapshot.error}</Text>}
+        {header}
         {snapshot.served && (
           <Text>
             last reply: {snapshot.served.provider} {snapshot.served.upstream}
@@ -125,18 +158,15 @@ export const register: Register = on => {
             />
           ))}
         </Box>
-        {here.length === 0 && <Text dimColor>No targets offered; add offer to a provider in the llmgate config.</Text>}
-        {here.map(target => (
+        {snapshot.targets.length === 0 && <Text dimColor>No targets offered; add offer to a provider in the llmgate config.</Text>}
+        {snapshot.targets.map(target => (
           <Box flexDirection="row" columnGap={2}>
             <Button key={`use-${target.id}`} label={`use for ${selected}`} onPress={apply('session', target.id)} />
             <Button key={`default-${target.id}`} label="make default" onPress={apply('global', target.id)} />
             <Text>{target.label}</Text>
           </Box>
         ))}
-        <Box flexDirection="row" columnGap={2}>
-          <Button key="clear" label="clear session override" hotkey="c" onPress={() => void change($, { role: selected, clear: true, scope: 'session' })} />
-          <Button key="refresh" label="refresh" hotkey="r" onPress={() => void refresh($)} />
-        </Box>
+        <Button key="clear" label="clear session override" hotkey="c" onPress={() => void change($, { role: selected, clear: true, scope: 'session' })} />
         {message && <Text dimColor>{message}</Text>}
       </Box>
     )

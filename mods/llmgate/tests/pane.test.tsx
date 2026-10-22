@@ -8,20 +8,28 @@ const PANE = {
   props: { title: 'llmgate', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
 } as const
 
-const models = JSON.stringify({
-  data: [
-    { id: 'opus', display_name: 'opus' },
-    { id: 'claude-gpt-6-sol@codex', display_name: 'gpt-6-sol (codex)', description: 'served by the provider codex' },
-    { id: 'claude-sonnet-9@work', display_name: 'sonnet-9 (work)', description: 'served by the provider work' },
-  ],
-})
+const overview = (sonnet: string) =>
+  JSON.stringify({
+    schema_version: 1,
+    roles: [
+      { role: 'opus', via: 'config', providers: ['work'], upstream: 'opus-9' },
+      { role: 'sonnet', via: 'config', providers: [sonnet], upstream: 'sonnet-9' },
+      { role: 'haiku', via: 'config', providers: ['work'] },
+    ],
+    served: { provider: 'work', upstream: 'sonnet-9', source: 'config', fallback: false, switched: true },
+    targets: [
+      { id: 'claude-gpt-6-sol@codex', provider: 'codex', upstream: 'gpt-6-sol', label: 'gpt-6-sol (codex)' },
+      { id: 'claude-sonnet-9@work', provider: 'work', upstream: 'sonnet-9', label: 'sonnet-9 (work)' },
+    ],
+    providers: [{ name: 'work', attempts: 3, answered: 3, failures: 0, skipped: 0, circuit: 'closed', rate_limits: {} }],
+    spend: { today: [{ provider: 'work', model: 'sonnet-9', input: 2000, output: 100, cache_read: 0, cache_creation: 0, requests: 3, cost: 0.01 }], month: [] },
+    totals: { today: { input: 2000, output: 100, cache_read: 0, cache_creation: 0, requests: 3 }, month: { input: 2000, output: 100, cache_read: 0, cache_creation: 0, requests: 3 }, budget: { state: 'ok', window: '', used: 0, limit: 0, percent: 0 } },
+  })
 
-function gateway(on: Parameters<Parameters<typeof test>[1]>[1], calls: string[], routeFor: (url: string) => string) {
+function gateway(on: Parameters<Parameters<typeof test>[1]>[1], calls: string[], sonnet = 'work') {
   on('http.fetch', ($, e) => {
     calls.push(e.url)
-    if (e.url.includes('/anthropic/v1/models')) return { value: { status: 200, ok: true, headers: {}, text: models } }
-    if (e.url.includes('/llmgate/session')) return { value: { status: 200, ok: true, headers: {}, text: '{"provider":"work","upstream":"sonnet-9","source":"config","fallback":false,"switched":true}' } }
-    return { value: { status: 200, ok: true, headers: {}, text: routeFor(e.url) } }
+    return { value: { status: 200, ok: true, headers: {}, text: overview(sonnet) } }
   })
 }
 
@@ -31,7 +39,7 @@ test('the command opens the pane, which shows the routes, the last reply and the
   mock.env(on, env)
   mock.clock(on)
   const fetched: string[] = []
-  gateway(on, fetched, () => '{"role":"sonnet","via":"config","providers":["work"],"upstream":"sonnet-9"}')
+  gateway(on, fetched)
   on('command.register', () => ({ value: undefined }))
   on('session.id', () => ({ value: 'abc-123' }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -46,14 +54,14 @@ test('the command opens the pane, which shows the routes, the last reply and the
   expect(await ui.find({ type: 'Text', text: /sonnet -> work \(sonnet-9\)  via config/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'gpt-6-sol (codex)' })).toBeDefined()
   expect(await ui.find({ key: 'use-claude-gpt-6-sol@codex' })).toBeDefined()
-  expect(fetched.some(url => url.includes('session=abc-123'))).toBe(true)
+  expect(fetched).toEqual(['http://127.0.0.1:9482/llmgate/overview?session=abc-123'])
   await ui.unmount()
 })
 
 test('use for sonnet runs llmgate by argv for this session and make default runs it without a session', async ($, on) => {
   mock.env(on, env)
   mock.clock(on)
-  gateway(on, [], () => '{"role":"sonnet","via":"config","providers":["work"]}')
+  gateway(on, [])
   const runs: string[][] = []
   on('process.run', (_, e) => {
     runs.push([...e.argv])
@@ -81,7 +89,7 @@ test('use for sonnet runs llmgate by argv for this session and make default runs
 test('a failing llmgate is reported in the pane and the choice of role follows the buttons', async ($, on) => {
   mock.env(on, env)
   mock.clock(on)
-  gateway(on, [], () => '{}')
+  gateway(on, [])
   on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: 'llmgate: the gateway is down\u001b[2J' } }))
   on('command.register', () => ({ value: undefined }))
   on('session.id', () => ({ value: 'abc-123' }))
@@ -95,6 +103,28 @@ test('a failing llmgate is reported in the pane and the choice of role follows t
   expect(await ui.find({ type: 'Button', key: 'use-claude-gpt-6-sol@codex' })).toBeDefined()
   await ui.press({ key: 'clear' })
   expect(await ui.find({ type: 'Text', text: 'llmgate: llmgate: the gateway is down?[2J' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the Usage view shows the totals, the spend of today with its price, and the providers', async ($, on) => {
+  mock.env(on, env)
+  mock.clock(on)
+  gateway(on, [])
+  on('command.register', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc-123' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'llmgate', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'view-usage' })
+
+  expect(await ui.find({ type: 'Text', text: /today 2k tokens \(3 req\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'work  sonnet-9  2k in 100 out  3 req  $0.01' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'work  closed  3 tried, 3 answered, 0 failed' })).toBeDefined()
+  await ui.press({ key: 'view-now' })
+  expect(await ui.find({ key: 'use-claude-gpt-6-sol@codex' })).toBeDefined()
   await ui.unmount()
 })
 
