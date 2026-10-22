@@ -94,6 +94,14 @@
   // and ids picked in /model still win.
   // "routes_by_class": { "compaction": ["claude-gpt-6-luna@codex", "copilot"] },
 
+  // Subagent types the llmgate mod registers in Claude Code, each bound to a target on any provider
+  // (Claude can then delegate to it by name).
+  // "agents": { "reviewer": { "target": "claude-gpt-6-sol@codex", "description": "Reviews a change as a second opinion", "prompt": "Review the change and list defects.", "tools": ["Read", "Grep"] } },
+
+  // Per subagent type (built-in such as Explore, or your own) the target it runs on; the mod applies it
+  // when the subagent starts and it outranks the model Claude names.
+  // "spawn_rules": { "Explore": "claude-gpt-6-luna@codex" },
+
   // A provider that fails before any response byte reaches Claude Code (connect error, no response head
   // in time, 5xx, 429) is retried on the next one of the role's list; after failures consecutive
   // failures it is skipped for cooldown.

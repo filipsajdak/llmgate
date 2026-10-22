@@ -87,6 +87,39 @@ const suite config_edit_suite = [] {
         expect(ce::alias_names("", "").empty());
     };
 
+    "capability_agents_and_spawn_rules_become_paths_with_defaults_for_the_description_and_prompt"_test = [] {
+        auto const agent = ce::plan(ask(ce::group::agents, {"set", "reviewer", "claude-gpt-6-sol@codex"}, {.description = "A second opinion", .prompt = "Review it."}));
+        auto const plain = ce::plan(ask(ce::group::agents, {"set", "helper", "claude-x@a"}));
+        auto const removed = ce::plan(ask(ce::group::agents, {"remove", "reviewer"}));
+        auto const rule = ce::plan(ask(ce::group::rules, {"set", "Explore", "claude-gpt-6-luna@codex"}));
+        auto const cleared = ce::plan(ask(ce::group::rules, {"clear", "Explore"}));
+
+        expect(agent.has_value() && agent->path == std::vector<std::string>{"agents", "reviewer"});
+        expect(agent->value.value() == R"({"target":"claude-gpt-6-sol@codex","description":"A second opinion","prompt":"Review it."})") << agent->value.value_or("");
+        expect(plain.has_value() && plain->value->contains(R"("description":"Runs on claude-x@a")") && plain->value->contains("sub-agent"));
+        expect(removed.has_value() && removed->path == std::vector<std::string>{"agents", "reviewer"} && !removed->value);
+        expect(rule.has_value() && rule->path == std::vector<std::string>{"spawn_rules", "Explore"} && rule->value == R"("claude-gpt-6-luna@codex")");
+        expect(cleared.has_value() && cleared->path == std::vector<std::string>{"spawn_rules", "Explore"} && !cleared->value);
+    };
+
+    "limit_agent_and_rule_words_must_have_the_shape_and_plain_names"_test = [] {
+        expect(!ce::plan(ask(ce::group::agents, {"set", "reviewer"})).has_value());
+        expect(!ce::plan(ask(ce::group::agents, {"set", "bad name", "claude-x@a"})).has_value());
+        expect(!ce::plan(ask(ce::group::agents, {"bogus", "x"})).has_value());
+        expect(!ce::plan(ask(ce::group::rules, {"set", "Explore"})).has_value());
+        expect(!ce::plan(ask(ce::group::rules, {"set", "../x", "claude-x@a"})).has_value());
+    };
+
+    "capability_a_rule_to_an_unknown_target_is_refused_when_applied_to_the_whole_config"_test = [] {
+        constexpr std::string_view text = R"({ "listen": "127.0.0.1:1", "providers": { "a": { "base_url": "http://127.0.0.1:2", "offer": ["claude-x"] } } })";
+
+        auto const good = ce::apply(text, *ce::plan(ask(ce::group::rules, {"set", "Explore", "claude-x@a"})));
+        auto const bad = ce::apply(text, *ce::plan(ask(ce::group::rules, {"set", "Explore", "claude-nope@a"})));
+
+        expect(good.has_value() && good->text.contains("spawn_rules")) << (good ? "" : good.error());
+        expect(!bad.has_value() && bad.error().contains("Explore")) << (bad ? "" : bad.error());
+    };
+
     "limit_unclear_edit_words_are_refused_with_the_shape_to_use"_test = [] {
         expect(!ce::plan(ask(ce::group::routes, {"set", "sonnet"})).has_value());
         expect(!ce::plan(ask(ce::group::routes, {"bogus"})).has_value());

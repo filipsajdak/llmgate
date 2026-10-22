@@ -61,6 +61,23 @@ const suite recipes_suite = [] {
         expect(compaction != planned.edits.end() && compaction->value.value() == R"(["claude-gpt-6-luna@codex"])");
     };
 
+    "capability_second_opinion_installs_a_reviewer_agent_on_the_first_other_vendor_target"_test = [] {
+        auto const planned = rc::plan(rc::find("second-opinion").value(), three_providers());
+
+        auto const reviewer = std::ranges::find_if(planned.edits, [](rc::edit const& item) { return item.path.size() == 2 && item.path.front() == "agents" && item.path.back() == "reviewer"; });
+        expect(planned.missing.empty() && reviewer != planned.edits.end());
+        expect(reviewer->value->contains(R"("target":"claude-gpt-6-sol@codex")") && reviewer->value->contains("Review")) << reviewer->value.value_or("");
+    };
+
+    "limit_second_opinion_needs_a_non_claude_provider_and_says_which_kinds_would_do"_test = [] {
+        gw::config only_claude;
+        only_claude.providers["anthropic"] = {.base_url = "https://api.anthropic.com", .preset = gw::preset_kind::anthropic, .forward_credentials = true};
+
+        auto const planned = rc::plan(rc::find("second-opinion").value(), only_claude);
+
+        expect(planned.missing == std::vector<std::string>{"chatgpt or copilot"} && planned.edits.empty());
+    };
+
     "limit_a_recipe_names_the_kinds_it_misses_and_changes_nothing_when_a_required_one_is_absent"_test = [] {
         gw::config only_claude;
         only_claude.providers["anthropic"] = {.base_url = "https://api.anthropic.com", .preset = gw::preset_kind::anthropic, .forward_credentials = true};

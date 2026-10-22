@@ -973,6 +973,41 @@ const suite gateway_suite = [] {
         expect(at != std::string::npos && body.substr(at, 200).contains(R"("requests":2)")) << body;
     };
 
+    "capability_agents_and_spawn_rules_are_read_from_the_config_and_reported_in_the_overview"_test = [] {
+        duo d{[](gateway::config& built) {
+            built.agents["reviewer"] = {.target = "claude-model-b@b", .description = "A second opinion", .prompt = "Review the change.", .tools = {"Read", "Grep"}};
+            built.spawn_rules["Explore"] = "claude-model-b@b";
+        }};
+        auto request = messages_request("");
+        request.method = "GET";
+        request.target = "/llmgate/overview";
+
+        auto const body = d.ask(std::move(request)).body;
+
+        expect(body.contains(R"("name":"reviewer")") && body.contains(R"("target":"claude-model-b@b")") && body.contains(R"("description":"A second opinion")")) << body;
+        expect(body.contains(R"("tools":["Read","Grep"])") && body.contains(R"("agent":"Explore")")) << body;
+    };
+
+    "limit_an_agent_or_a_spawn_rule_must_name_a_catalogue_target_and_plain_names"_test = [] {
+        auto const make = [](std::string_view const name, std::string_view const target) {
+            gateway::config built;
+            built.providers["a"] = {.base_url = "http://127.0.0.1:1", .offer = {"claude-x"}};
+            built.agents[std::string{name}] = {.target = std::string{target}, .description = "d", .prompt = "p"};
+            built.spawn_rules[std::string{name}] = std::string{target};
+            return built;
+        };
+
+        expect(gateway::config_problem(make("reviewer", "claude-x@a")).empty());
+        expect(gateway::config_problem(make("reviewer", "claude-x@zzz")).contains("reviewer"));
+        expect(gateway::config_problem(make("bad name", "claude-x@a")).contains("bad name"));
+        gateway::config long_prompt = make("reviewer", "claude-x@a");
+        long_prompt.agents["reviewer"].prompt = std::string(gateway::longest_agent_prompt + 1, 'p');
+        expect(gateway::config_problem(long_prompt).contains("prompt"));
+        gateway::config bad_tool = make("reviewer", "claude-x@a");
+        bad_tool.agents["reviewer"].tools = {"Read", "rm -rf"};
+        expect(gateway::config_problem(bad_tool).contains("tool"));
+    };
+
     "limit_a_class_route_with_an_unknown_class_provider_or_target_is_a_config_problem"_test = [] {
         auto const make = [](std::string_view const klass, std::string_view const entry) {
             gateway::config built;

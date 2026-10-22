@@ -122,4 +122,13 @@ run provider add late --base-url http://127.0.0.1:9 --auth none --offer m-late -
 label="provider add refreshes the picker rows of the profile at once"
 check sh -c "grep -q 'claude-m-late@late' '$work/home/.claude-llmgate/settings.json'"
 
+run agents set reviewer claude-m-late@late --description "A second opinion" --yes > /dev/null 2>&1 || true
+run rules set Explore claude-m-late@late --yes > /dev/null 2>&1 || true
+label="agents set and rules set write an agent type and a spawn rule and the overview reports them"
+check sh -c "grep -q '\"reviewer\"' '$work/config.jsonc' && grep -q '\"Explore\": \"claude-m-late@late\"' '$work/config.jsonc'"
+check sh -c "'$binary' --config '$work/config.jsonc' route > /dev/null 2>&1; true"
+label="a rule to a target that does not exist is refused and changes nothing"
+cp "$work/config.jsonc" "$work/pre-rule.jsonc"
+check sh -c "! '$binary' --config '$work/config.jsonc' rules set Explore claude-nope@late --yes > '$work/rule.out' 2>&1 && grep -q Explore '$work/rule.out' && cmp -s '$work/config.jsonc' '$work/pre-rule.jsonc'"
+
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }

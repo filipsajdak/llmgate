@@ -171,6 +171,10 @@ std::string auth_problem(std::string const& name, provider_config const& item) {
     return auth.kind == auth_kind::header ? header_auth_problem(name, auth) : std::string{};
 }
 
+bool plain_name(std::string_view const name) {
+    return !name.empty() && name.size() <= 64 && std::ranges::all_of(name, [](char const c) { return control::label_character(c); });
+}
+
 std::string label_problem(std::string const& name, provider_config const& item) {
     auto const rule = std::format("a label is 1 to {} letters, digits, - or _", control::longest_label);
     if (std::ranges::any_of(item.labels, [](std::string const& label) { return !control::valid_label(label); })) {
@@ -239,6 +243,37 @@ std::string class_route_problem(config const& settings, std::map<std::string, pr
     return {};
 }
 
+std::string agent_problem(std::string const& name, agent_config const& item, std::set<std::string> const& ids) {
+    if (!ids.contains(item.target)) {
+        return std::format("agents {}: target '{}' is not a target id (see llmgate targets)", plain(name), plain(item.target));
+    }
+    if (item.prompt.size() > longest_agent_prompt || item.description.size() > longest_agent_description) {
+        return std::format("agents {}: the prompt is at most {} characters and the description {}", plain(name), longest_agent_prompt, longest_agent_description);
+    }
+    if (item.tools.size() > most_agent_tools || !std::ranges::all_of(item.tools, [](std::string const& tool) { return plain_name(tool); })) {
+        return std::format("agents {}: tools are plain tool names, at most {}", plain(name), most_agent_tools);
+    }
+    return {};
+}
+
+std::string agents_problem(config const& settings, std::map<std::string, provider_config> const& providers) {
+    auto const ids = target_ids_of(providers);
+    for (auto const& [name, item] : settings.agents) {
+        if (!plain_name(name)) {
+            return std::format("agents: '{}' is not a plain agent name (letters, digits, - and _)", plain(name));
+        }
+        if (auto problem = agent_problem(name, item, ids); !problem.empty()) {
+            return problem;
+        }
+    }
+    for (auto const& [agent, target] : settings.spawn_rules) {
+        if (!plain_name(agent) || !ids.contains(target)) {
+            return std::format("spawn_rules {}: the agent type is plain and the target must be a target id", plain(agent));
+        }
+    }
+    return {};
+}
+
 std::string config_problem(config const& settings) {
     auto const providers = effective_providers(settings);
     if (providers.empty()) {
@@ -250,6 +285,9 @@ std::string config_problem(config const& settings) {
         }
     }
     if (auto problem = class_route_problem(settings, providers); !problem.empty()) {
+        return problem;
+    }
+    if (auto problem = agents_problem(settings, providers); !problem.empty()) {
         return problem;
     }
     return selection::route_problem(role_routes(settings), provider_names(providers));
@@ -503,6 +541,19 @@ struct overview_provider {
     bool ready = true;
 };
 
+struct overview_agent {
+    std::string name{};
+    std::string target{};
+    std::string description{};
+    std::string prompt{};
+    std::vector<std::string> tools{};
+};
+
+struct overview_rule {
+    std::string agent{};
+    std::string target{};
+};
+
 struct overview_class_spend {
     std::vector<usage::class_total> today{};
     std::vector<usage::class_total> month{};
@@ -520,6 +571,8 @@ struct overview_document {
     std::optional<control::served> served{};
     std::vector<overview_target> targets{};
     std::vector<overview_provider> providers{};
+    std::vector<overview_agent> agents{};
+    std::vector<overview_rule> spawn_rules{};
     overview_spend spend{};
     usage::summary totals{};
 };
@@ -1062,6 +1115,15 @@ private:
         return {.status = 200, .body = R"({"status":"ok"})"};
     }
 
+    void add_agents(detail::overview_document& document) const {
+        for (auto const& [name, item] : settings_.agents) {
+            document.agents.push_back({.name = name, .target = item.target, .description = item.description, .prompt = item.prompt, .tools = item.tools});
+        }
+        for (auto const& [agent, target] : settings_.spawn_rules) {
+            document.spawn_rules.push_back({.agent = agent, .target = target});
+        }
+    }
+
     std::string session_body(std::string_view const target) const {
         auto const found = served_.items.find(routing::query_value(target, "id"));
         return found == served_.items.end() ? std::string{"{}"} : json::write(json::to_value(found->second));
@@ -1119,6 +1181,7 @@ private:
         document.spend = {.today = usage::spend_between(ledger_, today, today, settings_.pricing),
                           .month = usage::spend_between(ledger_, usage::first_day_of_month(today), today, settings_.pricing),
                           .by_class = {.today = usage::classes_between(ledger_, today, today), .month = usage::classes_between(ledger_, usage::first_day_of_month(today), today)}};
+        add_agents(document);
         document.totals = usage::summary_of(ledger_, settings_.usage.budget, clock_());
         return json::write(json::to_value(document));
     }

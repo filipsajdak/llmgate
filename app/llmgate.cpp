@@ -335,7 +335,9 @@ std::expected<config_edit::change, std::string> planned_edit(arguments::options 
                               .auth = chosen.auth,
                               .secret = chosen.secret,
                               .ghe_host = chosen.ghe_host,
-                              .offer = std::move(*offer)});
+                              .offer = std::move(*offer),
+                              .description = chosen.description,
+                              .prompt = chosen.prompt});
 }
 
 void refresh_picker(commands::context const& where, std::filesystem::path const& config_file) {
@@ -578,6 +580,8 @@ constexpr auto handlers = std::to_array<std::pair<arguments::command, command_ha
     {arguments::command::config, &edit_command},
     {arguments::command::secret, &secret_command},
     {arguments::command::recipe, &recipe_command},
+    {arguments::command::agents, &edit_command},
+    {arguments::command::rules, &edit_command},
     {arguments::command::statusline, &statusline_command},
 });
 

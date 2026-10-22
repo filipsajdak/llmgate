@@ -39,6 +39,14 @@ struct class_target {
     std::string via_role{};
 };
 
+struct agent_def {
+    std::string name{};
+    std::vector<provider_kind> kinds{};
+    std::string via_role{};
+    std::string description{};
+    std::string prompt{};
+};
+
 struct recipe {
     std::string id{};
     std::string title{};
@@ -49,6 +57,7 @@ struct recipe {
     std::string tokens{};
     std::vector<role_order> roles{};
     std::vector<class_target> classes{};
+    std::vector<agent_def> agents{};
 };
 
 struct planned {
@@ -102,12 +111,17 @@ std::vector<recipe> built_in() {
          .classes = cheap_background},
         {.id = "second-opinion",
          .title = "A second opinion",
-         .summary = "Main roles on Claude, with a different vendor available for review (the reviewer agent arrives with the agent types).",
+         .summary = "Main roles on Claude, with a reviewer agent on another vendor's model that Claude can hand a change to.",
          .pros = {"a different vendor catches different mistakes (reported: errors correlate within one model family)"},
-         .cons = {"a review costs extra tokens and time", "the reviewer agent type is not installed yet"},
+         .cons = {"a review costs extra tokens and time", "the reviewer only runs when Claude (or you) delegates to it"},
          .needs = {claude},
          .tokens = "about 1.3x",
-         .roles = routed(claude_first, claude_first, claude_first)},
+         .roles = routed(claude_first, claude_first, claude_first),
+         .agents = {{.name = "reviewer",
+                     .kinds = {chatgpt, copilot},
+                     .via_role = "sonnet",
+                     .description = "Reviews a change or a plan as an independent second opinion",
+                     .prompt = "You are an independent reviewer on a different model. Read the change or plan you are given, list concrete defects and risks with file and line where you can, and say what you would check next. Do not rewrite the work."}}},
         {.id = "best-per-job",
          .title = "The best model for each job",
          .summary = "The strongest model plans, a cheaper one executes, haiku and background work use the cheap tier.",
@@ -173,6 +187,27 @@ void add_role_edits(planned& out, recipe const& wanted, std::map<std::string, ga
     }
 }
 
+std::optional<std::string> agent_target(std::map<std::string, gateway::provider_config> const& providers, agent_def const& wanted) {
+    for (auto const kind : wanted.kinds) {
+        if (auto const target = target_of(providers, {.kind = kind, .via_role = wanted.via_role})) {
+            return target;
+        }
+    }
+    return std::nullopt;
+}
+
+void add_agent_edits(planned& out, recipe const& wanted, std::map<std::string, gateway::provider_config> const& providers) {
+    for (auto const& item : wanted.agents) {
+        auto const target = agent_target(providers, item);
+        if (!target) {
+            out.missing.push_back(kind_name(item.kinds.front()) + " or " + kind_name(item.kinds.back()));
+            continue;
+        }
+        out.edits.push_back({.path = {"agents", item.name},
+                             .value = json::write(json::make_object({{"target", json::make_string(*target)}, {"description", json::make_string(item.description)}, {"prompt", json::make_string(item.prompt)}}))});
+    }
+}
+
 void add_class_edits(planned& out, recipe const& wanted, std::map<std::string, gateway::provider_config> const& providers) {
     for (auto const& item : wanted.classes) {
         if (auto const target = target_of(providers, item)) {
@@ -199,6 +234,10 @@ std::optional<recipe> find(std::string_view const id) {
 planned plan(recipe const& wanted, gateway::config const& settings) {
     auto const providers = gateway::effective_providers(settings);
     planned out{.missing = detail::missing_kinds(wanted, providers)};
+    if (!out.missing.empty()) {
+        return out;
+    }
+    detail::add_agent_edits(out, wanted, providers);
     if (!out.missing.empty()) {
         return out;
     }

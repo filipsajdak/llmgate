@@ -9,7 +9,7 @@ import llmgate.reflect;
 
 export namespace llmgate::config_edit {
 
-enum class group { routes, models, config, provider };
+enum class group { routes, models, config, provider, agents, rules };
 
 struct request {
     group which = group::config;
@@ -22,6 +22,8 @@ struct request {
     std::string secret{};
     std::string ghe_host{};
     std::string offer{};
+    std::string description{};
+    std::string prompt{};
 };
 
 struct change {
@@ -94,6 +96,32 @@ std::optional<std::string> dotted_problem(std::vector<std::string> const& path) 
 std::string json_or_string(std::string const& word) {
     auto const parsed = json::parse(word, {.jsonc = false});
     return parsed ? word : json::write(json::make_string(word));
+}
+
+constexpr std::string_view default_agent_prompt = "You are a sub-agent. Do the task you are given and reply with your findings.";
+
+planned agents_plan(request const& given) {
+    auto const& words = given.words;
+    if (words.size() == 2 && words[0] == "remove") {
+        return change{.path = {"agents", words[1]}};
+    }
+    if (words.size() != 3 || words[0] != "set" || !plain_name(words[1])) {
+        return usage("agents set NAME TARGET [--description TEXT] [--prompt TEXT] | agents remove NAME");
+    }
+    auto const description = given.description.empty() ? std::format("Runs on {}", words[2]) : given.description;
+    auto const prompt = given.prompt.empty() ? std::string{default_agent_prompt} : given.prompt;
+    return change{.path = {"agents", words[1]},
+                  .value = json::write(json::make_object({{"target", json::make_string(words[2])}, {"description", json::make_string(description)}, {"prompt", json::make_string(prompt)}}))};
+}
+
+planned rules_plan(std::vector<std::string> const& words) {
+    if (words.size() == 2 && words[0] == "clear") {
+        return change{.path = {"spawn_rules", words[1]}};
+    }
+    if (words.size() != 3 || words[0] != "set" || !plain_name(words[1])) {
+        return usage("rules set AGENT TARGET | rules clear AGENT  (AGENT is a subagent type such as Explore)");
+    }
+    return change{.path = {"spawn_rules", words[1]}, .value = json::write(json::make_string(words[2]))};
 }
 
 planned config_plan(std::vector<std::string> const& words) {
@@ -315,6 +343,8 @@ std::expected<change, std::string> plan(request const& given) {
         case group::models: return detail::models_plan(given.words);
         case group::config: return detail::config_plan(given.words);
         case group::provider: return detail::provider_plan(given);
+        case group::agents: return detail::agents_plan(given);
+        case group::rules: return detail::rules_plan(given.words);
     }
     return std::unexpected{"unknown edit group"};
 }

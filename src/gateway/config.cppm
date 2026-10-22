@@ -142,6 +142,17 @@ struct provider_config {
     std::map<std::string, std::string> models{};
 };
 
+constexpr std::size_t longest_agent_prompt = 4000;
+constexpr std::size_t longest_agent_description = 240;
+constexpr std::size_t most_agent_tools = 24;
+
+struct agent_config {
+    [[= reflect::doc{"Target id (claude-NAME@PROVIDER) the agent runs on; llmgate lists it with llmgate targets."}]] [[= reflect::example{R"("claude-gpt-6-sol@codex")"}]] std::string target{};
+    [[= reflect::doc{"When Claude should hand work to this agent: the line Claude reads in its list of agent types."}]] std::string description{};
+    [[= reflect::doc{"The agent's system prompt."}]] std::string prompt{};
+    [[= reflect::doc{"Tools the agent may call, by name; empty means every tool the session has."}]] [[= reflect::example{R"(["Read", "Grep", "Glob"])"}]] [[= reflect::commented]] std::vector<std::string> tools{};
+};
+
 struct fallback_config {
     [[= reflect::doc{"Consecutive failures after which a provider is skipped."}]] unsigned failures = selection::default_failure_threshold;
     [[= reflect::doc{"How long a skipped provider stays skipped; then one request probes it."}]]
@@ -189,6 +200,11 @@ struct config {
     [[= reflect::commented]] std::map<std::string, std::vector<std::string>> routes{};
     [[= reflect::doc{"Per request class (subagent, workflow, compaction, auxiliary) the providers or target ids (claude-NAME@PROVIDER) to try in order, instead of the role's list. A target id names the model too. Claude Code sends the class with CLAUDE_CODE_GATEWAY_HINT_HEADERS=1, which llmgate claude sets. Pins and ids picked in /model still win."}]]
     [[= reflect::example{R"({ "compaction": ["claude-gpt-6-luna@codex", "copilot"] })"}]] [[= reflect::commented]] std::map<std::string, std::vector<std::string>> routes_by_class{};
+    [[= reflect::doc{"Subagent types the llmgate mod registers in Claude Code, each bound to a target on any provider (Claude can then delegate to it by name)."}]]
+    [[= reflect::example{R"({ "reviewer": { "target": "claude-gpt-6-sol@codex", "description": "Reviews a change as a second opinion", "prompt": "Review the change and list defects.", "tools": ["Read", "Grep"] } })"}]]
+    [[= reflect::commented]] std::map<std::string, agent_config> agents{};
+    [[= reflect::doc{"Per subagent type (built-in such as Explore, or your own) the target it runs on; the mod applies it when the subagent starts and it outranks the model Claude names."}]]
+    [[= reflect::example{R"({ "Explore": "claude-gpt-6-luna@codex" })"}]] [[= reflect::commented]] std::map<std::string, std::string> spawn_rules{};
     [[= reflect::doc{"A provider that fails before any response byte reaches Claude Code (connect error, no response head in time, 5xx, 429) is retried on the next one of the role's list; after failures consecutive failures it is skipped for cooldown."}]]
     fallback_config fallback{};
     [[= reflect::doc{"Time limits of the gateway."}]] timeouts time{};
