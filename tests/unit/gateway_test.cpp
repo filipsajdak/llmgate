@@ -1552,6 +1552,27 @@ const suite gateway_suite = [] {
         expect(!body.contains("token-b") && !body.contains("127.0.0.1")) << body;
     };
 
+    "capability_the_overview_describes_each_provider_with_labels_auth_and_whether_it_is_ready"_test = [] {
+        duo d{[](gateway::config& built) {
+                  built.providers["a"].labels = {"private"};
+                  built.providers["b"].auth = {.kind = gateway::auth_kind::header, .header = "api-key"};
+              },
+              ""};
+        auto request = messages_request("");
+        request.method = "GET";
+        request.target = "/llmgate/overview";
+
+        auto const body = d.ask(std::move(request)).body;
+        auto const a = body.find(R"("name":"a")");
+        auto const b = body.find(R"("name":"b")");
+
+        expect(a != std::string::npos && b != std::string::npos) << body;
+        auto const first = body.substr(a, b - a);
+        auto const second = body.substr(b);
+        expect(first.contains(R"("labels":["private"])") && first.contains(R"("auth":"bearer")") && first.contains(R"("ready":false)")) << first;
+        expect(second.contains(R"("auth":"header")") && second.contains(R"("ready":true)") && second.contains(R"("protocol":"anthropic")")) << second;
+    };
+
     "limit_an_unpriced_model_has_no_cost_in_the_overview_and_a_quiet_gateway_has_empty_spend"_test = [] {
         duo d;
         auto request = messages_request("");

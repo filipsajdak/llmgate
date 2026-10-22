@@ -130,6 +130,8 @@ public:
 
     void rejected() noexcept override { stale_ = true; }
 
+    bool configured() const override { return load_tokens(settings_.token_file).has_value(); }
+
     int refreshes() const noexcept { return refreshes_; }
 
 private:

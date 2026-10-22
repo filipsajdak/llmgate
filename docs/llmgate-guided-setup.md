@@ -117,6 +117,13 @@ cost and time per solved task, paired bootstrap, a judge from a provider absent 
 | A3 | The wizard for provider kinds: guided form, secret prompt that recommends the most secure store, sign-in link and code through `$.process.spawn`, test | `claude plugin test`, scripted journey |
 | A4 | `llmgate provider import mic`: the local-gateway `config.yaml` as a reference for the mic provider's model list | unit |
 
+## Finding: the pane's Input has no mask
+
+`InputProps` of the 2.1.306 types has no password or mask property, so a secret typed into a pane field would be drawn
+in clear. The wizard therefore never asks for a key in the pane: it writes the provider with `--secret
+file:~/.config/llmgate/secrets/NAME.key` and tells the person to type `! llmgate secret set NAME`, which reads the
+value hidden in the terminal and stores it at mode 0600.
+
 ## Open questions
 
 1. Which endpoint, if any, reports Copilot credit use for the stored token (G9).

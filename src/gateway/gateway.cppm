@@ -268,11 +268,14 @@ public:
     virtual async::task<std::expected<std::string, std::error_code>> bearer() = 0;
     virtual void rejected() noexcept {}
     virtual std::optional<std::string> endpoint() const { return std::nullopt; }
+    virtual bool configured() const { return true; }
 };
 
 class static_credential final : public credential {
 public:
     explicit static_credential(std::string token) : token_{std::move(token)} {}
+
+    bool configured() const override { return !token_.empty(); }
 
     async::task<std::expected<std::string, std::error_code>> bearer() override {
         if (token_.empty()) {
@@ -493,6 +496,11 @@ struct overview_provider {
     [[= json::flatten]] provider_stats counts{};
     selection::circuit circuit = selection::circuit::closed;
     std::map<std::string, std::string> rate_limits{};
+    std::vector<std::string> labels{};
+    std::string auth{};
+    std::string preset{};
+    std::string protocol{};
+    bool ready = true;
 };
 
 struct overview_class_spend {
@@ -789,6 +797,23 @@ struct provider_runtime {
     bool retired = false;
 };
 
+std::string auth_name_of(provider_config const& settings) {
+    if (settings.forward_credentials) {
+        return "forward";
+    }
+    if (settings.copilot) {
+        return "copilot-login";
+    }
+    if (settings.chatgpt) {
+        return "chatgpt-login";
+    }
+    return std::string{reflect::enum_name(settings.auth.kind)};
+}
+
+bool ready_of(provider_runtime const& item) {
+    return item.settings.forward_credentials || item.settings.auth.kind == auth_kind::none || item.creds->configured();
+}
+
 control::offer offer_of(std::string const& name, provider_config const& settings) {
     control::offer one{.provider = name, .labels = settings.labels, .model_labels = settings.model_labels};
     for (auto const& entry : settings.models) {
@@ -1083,7 +1108,12 @@ private:
             document.providers.push_back({.name = item.name,
                                           .counts = counters_.providers.at(item.name),
                                           .circuit = selection::state_of(item.circuit, breaker_, breaker_clock_()),
-                                          .rate_limits = seen == rate_limits_.end() ? std::map<std::string, std::string>{} : seen->second});
+                                          .rate_limits = seen == rate_limits_.end() ? std::map<std::string, std::string>{} : seen->second,
+                                          .labels = item.settings.labels,
+                                          .auth = detail::auth_name_of(item.settings),
+                                          .preset = std::string{reflect::enum_name(item.settings.preset)},
+                                          .protocol = std::string{reflect::enum_name(item.settings.protocol)},
+                                          .ready = detail::ready_of(item)});
         }
         auto const today = usage::day_of(clock_());
         document.spend = {.today = usage::spend_between(ledger_, today, today, settings_.pricing),

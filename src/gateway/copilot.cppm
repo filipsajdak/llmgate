@@ -210,6 +210,8 @@ public:
 
     void rejected() noexcept override { cached_.reset(); }
 
+    bool configured() const override { return load_oauth_token(settings_.token_file).has_value(); }
+
     std::optional<std::string> endpoint() const override {
         if (!cached_ || cached_->api.empty()) {
             return std::nullopt;
