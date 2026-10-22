@@ -200,13 +200,13 @@ const suite arguments_suite = [] {
     "capability_the_usage_text_is_pinned"_test = [] {
         expect(usage_text ==
                "usage: llmgate [--config PATH] [--profile NAME] [serve | login [--provider NAME] | claude ARGS... | env [--json] [--vscode [FILE]] | setup [--vscode [FILE]] [--service] [--dry-run] | "
-               "statusline | status | stop | usage [--json] [--days N] | doctor [--json] [--offline] | quota [--json] | use [--session ID] ARGS... | targets | route [--session ID] ARGS... | models [--json] [--provider NAME] [--yes] ARGS... | reload | provider [--yes] [--preset NAME] [--labels A,B] [--base-url URL] [--token-env VAR] ARGS... | routes [--yes] ARGS... | config [--yes] ARGS...] | --check-config | --version | --print-example | --print-schema | --print-config-table")
+               "statusline | status | stop | usage [--json] [--days N] | doctor [--json] [--offline] | quota [--json] | use [--session ID] ARGS... | targets | route [--session ID] ARGS... | models [--json] [--provider NAME] [--yes] ARGS... | reload | provider [--yes] [--preset NAME] [--labels A,B] [--base-url URL] [--token-env VAR] [--auth KIND] [--secret SRC] [--ghe-host HOST] [--offer A,B] ARGS... | routes [--yes] ARGS... | config [--yes] ARGS... | secret ARGS...] | --check-config | --version | --print-example | --print-schema | --print-config-table")
             << usage_text;
     };
 
-    "capability_only_statusline_stop_and_doctor_tolerate_a_missing_config"_test = [] {
+    "capability_only_statusline_stop_doctor_and_secret_tolerate_a_missing_config"_test = [] {
         for (auto const which : llmgate::reflect::enum_values<command>) {
-            auto const expected = which == command::statusline || which == command::stop || which == command::doctor;
+            auto const expected = which == command::statusline || which == command::stop || which == command::doctor || which == command::secret;
             expect(command_marked<tolerant>(which) == expected) << llmgate::reflect::enum_name(which);
         }
     };

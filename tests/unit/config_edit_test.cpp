@@ -49,6 +49,35 @@ const suite config_edit_suite = [] {
         expect(anthropic.has_value() && anthropic->value->contains(R"("static_token_env":"EMPLOYER_KEY")") && !anthropic->value->contains("forward_credentials"));
     };
 
+    "capability_provider_add_writes_auth_secret_offer_and_the_ghe_hosts"_test = [] {
+        auto const partner = ce::plan(ask(ce::group::provider, {"add", "partner"},
+                                        {.base_url = "https://gw.example.net", .auth = "header:api-key", .secret = "env:PARTNER_KEY", .offer = "gpt-sol,gpt-luna"}));
+        auto const local = ce::plan(ask(ce::group::provider, {"add", "mic"}, {.base_url = "http://127.0.0.1:9080", .auth = "none", .offer = "opus4.6-partner"}));
+        auto const ghe = ce::plan(ask(ce::group::provider, {"add", "work"}, {.preset = "copilot", .ghe_host = "corp.ghe.example"}));
+        auto const filed = ce::plan(ask(ce::group::provider, {"add", "x"}, {.base_url = "http://h", .auth = "header:x-key:Token", .secret = "file:~/.config/llmgate/x.key"}));
+
+        expect(partner.has_value() && partner->value->contains(R"("auth":{"kind":"header","header":"api-key","env":"PARTNER_KEY"})") && partner->value->contains(R"("offer":["gpt-sol","gpt-luna"])")) << partner.value_or(ce::change{}).value.value_or("");
+        expect(!partner->value->contains("preset"));
+        expect(local.has_value() && local->value->contains(R"("auth":{"kind":"none"})") && local->value->contains(R"("base_url":"http://127.0.0.1:9080")"));
+        expect(ghe.has_value() && ghe->value->contains(R"("github_url":"https://corp.ghe.example")") && ghe->value->contains(R"("api_url":"https://api.corp.ghe.example")"));
+        expect(filed.has_value() && filed->value->contains(R"("scheme":"Token")") && filed->value->contains(R"("file":"~/.config/llmgate/x.key")"));
+    };
+
+    "limit_a_provider_without_a_preset_needs_a_base_url_and_an_auth_and_bad_auth_words_are_refused"_test = [] {
+        expect(!ce::plan(ask(ce::group::provider, {"add", "x"}, {.auth = "none"})).has_value());
+        expect(!ce::plan(ask(ce::group::provider, {"add", "x"}, {.base_url = "http://h"})).has_value());
+        expect(!ce::plan(ask(ce::group::provider, {"add", "x"}, {.base_url = "http://h", .auth = "oauth"})).has_value());
+        expect(!ce::plan(ask(ce::group::provider, {"add", "x"}, {.base_url = "http://h", .auth = "header"})).has_value());
+        expect(!ce::plan(ask(ce::group::provider, {"add", "x"}, {.base_url = "http://h", .auth = "header:api-key", .secret = "vault:x"})).has_value());
+        expect(!ce::plan(ask(ce::group::provider, {"add", "x"}, {.base_url = "http://h", .auth = "none", .secret = "env:X"})).has_value());
+    };
+
+    "capability_a_secret_file_path_is_under_the_secrets_directory_and_a_name_cannot_escape_it"_test = [] {
+        expect(ce::secret_file("partner") == std::expected<std::string, std::string>{"~/.config/llmgate/secrets/partner.key"});
+        expect(!ce::secret_file("").has_value() && !ce::secret_file("../x").has_value() && !ce::secret_file("a/b").has_value() && !ce::secret_file(".hidden").has_value());
+        expect(!ce::secret_file(std::string(100, 'a')).has_value());
+    };
+
     "limit_unclear_edit_words_are_refused_with_the_shape_to_use"_test = [] {
         expect(!ce::plan(ask(ce::group::routes, {"set", "sonnet"})).has_value());
         expect(!ce::plan(ask(ce::group::routes, {"bogus"})).has_value());

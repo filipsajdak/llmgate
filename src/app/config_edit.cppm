@@ -18,6 +18,10 @@ struct request {
     std::string labels{};
     std::string base_url{};
     std::string token_env{};
+    std::string auth{};
+    std::string secret{};
+    std::string ghe_host{};
+    std::string offer{};
 };
 
 struct change {
@@ -112,52 +116,128 @@ planned config_plan(std::vector<std::string> const& words) {
     return usage("config set PATH VALUE | config unset PATH");
 }
 
-json::value credentials_of(gateway::preset_kind const kind, request const& given) {
-    auto const file = std::format("~/.config/llmgate/{}-{}.json", kind == gateway::preset_kind::copilot ? "copilot" : "chatgpt", given.words[1]);
-    json::object out;
-    if (kind == gateway::preset_kind::copilot) {
-        out.emplace_back("copilot", json::make_object({{"token_file", json::make_string(file)}}));
-    } else if (kind == gateway::preset_kind::chatgpt) {
-        out.emplace_back("chatgpt", json::make_object({{"token_file", json::make_string(file)}}));
-    } else if (!given.token_env.empty()) {
-        out.emplace_back("static_token_env", json::make_string(given.token_env));
-    } else {
-        out.emplace_back("forward_credentials", json::value{true});
-    }
-    return json::value{std::move(out)};
-}
-
-constexpr std::string_view provider_shape = "provider add NAME --preset copilot|anthropic|chatgpt [--labels a,b] [--base-url URL] [--token-env VAR]";
+constexpr std::string_view provider_shape =
+    "provider add NAME [--preset copilot|anthropic|chatgpt] [--base-url URL] [--auth bearer|none|header:NAME[:SCHEME]] [--secret env:VAR|file:PATH] [--offer a,b] [--labels a,b] [--ghe-host HOST]";
 
 std::optional<gateway::preset_kind> buildable_preset(std::string_view const name) {
     auto const kind = reflect::enum_from_name<gateway::preset_kind>(name);
     return kind && *kind != gateway::preset_kind::none && *kind != gateway::preset_kind::openai_chat ? kind : std::nullopt;
 }
 
-json::value provider_value(gateway::preset_kind const kind, request const& given, std::span<std::string const> const labels) {
-    auto provider = credentials_of(kind, given);
-    auto& members = std::get<json::object>(provider.data);
-    members.emplace(members.begin(), "preset", json::make_string(given.preset));
+std::vector<std::string> split_on(std::string_view const text, char const separator) {
+    return std::views::split(text, separator) | std::views::transform([](auto part) { return std::string{part.begin(), part.end()}; }) | std::ranges::to<std::vector>();
+}
+
+constexpr std::string_view auth_shape = "--auth is bearer, none or header:NAME[:SCHEME]";
+
+bool auth_words_fit(std::vector<std::string> const& words) {
+    auto const& kind = words.front();
+    if (kind == "header") {
+        return words.size() == 2 || words.size() == 3;
+    }
+    return (kind == "bearer" || kind == "none") && words.size() == 1;
+}
+
+std::expected<std::pair<std::string, std::string>, std::string> secret_source(request const& given) {
+    auto const colon = given.secret.find(':');
+    auto const kind = given.secret.substr(0, colon);
+    auto const where = colon == std::string::npos ? std::string{} : given.secret.substr(colon + 1);
+    if (given.auth == "none" || (kind != "env" && kind != "file") || where.empty()) {
+        return std::unexpected{"--secret is env:VAR or file:PATH, and not with --auth none"};
+    }
+    return std::pair{kind, where};
+}
+
+std::expected<json::value, std::string> auth_value(request const& given) {
+    auto const words = split_on(given.auth, ':');
+    if (!auth_words_fit(words)) {
+        return std::unexpected{std::string{auth_shape}};
+    }
+    json::object out;
+    out.emplace_back("kind", json::make_string(words.front()));
+    if (words.front() == "header") {
+        out.emplace_back("header", json::make_string(words[1]));
+        if (words.size() == 3) {
+            out.emplace_back("scheme", json::make_string(words[2]));
+        }
+    }
+    if (!given.secret.empty()) {
+        auto const source = secret_source(given);
+        if (!source) {
+            return std::unexpected{source.error()};
+        }
+        out.emplace_back(source->first, json::make_string(source->second));
+    }
+    return json::value{std::move(out)};
+}
+
+json::value login_of(gateway::preset_kind const kind, request const& given) {
+    auto const file = std::format("~/.config/llmgate/{}-{}.json", kind == gateway::preset_kind::copilot ? "copilot" : "chatgpt", given.words[1]);
+    json::object token{{"token_file", json::make_string(file)}};
+    if (kind == gateway::preset_kind::copilot && !given.ghe_host.empty()) {
+        token.emplace_back("github_url", json::make_string("https://" + given.ghe_host));
+        token.emplace_back("api_url", json::make_string("https://api." + given.ghe_host));
+    }
+    return json::value{std::move(token)};
+}
+
+void add_credentials(json::object& out, std::optional<gateway::preset_kind> const kind, request const& given) {
+    if (kind == gateway::preset_kind::copilot) {
+        out.emplace_back("copilot", login_of(*kind, given));
+    } else if (kind == gateway::preset_kind::chatgpt) {
+        out.emplace_back("chatgpt", login_of(*kind, given));
+    } else if (!given.token_env.empty()) {
+        out.emplace_back("static_token_env", json::make_string(given.token_env));
+    } else if (given.auth.empty()) {
+        out.emplace_back("forward_credentials", json::value{true});
+    }
+}
+
+std::expected<json::value, std::string> provider_value(std::optional<gateway::preset_kind> const kind, request const& given, std::span<std::string const> const labels) {
+    json::object out;
+    if (kind) {
+        out.emplace_back("preset", json::make_string(given.preset));
+    }
     if (!given.base_url.empty()) {
-        members.emplace_back("base_url", json::make_string(given.base_url));
+        out.emplace_back("base_url", json::make_string(given.base_url));
+    }
+    add_credentials(out, kind, given);
+    if (!given.auth.empty()) {
+        auto auth = auth_value(given);
+        if (!auth) {
+            return std::unexpected{std::move(auth.error())};
+        }
+        out.emplace_back("auth", std::move(*auth));
+    }
+    if (auto const offers = split_commas(given.offer); !offers.empty()) {
+        out.emplace_back("offer", strings(offers));
     }
     if (!labels.empty()) {
-        members.emplace_back("labels", strings(labels));
+        out.emplace_back("labels", strings(labels));
     }
-    return provider;
+    return json::value{std::move(out)};
+}
+
+bool wants_a_provider(request const& given, std::optional<gateway::preset_kind> const kind) {
+    auto const& name = given.words[1];
+    auto const plain = !kind && given.preset.empty() && !given.base_url.empty() && !given.auth.empty();
+    return given.words.size() == 2 && plain_name(name) && (kind || plain);
 }
 
 planned provider_add(request const& given) {
-    auto const& name = given.words[1];
     auto const kind = buildable_preset(given.preset);
-    if (given.words.size() != 2 || !plain_name(name) || !kind) {
+    if (!wants_a_provider(given, kind)) {
         return usage(provider_shape);
     }
     auto const labels = split_commas(given.labels);
     if (!std::ranges::all_of(labels, control::valid_label)) {
         return std::unexpected{std::format("a label is 1 to {} letters, digits, - or _", control::longest_label)};
     }
-    return change{.path = {std::string{providers_key}, name}, .value = json::write(provider_value(*kind, given, labels))};
+    auto value = provider_value(kind, given, labels);
+    if (!value) {
+        return std::unexpected{std::move(value.error())};
+    }
+    return change{.path = {std::string{providers_key}, given.words[1]}, .value = json::write(*value)};
 }
 
 planned provider_plan(request const& given) {
@@ -168,7 +248,7 @@ planned provider_plan(request const& given) {
     if (!words.empty() && words[0] == "add" && words.size() >= 2) {
         return provider_add(given);
     }
-    return usage("provider add NAME --preset copilot|anthropic|chatgpt | provider remove NAME");
+    return usage("provider add NAME ... | provider remove NAME (provider add without options shows the shape)");
 }
 
 std::string name_of_added(change const& what) { return what.path.size() == 2 && what.path.front() == providers_key ? what.path.back() : std::string{}; }
@@ -184,6 +264,13 @@ std::string problem_of(std::string_view const text) {
 }  // namespace llmgate::config_edit::detail
 
 export namespace llmgate::config_edit {
+
+std::expected<std::string, std::string> secret_file(std::string_view const name) {
+    if (!detail::plain_name(name)) {
+        return std::unexpected{"a secret name is letters, digits, - and _"};
+    }
+    return std::format("~/.config/llmgate/secrets/{}.key", name);
+}
 
 std::expected<change, std::string> plan(request const& given) {
     switch (given.which) {

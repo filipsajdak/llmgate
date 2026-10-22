@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include <termios.h>
 #include <unistd.h>
 
 import std;
@@ -313,7 +314,11 @@ int edit_command(commands::context const& where) {
                                             .preset = chosen.preset,
                                             .labels = chosen.labels,
                                             .base_url = chosen.base_url,
-                                            .token_env = chosen.token_env});
+                                            .token_env = chosen.token_env,
+                                            .auth = chosen.auth,
+                                            .secret = chosen.secret,
+                                            .ghe_host = chosen.ghe_host,
+                                            .offer = chosen.offer});
     if (!planned) {
         return fail(exit_usage, planned.error());
     }
@@ -336,6 +341,50 @@ int edit_command(commands::context const& where) {
     if (commands::run_reload(where) != 0) {
         std::println("the gateway did not reload (is it running?); it picks the change up when it starts");
     }
+    return 0;
+}
+
+std::string read_secret_line(std::string_view const name) {
+    bool const interactive = ::isatty(STDIN_FILENO) != 0;
+    termios saved{};
+    if (interactive) {
+        std::print(stderr, "Secret for {} (hidden, Enter to finish): ", name);
+        std::fflush(stderr);
+        ::tcgetattr(STDIN_FILENO, &saved);
+        termios hidden = saved;
+        hidden.c_lflag &= ~static_cast<tcflag_t>(ECHO);
+        ::tcsetattr(STDIN_FILENO, TCSANOW, &hidden);
+    }
+    std::string line;
+    char c = 0;
+    while (::read(STDIN_FILENO, &c, 1) == 1 && c != '\n') {
+        line.push_back(c);
+    }
+    if (interactive) {
+        ::tcsetattr(STDIN_FILENO, TCSANOW, &saved);
+        std::println(stderr, "");
+    }
+    line.erase(std::ranges::find(line, '\r'), line.end());
+    return line;
+}
+
+int secret_command(commands::context const& where) {
+    auto const& words = where.options.passthrough;
+    if (words.size() != 2 || words.front() != "set") {
+        return fail(exit_usage, "usage: llmgate secret set NAME (the value is read from the keyboard, hidden, or from a pipe)");
+    }
+    auto const location = config_edit::secret_file(words.back());
+    if (!location) {
+        return fail(exit_usage, location.error());
+    }
+    auto const value = read_secret_line(words.back());
+    if (value.empty()) {
+        return fail(exit_usage, "no value was given; nothing was stored");
+    }
+    if (auto const stored = process::write_file_atomic(process::expand_home(*location), value + "\n", 0600, true); !stored) {
+        return fail(exit_runtime, std::format("cannot store the secret: {}", stored.error().message()));
+    }
+    std::println("stored as {} (mode 0600); use it with --secret file:{}", *location, *location);
     return 0;
 }
 
@@ -400,6 +449,7 @@ constexpr auto handlers = std::to_array<std::pair<arguments::command, command_ha
     {arguments::command::provider, &edit_command},
     {arguments::command::routes, &edit_command},
     {arguments::command::config, &edit_command},
+    {arguments::command::secret, &secret_command},
     {arguments::command::statusline, &statusline_command},
 });
 

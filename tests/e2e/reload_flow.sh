@@ -76,4 +76,13 @@ run routes clear sonnet --yes > /dev/null 2>&1 || true
 run provider remove home --yes > /dev/null 2>&1 || true
 check sh -c "! grep -q '\"home\"' '$work/config.jsonc'"
 
+label="secret set stores the piped value at mode 0600, prints the path and never the value"
+printf 'sekrit-value\n' | "$binary" --config "$work/config.jsonc" secret set partner > "$work/secret.out" 2>&1
+check sh -c "grep -q 'secrets/partner.key' '$work/secret.out' && ! grep -q 'sekrit-value' '$work/secret.out' && [ \"\$(cat '$work/home/.config/llmgate/secrets/partner.key' 2>/dev/null || cat '$work/config/llmgate/secrets/partner.key')\" = sekrit-value ]"
+label="secret set refuses a name that climbs out of the directory"
+check sh -c "! printf x | '$binary' --config '$work/config.jsonc' secret set ../x > /dev/null 2>&1"
+label="provider add with header auth and a secret file writes the auth block"
+run provider add partner --base-url http://127.0.0.1:9 --auth header:api-key --secret file:~/.config/llmgate/secrets/partner.key --offer m-nx --yes > "$work/nx.out" 2>&1 || true
+check sh -c "grep -q '\"auth\":{\"kind\":\"header\",\"header\":\"api-key\",\"file\"' '$work/config.jsonc'"
+
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }

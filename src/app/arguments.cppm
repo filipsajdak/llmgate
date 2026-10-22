@@ -34,7 +34,8 @@ enum class command {
     reload,
     provider,
     routes,
-    config
+    config,
+    secret [[= tolerant{}]]
 };
 static_assert(reflect::unique_values<command>());
 
@@ -97,8 +98,12 @@ struct options {
     [[= flag{"--labels"}]] [[= applies_to{command::provider}]] [[= operand{"A,B"}]] std::string labels{};
     [[= flag{"--base-url"}]] [[= applies_to{command::provider}]] [[= operand{"URL"}]] std::string base_url{};
     [[= flag{"--token-env"}]] [[= applies_to{command::provider}]] [[= operand{"VAR"}]] std::string token_env{};
+    [[= flag{"--auth"}]] [[= applies_to{command::provider}]] [[= operand{"KIND"}]] std::string auth{};
+    [[= flag{"--secret"}]] [[= applies_to{command::provider}]] [[= operand{"SRC"}]] std::string secret{};
+    [[= flag{"--ghe-host"}]] [[= applies_to{command::provider}]] [[= operand{"HOST"}]] std::string ghe_host{};
+    [[= flag{"--offer"}]] [[= applies_to{command::provider}]] [[= operand{"A,B"}]] std::string offer{};
     [[= flag{"--session"}]] [[= applies_to{command::use, command::route}]] [[= operand{"ID"}]] std::string session{};
-    [[= operand{"ARGS..."}]] [[= applies_to{command::claude, command::use, command::route, command::provider, command::routes, command::config, command::models}]] std::vector<std::string> passthrough{};
+    [[= operand{"ARGS..."}]] [[= applies_to{command::claude, command::use, command::route, command::provider, command::routes, command::config, command::models, command::secret}]] std::vector<std::string> passthrough{};
 };
 
 struct gateway_address {
@@ -227,7 +232,7 @@ constexpr step choose_command(parse_state& state, std::string_view const word) {
 }
 
 constexpr bool takes_words(command const which) {
-    return which == command::use || which == command::route || which == command::provider || which == command::routes || which == command::config || which == command::models;
+    return which == command::use || which == command::route || which == command::provider || which == command::routes || which == command::config || which == command::models || which == command::secret;
 }
 
 constexpr step consume(parse_state& state) {
