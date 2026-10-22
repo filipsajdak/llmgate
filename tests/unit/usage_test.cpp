@@ -218,6 +218,47 @@ const suite usage_suite = [] {
         expect(book.on_day(day_of(noon) + 5).requests == 0_u);
     };
 
+    "capability_the_ledger_keeps_the_provider_of_each_request_and_the_report_still_merges_them_by_model"_test = [] {
+        ledger book;
+        book.add({.time = noon, .model = "m", .provider = "a", .used = {.input = 10}});
+        book.add({.time = noon, .model = "m", .provider = "b", .used = {.input = 5}});
+        book.add({.time = noon, .model = "m", .provider = "a", .used = {.input = 1}});
+
+        expect(book.groups().size() == 2_u);
+        auto const day = day_of(noon);
+        auto const merged = report_json(book, day, day);
+        expect(merged.contains(R"("requests": 3)") || merged.contains(R"("requests":3)")) << merged;
+        expect(std::ranges::count(merged, '{') == 2) << merged;
+    };
+
+    "capability_spend_is_summed_per_provider_and_model_and_priced_where_a_price_is_known"_test = [] {
+        ledger book;
+        book.add({.time = noon, .model = "priced", .provider = "b", .used = {.input = 1000000, .output = 500000}});
+        book.add({.time = noon + 5, .model = "priced", .provider = "b", .used = {.cache_read = 2000000, .cache_creation = 1000000}});
+        book.add({.time = noon, .model = "unpriced", .provider = "a", .used = {.input = 7}});
+        book.add({.time = noon, .model = "priced", .provider = "a", .used = {.input = 1}});
+        std::map<std::string, price> const prices{{"priced", {.input = 3.0, .output = 15.0, .cache_read = 0.3, .cache_creation = 3.75}}};
+
+        auto const rows = spend_between(book, day_of(noon), day_of(noon), prices);
+
+        expect(rows.size() == 3_u);
+        expect(rows[0].provider == "a" && rows[0].model == "priced" && rows[0].cost.has_value());
+        expect(rows[1].provider == "a" && rows[1].model == "unpriced" && !rows[1].cost.has_value());
+        expect(rows[2].provider == "b" && rows[2].sum.requests == 2_u);
+        expect(rows[2].cost.has_value() && std::abs(*rows[2].cost - (3.0 + 7.5 + 0.6 + 3.75)) < 1e-9) << *rows[2].cost;
+    };
+
+    "limit_a_price_of_zero_is_a_price_and_an_empty_range_has_no_rows"_test = [] {
+        ledger book;
+        book.add({.time = noon, .model = "free", .provider = "a", .used = {.input = 9}});
+        std::map<std::string, price> const prices{{"free", {}}};
+
+        auto const rows = spend_between(book, day_of(noon), day_of(noon), prices);
+
+        expect(rows.size() == 1_u && rows[0].cost.has_value() && *rows[0].cost == 0.0);
+        expect(spend_between(book, day_of(noon) + 1, day_of(noon) + 2, prices).empty());
+    };
+
     "limit_counts_saturate_instead_of_wrapping"_test = [] {
         tokens big{.input = std::numeric_limits<std::uint64_t>::max()};
 

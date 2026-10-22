@@ -444,6 +444,7 @@ constexpr std::string iso_date(std::int64_t const day) {
 
 struct group {
     std::int64_t day = 0;
+    std::string provider{};
     std::string model{};
     totals sum{};
 };
@@ -453,9 +454,10 @@ public:
     constexpr void add(record const& entry) {
         auto const day = day_of(entry.time);
         auto const name = label(entry.model.empty() ? entry.requested : entry.model);
-        auto found = std::ranges::find_if(groups_, [&](group const& item) { return item.day == day && item.model == name; });
+        auto const who = label(entry.provider);
+        auto found = std::ranges::find_if(groups_, [&](group const& item) { return item.day == day && item.model == name && item.provider == who; });
         if (found == groups_.end()) {
-            groups_.push_back({.day = day, .model = name});
+            groups_.push_back({.day = day, .provider = who, .model = name});
             found = std::prev(groups_.end());
         }
         found->sum.used += entry.used;
@@ -577,12 +579,21 @@ struct summary {
     verdict budget{};
 };
 
-constexpr std::string summary_json(ledger const& book, budget const& limits, std::int64_t const now_seconds) {
+constexpr summary summary_of(ledger const& book, budget const& limits, std::int64_t const now_seconds) {
     auto const day = day_of(now_seconds);
     auto const today = book.on_day(day);
     auto const month = book.in_month(month_of(day));
-    return json::write(json::to_value(summary{.today = today, .month = month, .budget = evaluate(limits, today.used.counted(), month.used.counted())}));
+    return {.today = today, .month = month, .budget = evaluate(limits, today.used.counted(), month.used.counted())};
 }
+
+constexpr std::string summary_json(ledger const& book, budget const& limits, std::int64_t const now_seconds) {
+    return json::write(json::to_value(summary_of(book, limits, now_seconds)));
+}
+
+constexpr std::int64_t first_day_of_month(std::int64_t const day) noexcept {
+    return day - (civil_from_day(day).day - 1);
+}
+
 
 struct headline {
     std::uint64_t today = 0;
@@ -640,8 +651,71 @@ constexpr std::string pad_left(std::string text, std::size_t const width) {
 
 constexpr std::vector<group> rows_between(ledger const& book, std::int64_t const first_day, std::int64_t const last_day) {
     std::vector<group> rows;
-    std::ranges::copy_if(book.groups(), std::back_inserter(rows), [&](group const& item) { return item.day >= first_day && item.day <= last_day; });
+    for (auto const& item : book.groups()) {
+        if (item.day < first_day || item.day > last_day) {
+            continue;
+        }
+        auto const same = std::ranges::find_if(rows, [&](group const& seen) { return seen.day == item.day && seen.model == item.model; });
+        if (same == rows.end()) {
+            rows.push_back({.day = item.day, .model = item.model, .sum = item.sum});
+        } else {
+            same->sum.used += item.sum.used;
+            same->sum.requests = add_sat(same->sum.requests, item.sum.requests);
+        }
+    }
     std::ranges::sort(rows, [](group const& left, group const& right) { return left.day != right.day ? left.day < right.day : left.model < right.model; });
+    return rows;
+}
+
+struct price {
+    [[= reflect::doc{"US dollars per million input tokens."}]] double input = 0;
+    [[= reflect::doc{"US dollars per million output tokens."}]] double output = 0;
+    [[= reflect::doc{"US dollars per million cache-read tokens."}]] double cache_read = 0;
+    [[= reflect::doc{"US dollars per million cache-write tokens."}]] double cache_creation = 0;
+};
+
+constexpr double tokens_per_million = 1000000.0;
+
+constexpr double cost_of(tokens const& used, price const& rate) {
+    return (static_cast<double>(used.input) * rate.input + static_cast<double>(used.output) * rate.output + static_cast<double>(used.cache_read) * rate.cache_read +
+            static_cast<double>(used.cache_creation) * rate.cache_creation) /
+           tokens_per_million;
+}
+
+struct spend {
+    std::string provider{};
+    std::string model{};
+    [[= json::flatten]] totals sum{};
+    std::optional<double> cost{};
+};
+
+constexpr void merge_spend(std::vector<spend>& rows, group const& item) {
+    auto const same = std::ranges::find_if(rows, [&](spend const& seen) { return seen.provider == item.provider && seen.model == item.model; });
+    if (same == rows.end()) {
+        rows.push_back({.provider = item.provider, .model = item.model, .sum = item.sum});
+        return;
+    }
+    same->sum.used += item.sum.used;
+    same->sum.requests = add_sat(same->sum.requests, item.sum.requests);
+}
+
+constexpr void price_spend(std::vector<spend>& rows, std::map<std::string, price> const& prices) {
+    for (auto& row : rows) {
+        if (auto const rate = prices.find(row.model); rate != prices.end()) {
+            row.cost = cost_of(row.sum.used, rate->second);
+        }
+    }
+}
+
+constexpr std::vector<spend> spend_between(ledger const& book, std::int64_t const first_day, std::int64_t const last_day, std::map<std::string, price> const& prices) {
+    std::vector<spend> rows;
+    for (auto const& item : book.groups()) {
+        if (item.day >= first_day && item.day <= last_day) {
+            merge_spend(rows, item);
+        }
+    }
+    price_spend(rows, prices);
+    std::ranges::sort(rows, [](spend const& left, spend const& right) { return left.provider != right.provider ? left.provider < right.provider : left.model < right.model; });
     return rows;
 }
 
@@ -698,6 +772,7 @@ constexpr std::string report_json(ledger const& book, std::int64_t const first_d
     return json::write(json::to_value(report_body{.days = last_day - first_day + 1, .rows = std::move(rows)}), 2);
 }
 
+static_assert(first_day_of_month(day_of(1760659200)) == day_of(1759276800) && first_day_of_month(0) == 0);
 static_assert(record{} == record{} && totals{} == totals{});
 static_assert(label("claude-x") == "claude-x" && label("a\x1b[31mb") == "a?[31mb" && label("sp ace\n") == "sp?ace?" && label(std::string(100, 'a')).size() == longest_label);
 static_assert(session_of(R"({"model":"m","metadata":{"user_id":"user_ab_account_cd_session_5f3a-90"}})") == "5f3a-90");
