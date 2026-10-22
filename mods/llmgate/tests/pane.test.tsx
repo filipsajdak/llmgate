@@ -135,7 +135,7 @@ test('the Usage view shows the totals, the spend of today with its price, and th
 
   expect(await ui.find({ type: 'Text', text: /today 2k tokens \(3 req\)/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^work +sonnet-9 +2k +100 +- +3 +\$0\.01$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^work +closed +3 +3 +0 +-$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^work +- +unknown +ready +closed +3 +3 +0 +-$/ })).toBeDefined()
   await ui.press({ key: 'view-now' })
   expect(await ui.find({ key: 'use-claude-gpt-6-sol@codex' })).toBeDefined()
   await ui.unmount()
@@ -261,4 +261,82 @@ test('a reply that arrives as a fallback between two reads raises one toast', as
 
   expect(toasts).toEqual(['llmgate: work answered as a fallback'])
   expect(statuses.at(-1)).toBe('work sonnet-9 (fallback)')
+})
+
+async function must(ui: { find: (q: object) => Promise<unknown> }, query: object): Promise<void> {
+  if ((await ui.find(query)) === undefined) throw new Error(`not found: ${JSON.stringify(query)}`)
+}
+
+const setupOverview = () => {
+  const document = JSON.parse(overview('work'))
+  document.providers = [
+    { name: 'codex', attempts: 0, answered: 0, failures: 0, skipped: 0, circuit: 'closed', rate_limits: {}, labels: ['private'], auth: 'chatgpt-login', ready: false },
+    { name: 'work', attempts: 3, answered: 3, failures: 0, skipped: 0, circuit: 'closed', rate_limits: {}, labels: [], auth: 'copilot-login', ready: true },
+  ]
+  return JSON.stringify(document)
+}
+
+test('the Setup view lists providers with their state, and the wizard previews, applies and names the next step', async ($, on) => {
+  mock.env(on, env)
+  mock.clock(on)
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: setupOverview() } }))
+  const runs: { argv: string[]; stdin?: string }[] = []
+  on('process.run', (_, e) => {
+    runs.push({ argv: [...e.argv], stdin: e.stdin })
+    const yes = e.argv.includes('--yes')
+    return { value: { exitCode: 0, stdout: yes ? 'written to /c\nok\n' : '+ "codex2": { "preset": "chatgpt" }\nnot written: add --yes to write /c\n', stderr: '' } }
+  })
+  on('command.register', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc-123' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'llmgate', args: 'setup' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await must(ui, { type: 'Text', text: /^codex +private +chatgpt-login +needs setup/ })
+  await must(ui, { type: 'Text', text: /^work +- +copilot-login +ready/ })
+
+  await ui.press({ key: 'kind-chatgpt' })
+  await must(ui, { type: 'Text', text: /ChatGPT Plus or Pro plan/ })
+  await ui.press({ key: 'preview' })
+  await must(ui, { type: 'Text', text: 'give the provider a name (letters, digits, - and _)' })
+  expect(runs).toEqual([])
+
+  await ui.input({ key: 'field-name', text: 'codex2' })
+  await ui.press({ key: 'preview' })
+  await must(ui, { type: 'Text', text: '+ "codex2": { "preset": "chatgpt" }' })
+  await ui.press({ key: 'apply' })
+
+  const preview = ['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'provider', 'add', 'codex2', '--preset', 'chatgpt']
+  expect(runs.map(r => r.argv)).toEqual([preview, preview, [...preview, '--yes']])
+  await must(ui, { type: 'Text', text: '! /opt/llmgate --config /etc/llmgate.jsonc login --provider codex2' })
+  await ui.unmount()
+})
+
+test('an API key provider names the secret command and never asks for the key in the pane', async ($, on) => {
+  mock.env(on, env)
+  mock.clock(on)
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: setupOverview() } }))
+  on('process.run', () => ({ value: { exitCode: 0, stdout: 'ok\n', stderr: '' } }))
+  on('command.register', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc-123' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'llmgate', args: 'setup' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'kind-apikey' })
+  await ui.input({ key: 'field-name', text: 'partner' })
+  await ui.input({ key: 'field-baseUrl', text: 'https://gw.example.net' })
+  await ui.press({ key: 'apply' })
+
+  await must(ui, { type: 'Text', text: '! /opt/llmgate secret set partner' })
+  await must(ui, { type: 'Text', text: /hidden/ })
+  await ui.unmount()
 })

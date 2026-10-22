@@ -1,13 +1,15 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
-import { changes, describeTargets, describeTotals, providerTable, routeTable, spendTable, unpricedNote, gatewayRoot, invocation, parseCommand, parseOverview, printable, resolveTarget, roles, statusText } from './model'
+import { addInvocation, describeForm, formFor, kinds, nextStep, validateForm } from './setup'
+import type { Form, KindId } from './setup'
+import { changes, describeTargets, describeTotals, providerTable, routeTable, spendTable, unpricedNote, gatewayRoot, invocation, parseCommand, parseOverview, printable, printableBlock, resolveTarget, roles, statusText } from './model'
 import type { Change, Command, Role, Scope, Snapshot } from './model'
 
 const PANE = 'llmgate'
 const pollMilliseconds = 5000
 const unreadable: Snapshot = { sessionId: '', roles: [], targets: [], providers: [], spendToday: [], spendMonth: [] }
 
-type View = 'now' | 'usage'
+type View = 'now' | 'usage' | 'setup'
 
 let snapshot: Snapshot = unreadable
 let selected: Role = 'sonnet'
@@ -15,6 +17,9 @@ let view: View = 'now'
 let message = ''
 let isOpen = false
 let hasRead = false
+let form: Form | undefined
+let preview = ''
+let next = ''
 
 async function load($: Engine): Promise<Snapshot> {
   const root = gatewayRoot(await $.env.get('ANTHROPIC_BASE_URL'))
@@ -55,6 +60,32 @@ async function change($: Engine, what: Change): Promise<string> {
   }
   await refresh($)
   return message
+}
+
+function setField(key: keyof Form, value: string): void {
+  if (form !== undefined) form = { ...form, [key]: value }
+}
+
+async function runAdd($: Engine, write: boolean): Promise<void> {
+  if (form === undefined) return
+  const [bin, config] = await Promise.all([$.env.get('LLMGATE_BIN'), $.env.get('LLMGATE_CONFIG')])
+  const plan = addInvocation(bin, config, form, write)
+  if ('refused' in plan) {
+    preview = plan.refused
+    next = ''
+  } else {
+    try {
+      const ran = await $.process.run(plan.argv)
+      const out = printableBlock((ran.exitCode === 0 ? ran.stdout : ran.stderr.replace(/^llmgate: /, '') || `exit ${ran.exitCode}`).trim())
+      preview = out
+      next = write && ran.exitCode === 0 ? nextStep(bin as string, config, form) : ''
+    } catch (error) {
+      preview = printable(`llmgate did not run: ${String(error)}`)
+      next = ''
+    }
+  }
+  if (write) await refresh($)
+  $.ui.invalidate('ui.render')
 }
 
 function done(what: Change): string {
@@ -110,7 +141,8 @@ export const register: Register = on => {
   on('command.run', { command: 'llmgate' }, async ($, e) => {
     await refresh($)
     const command = parseCommand(e.args)
-    if (command.kind !== 'pane') return { text: await answer($, command) }
+    if (command.kind === 'setup') view = 'setup'
+    else if (command.kind !== 'pane') return { text: await answer($, command) }
     const opened = await $.ui.open({ id: PANE, title: 'llmgate', focus: true, closeOnEscape: true })
     isOpen = opened.isPlaced
     return opened.isPlaced ? {} : { text: summary() }
@@ -122,7 +154,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Box, Text, Button, Input } = $.ui.resolve(e)
     const redraw = () => $.ui.invalidate('ui.render')
     const apply = (scope: Scope, target: string) => () => void change($, { role: selected, target, scope })
     const show = (next: View) => () => {
@@ -136,6 +168,7 @@ export const register: Register = on => {
           <Text bold>llmgate {snapshot.sessionId ? snapshot.sessionId.slice(0, 8) : ''}</Text>
           <Button key="view-now" label="Now" hotkey="n" plain dimColor={view !== 'now'} onPress={show('now')} />
           <Button key="view-usage" label="Usage" hotkey="u" plain dimColor={view !== 'usage'} onPress={show('usage')} />
+          <Button key="view-setup" label="Setup" hotkey="s" plain dimColor={view !== 'setup'} onPress={show('setup')} />
           <Button key="refresh" label="refresh" hotkey="r" plain onPress={() => void refresh($)} />
         </Box>
         {snapshot.error && <Text color="red">{snapshot.error}</Text>}
@@ -148,6 +181,63 @@ export const register: Register = on => {
           {row}
         </Text>
       ))
+
+    if (view === 'setup') {
+      const choose = (id: KindId) => () => {
+        form = formFor(id)
+        preview = ''
+        next = ''
+        redraw()
+      }
+      const field = (key: keyof Form, label: string, placeholder: string) => (
+        <Input
+          key={`field-${key}`}
+          label={label}
+          placeholder={placeholder}
+          value={form === undefined ? '' : String(form[key])}
+          onInput={value => setField(key, value)}
+          onSubmit={value => {
+            setField(key, value)
+            void runAdd($, false)
+          }}
+        />
+      )
+      const kind = kinds.find(item => item.id === form?.kind)
+      return (
+        <Box flexDirection="column">
+          {header}
+          <Text bold>Providers</Text>
+          {lines(providerTable(snapshot.providers))}
+          <Text> </Text>
+          <Text bold>Add a provider: what kind is it?</Text>
+          <Box flexDirection="row" columnGap={2}>
+            {kinds.map(item => (
+              <Button key={`kind-${item.id}`} label={item.title} plain dimColor={form?.kind !== item.id} onPress={choose(item.id)} />
+            ))}
+          </Box>
+          {kind !== undefined && form !== undefined && (
+            <Box flexDirection="column">
+              <Text>{kind.help}</Text>
+              {field('name', 'name', 'letters, digits, - and _')}
+              {(form.kind === 'apikey' || form.kind === 'local' || form.kind === 'gateway') && field('baseUrl', 'address', 'https://host or http://127.0.0.1:port')}
+              {form.kind === 'apikey' && field('header', 'header', 'api-key')}
+              {form.kind === 'apikey' && field('scheme', 'scheme', 'optional, such as Bearer')}
+              {form.kind === 'copilot' && field('gheHost', 'GitHub host', 'optional, such as corp.ghe.example')}
+              {(form.kind === 'apikey' || form.kind === 'local' || form.kind === 'gateway') && field('offer', 'models', 'comma separated names to list in /model')}
+              {field('labels', 'labels', 'optional, such as work,acme')}
+              <Box flexDirection="row" columnGap={2}>
+                <Button key="preview" label="Preview" onPress={() => void runAdd($, false)} />
+                <Button key="apply" label="Apply" onPress={() => void runAdd($, true)} />
+              </Box>
+              {form.kind === 'apikey' && <Text dimColor>The key is never typed here: you enter it hidden in the terminal, next.</Text>}
+              {preview !== '' && preview.split('\n').map(row => <Text>{row === '' ? ' ' : row}</Text>)}
+              {next !== '' && <Text bold>Next, type this in the prompt:</Text>}
+              {next !== '' && <Text>{next}</Text>}
+            </Box>
+          )}
+        </Box>
+      )
+    }
 
     if (view === 'usage') {
       const note = unpricedNote([...snapshot.spendToday, ...snapshot.spendMonth])

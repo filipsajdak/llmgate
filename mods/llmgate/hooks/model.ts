@@ -4,7 +4,7 @@ export type Role = (typeof roles)[number]
 export type Target = { id: string; label: string; provider: string }
 export type RoleRoute = { role: Role; via: string; providers: string[]; upstream?: string }
 export type Served = { provider: string; upstream: string; source: string; fallback: boolean; switched: boolean }
-export type ProviderHealth = { name: string; circuit: string; attempts: number; answered: number; failures: number; limits: Record<string, string> }
+export type ProviderHealth = { name: string; circuit: string; attempts: number; answered: number; failures: number; limits: Record<string, string>; labels: string[]; auth: string; ready: boolean }
 export type SpendRow = { provider: string; model: string; input: number; output: number; cacheRead: number; requests: number; cost?: number }
 export type Totals = { todayTokens: number; todayRequests: number; monthTokens: number; budgetState: string; budgetWindow: string; budgetPercent: number; budgetLimit: number }
 export type Snapshot = {
@@ -26,6 +26,14 @@ const loopbackHosts = ['127.0.0.1', 'localhost', '[::1]', '::1']
 
 export function printable(text: string, limit = longestText): string {
   return [...text.slice(0, limit)].map(c => (c < ' ' || c === '\x7f' ? '?' : c)).join('')
+}
+
+export function printableBlock(text: string, limit = 1200): string {
+  return text
+    .slice(0, limit)
+    .split('\n')
+    .map(row => printable(row.replace(/\r$/, '')))
+    .join('\n')
 }
 
 export function gatewayRoot(base: string | undefined): string | undefined {
@@ -88,6 +96,9 @@ function parseProvider(value: unknown): ProviderHealth[] {
       answered: count(entry.answered),
       failures: count(entry.failures),
       limits,
+      labels: list(entry.labels).filter((l): l is string => typeof l === 'string').map(l => printable(l, 24)),
+      auth: printable(text(entry.auth) || 'unknown', 24),
+      ready: entry.ready !== false,
     },
   ]
 }
@@ -199,16 +210,16 @@ export function invocation(bin: string | undefined, config: string | undefined, 
 }
 
 export type Command =
-  | { kind: 'pane' | 'status' | 'targets' | 'usage' }
+  | { kind: 'pane' | 'status' | 'targets' | 'usage' | 'setup' }
   | { kind: 'use'; role: Role; word: string; scope: Scope }
   | { kind: 'error'; message: string }
 
-const subcommands = ['status', 'targets', 'usage', 'use', 'pane']
+const subcommands = ['status', 'targets', 'usage', 'use', 'setup', 'pane']
 
 export function parseCommand(args: string): Command {
   const [first = '', ...rest] = args.trim().split(/\s+/).filter(word => word !== '')
   if (first === '' || first === 'pane') return { kind: 'pane' }
-  if (first === 'status' || first === 'targets' || first === 'usage') return { kind: first }
+  if (first === 'status' || first === 'targets' || first === 'usage' || first === 'setup') return { kind: first }
   if (first !== 'use') return { kind: 'error', message: `unknown subcommand ${printable(first, 32)} (${subcommands.join(', ')})` }
   const [role = '', word = '', flag] = rest
   if (role === '' || word === '') return { kind: 'error', message: 'use ROLE TARGET [default]' }
@@ -303,8 +314,18 @@ function limitsOf(item: ProviderHealth): string {
 
 export function providerTable(items: readonly ProviderHealth[]): string[] {
   return table(
-    ['provider', 'circuit', 'tried', 'answered', 'failed', 'limits'],
-    items.map(item => [item.name, item.circuit, String(item.attempts), String(item.answered), String(item.failures), limitsOf(item) || '-']),
-    [2, 3, 4],
+    ['provider', 'labels', 'auth', 'state', 'circuit', 'tried', 'answered', 'failed', 'limits'],
+    items.map(item => [
+      item.name,
+      item.labels.length === 0 ? '-' : item.labels.join(','),
+      item.auth,
+      item.ready ? 'ready' : 'needs setup',
+      item.circuit,
+      String(item.attempts),
+      String(item.answered),
+      String(item.failures),
+      limitsOf(item) || '-',
+    ]),
+    [5, 6, 7],
   )
 }

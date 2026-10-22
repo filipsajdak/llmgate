@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { changes, compact, describeTotals, providerTable, routeTable, spendTable, table, unpricedNote, gatewayRoot, invocation, parseOverview, parseCommand, printable, resolveTarget, statusText, describeTargets } from '../hooks/model'
+import { changes, compact, describeTotals, providerTable, routeTable, spendTable, table, unpricedNote, gatewayRoot, invocation, parseOverview, parseCommand, printable, printableBlock, resolveTarget, statusText, describeTargets } from '../hooks/model'
 
 const overview = JSON.stringify({
   schema_version: 1,
@@ -66,10 +66,10 @@ test('numbers, money, spend rows, providers and totals are written for a person'
   expect(unpricedNote(found.spendToday)).toContain('add the model to pricing')
   expect(unpricedNote([found.spendToday[0]])).toBeUndefined()
   expect(providerTable(found.providers)).toEqual([
-    'provider  circuit  tried  answered  failed  limits',
-    '--------  -------  -----  --------  ------  ------------',
-    'work      closed       5         4       1  5h limit 42%',
-    'codex     open         2         2       0  -',
+    'provider  labels  auth     state  circuit  tried  answered  failed  limits',
+    '--------  ------  -------  -----  -------  -----  --------  ------  ------------',
+    'work      -       unknown  ready  closed       5         4       1  5h limit 42%',
+    'codex     -       unknown  ready  open         2         2       0  -',
   ])
   expect(describeTotals(found)).toBe('today 1.5M tokens (11 req)  month 9.0M  budget warning 83% of daily 1.8M')
 })
@@ -115,6 +115,7 @@ test('parseCommand reads the subcommands and refuses the rest with the list of w
   expect(parseCommand('')).toEqual({ kind: 'pane' })
   expect(parseCommand('  pane ')).toEqual({ kind: 'pane' })
   expect(parseCommand('status')).toEqual({ kind: 'status' })
+  expect(parseCommand('setup')).toEqual({ kind: 'setup' })
   expect(parseCommand('targets')).toEqual({ kind: 'targets' })
   expect(parseCommand('usage')).toEqual({ kind: 'usage' })
   expect(parseCommand('use sonnet gpt-6-sol')).toEqual({ kind: 'use', role: 'sonnet', word: 'gpt-6-sol', scope: 'session' })
@@ -122,7 +123,7 @@ test('parseCommand reads the subcommands and refuses the rest with the list of w
   expect(parseCommand('use sonnet clear')).toEqual({ kind: 'use', role: 'sonnet', word: 'clear', scope: 'session' })
   expect(parseCommand('use banana x')).toEqual({ kind: 'error', message: 'unknown role banana (opus, sonnet, haiku)' })
   expect(parseCommand('use sonnet')).toEqual({ kind: 'error', message: 'use ROLE TARGET [default]' })
-  expect(parseCommand('rm -rf')).toEqual({ kind: 'error', message: 'unknown subcommand rm (status, targets, usage, use, pane)' })
+  expect(parseCommand('rm -rf')).toEqual({ kind: 'error', message: 'unknown subcommand rm (status, targets, usage, use, setup, pane)' })
 })
 
 test('resolveTarget takes a full id, or an upstream name that names one target', () => {
@@ -155,4 +156,9 @@ test('changes reports a fallback, a new provider, an opened circuit and a blocke
 test('describeTargets lists every target with its provider', () => {
   expect(describeTargets(found.targets)).toBe('claude-gpt-6-sol@codex  gpt-6-sol (codex)\nclaude-sonnet-9@work  sonnet-9 (work)')
   expect(describeTargets([])).toBe('no targets offered; add offer to a provider in the llmgate config')
+})
+
+test('printableBlock keeps lines, replaces control bytes inside them and cuts at the limit', () => {
+  expect(printableBlock('a\nb\u001b[2Jc\r\nd')).toBe('a\nb?[2Jc\nd')
+  expect(printableBlock('x'.repeat(50), 10)).toBe('xxxxxxxxxx')
 })

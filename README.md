@@ -338,6 +338,7 @@ slice). `/llmgate` opens a pane (beside the transcript where the app has room, a
 - **Status entry:** the status line shows `PROVIDER MODEL` of the last reply with `(fallback)` or
   `(switched)`, and a toast appears when a reply first comes as a fallback, the provider changes, a circuit opens or
   a provider reports a blocked limit. The gateway is read every 5 seconds.
+- **Setup:** `/llmgate setup` (or the Setup button) lists every provider with its labels, auth, and whether it is ready or needs setup, and walks you through adding one: pick a kind (Claude login, ChatGPT plan, GitHub Copilot with an optional company host, API key, local model, another gateway), fill the few fields, Preview shows the config diff, Apply writes it and reloads the gateway, and the pane then shows the exact command to type for the sign-in or the hidden secret prompt. A key is never typed into the pane.
 - **Targets:** every model your providers offer (`offer` in the provider), with `use for ROLE` (this session) and
   `make default` (every session) buttons, and `clear session override`.
 
