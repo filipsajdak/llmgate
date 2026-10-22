@@ -1,6 +1,6 @@
 # Set up providers and how their models cooperate, from inside Claude Code
 
-Status: design (BET-5, mod; BET-4, gateway). Decisions are the owner's answers of 2026-10-22. It extends
+Status: design (BET-5, mod; BET-4, gateway). Slices C3 to C5 moved to BET-6 ([docs/llmgate-guided-setup.md](llmgate-guided-setup.md)); C1 and C2 are built. Decisions are the owner's answers of 2026-10-22. It extends
 [docs/llmgate-mod.md](llmgate-mod.md) decisions M8 (config edits) and M10 (Health and Config) and
 [docs/provider-presets.md](provider-presets.md) slice L4.
 
