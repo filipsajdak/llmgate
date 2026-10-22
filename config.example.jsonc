@@ -34,6 +34,12 @@
     // Models of this provider to list in Claude Code's /model picker besides the values of models; each
     // appears as claude-NAME@PROVIDER.
     // "offer": ["claude-sonnet-5-5"],
+    // Labels of this provider, shown beside every model it serves in the pane, the /model picker and the
+    // CLI, and used to group usage and filter targets. Each is 1 to 24 letters, digits, - or _.
+    // "labels": ["work", "acme"],
+    // Labels added to single models, keyed by upstream model id; a model carries its provider's labels
+    // first, at most 8 in all.
+    // "model_labels": { "claude-opus-5.5": ["big"] },
   },
 
   // Claude Code expands aliases such as sonnet to full model names before it calls the gateway, so map

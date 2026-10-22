@@ -87,6 +87,8 @@ struct upstream_config {
     [[= reflect::example{R"({ "claude-sonnet-5.5": { "context_tokens": 328000, "prompt_tokens": 200000, "output_tokens": 128000 } })"}]] [[= reflect::commented]] std::map<std::string, model_limits> limits{};
     [[= reflect::doc{"Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen."}]] [[= reflect::commented]] bool forward_credentials = false;
     [[= reflect::doc{"Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER."}]] [[= reflect::example{R"(["claude-sonnet-5-5"])"}]] [[= reflect::commented]] std::vector<std::string> offer{};
+    [[= reflect::doc{"Labels of this provider, shown beside every model it serves in the pane, the /model picker and the CLI, and used to group usage and filter targets. Each is 1 to 24 letters, digits, - or _."}]] [[= reflect::example{R"(["work", "acme"])"}]] [[= reflect::commented]] std::vector<std::string> labels{};
+    [[= reflect::doc{"Labels added to single models, keyed by upstream model id; a model carries its provider's labels first, at most 8 in all."}]] [[= reflect::example{R"({ "claude-opus-5.5": ["big"] })"}]] [[= reflect::commented]] std::map<std::string, std::vector<std::string>> model_labels{};
 };
 
 constexpr std::string_view vscode_copilot_client_id = "Iv1.b507a08c87ecfe98";
@@ -116,6 +118,8 @@ struct provider_config {
     [[= reflect::example{R"({ "claude-sonnet-5.5": { "context_tokens": 328000, "prompt_tokens": 200000, "output_tokens": 128000 } })"}]] [[= reflect::commented]] std::map<std::string, model_limits> limits{};
     [[= reflect::doc{"Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen."}]] [[= reflect::commented]] bool forward_credentials = false;
     [[= reflect::doc{"Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER."}]] [[= reflect::example{R"(["claude-sonnet-5-5"])"}]] [[= reflect::commented]] std::vector<std::string> offer{};
+    [[= reflect::doc{"Labels of this provider, shown beside every model it serves in the pane, the /model picker and the CLI, and used to group usage and filter targets. Each is 1 to 24 letters, digits, - or _."}]] [[= reflect::example{R"(["work", "acme"])"}]] [[= reflect::commented]] std::vector<std::string> labels{};
+    [[= reflect::doc{"Labels added to single models, keyed by upstream model id; a model carries its provider's labels first, at most 8 in all."}]] [[= reflect::example{R"({ "claude-opus-5.5": ["big"] })"}]] [[= reflect::commented]] std::map<std::string, std::vector<std::string>> model_labels{};
     [[= reflect::doc{"Name of the environment variable that holds the API key sent as the bearer token."}]]
     [[= reflect::example{R"("ANTHROPIC_UPSTREAM_KEY")"}]] std::string static_token_env{};
     [[= reflect::doc{"GitHub Copilot login of this provider; used instead of static_token_env."}]] std::optional<copilot_config> copilot{};

@@ -106,6 +106,31 @@ std::vector<std::string> provider_names(std::map<std::string, provider_config> c
     return names;
 }
 
+constexpr std::size_t longest_shown_name = 64;
+
+std::string plain(std::string_view const text) {
+    return text.substr(0, longest_shown_name) | std::views::transform([](char const c) { return c >= ' ' && c < '\x7f' ? c : '?'; }) | std::ranges::to<std::string>();
+}
+
+std::string label_problem(std::string const& name, provider_config const& item) {
+    auto const rule = std::format("a label is 1 to {} letters, digits, - or _", control::longest_label);
+    if (std::ranges::any_of(item.labels, [](std::string const& label) { return !control::valid_label(label); })) {
+        return std::format("provider {}: {}", name, rule);
+    }
+    if (item.labels.size() > control::most_labels) {
+        return std::format("provider {}: at most {} labels", name, control::most_labels);
+    }
+    for (auto const& [model, labels] : item.model_labels) {
+        if (std::ranges::any_of(labels, [](std::string const& label) { return !control::valid_label(label); })) {
+            return std::format("provider {} model {}: {}", name, plain(model), rule);
+        }
+        if (control::merged_labels(item.labels, labels).size() > control::most_labels) {
+            return std::format("provider {} model {}: at most {} labels in all", name, plain(model), control::most_labels);
+        }
+    }
+    return {};
+}
+
 std::string provider_problem(std::string const& name, provider_config const& item, config const& settings) {
     if (item.preset == preset_kind::openai_chat) {
         return "provider " + name + ": the openai_chat preset is not built yet";
@@ -119,7 +144,7 @@ std::string provider_problem(std::string const& name, provider_config const& ite
     if (item.forward_credentials && item.protocol != wire_protocol::anthropic) {
         return "provider " + name + " forwards the client's credentials (forward_credentials), which only an anthropic provider can use";
     }
-    return {};
+    return label_problem(name, item);
 }
 
 std::string config_problem(config const& settings) {
@@ -355,6 +380,7 @@ struct overview_target {
     std::string provider{};
     std::string upstream{};
     std::string label{};
+    std::vector<std::string> labels{};
     std::optional<std::uint64_t> max_input_tokens{};
     std::optional<std::uint64_t> max_tokens{};
 };
@@ -641,15 +667,19 @@ struct provider_runtime {
     selection::breaker circuit{};
 };
 
+control::offer offer_of(std::string const& name, provider_config const& settings) {
+    control::offer one{.provider = name, .labels = settings.labels, .model_labels = settings.model_labels};
+    for (auto const& entry : settings.models) {
+        one.models.push_back(entry.second);
+    }
+    one.models.append_range(settings.offer);
+    return one;
+}
+
 std::vector<control::offer> offers_of(std::span<provider_runtime const> const providers) {
     std::vector<control::offer> out;
     for (auto const& item : providers) {
-        control::offer one{.provider = item.name};
-        for (auto const& entry : item.settings.models) {
-            one.models.push_back(entry.second);
-        }
-        one.models.append_range(item.settings.offer);
-        out.push_back(std::move(one));
+        out.push_back(offer_of(item.name, item.settings));
     }
     return out;
 }
@@ -657,6 +687,14 @@ std::vector<control::offer> offers_of(std::span<provider_runtime const> const pr
 }  // namespace llmgate::gateway::detail
 
 export namespace llmgate::gateway {
+
+std::vector<control::offer> offers_of_config(config const& settings) {
+    std::vector<control::offer> out;
+    for (auto const& [name, item] : effective_providers(settings)) {
+        out.push_back(detail::offer_of(name, item));
+    }
+    return out;
+}
 
 class proxy {
 public:
@@ -824,6 +862,7 @@ private:
                                         .provider = item.provider,
                                         .upstream = item.upstream,
                                         .label = item.display_name,
+                                        .labels = item.labels,
                                         .max_input_tokens = detail::known_limit(limits.prompt_tokens),
                                         .max_tokens = detail::known_limit(limits.output_tokens)});
         }

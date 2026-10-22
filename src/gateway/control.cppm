@@ -17,12 +17,34 @@ struct target {
     std::string provider{};
     std::string upstream{};
     std::string display_name{};
+    std::vector<std::string> labels{};
 };
 
 struct offer {
     std::string provider{};
     std::vector<std::string> models{};
+    std::vector<std::string> labels{};
+    std::map<std::string, std::vector<std::string>> model_labels{};
 };
+
+constexpr std::size_t longest_label = 24;
+constexpr std::size_t most_labels = 8;
+
+constexpr bool within(char const c, char const low, char const high) { return c >= low && c <= high; }
+
+constexpr bool label_character(char const c) { return within(c, 'a', 'z') || within(c, 'A', 'Z') || within(c, '0', '9') || std::string_view{"-_"}.contains(c); }
+
+constexpr bool valid_label(std::string_view const label) { return !label.empty() && label.size() <= longest_label && std::ranges::all_of(label, label_character); }
+
+constexpr std::vector<std::string> merged_labels(std::span<std::string const> const first, std::span<std::string const> const second) {
+    std::vector<std::string> out;
+    for (auto const& label : std::views::join(std::array{first, second})) {
+        if (std::ranges::find(out, label) == out.end()) {
+            out.push_back(label);
+        }
+    }
+    return out;
+}
 
 constexpr bool discoverable(std::string_view const id) {
     return roles::mentions(id, "claude") || roles::mentions(id, "anthropic");
@@ -40,9 +62,18 @@ constexpr std::vector<target> catalogue(std::span<offer const> const offers) {
         for (auto const& model : one.models) {
             auto id = id_of(model, one.provider);
             if (std::ranges::none_of(out, [&id](target const& seen) { return seen.id == id; })) {
+                auto const own = one.model_labels.find(model);
+                auto labels = merged_labels(one.labels, own == one.model_labels.end() ? std::span<std::string const>{} : std::span<std::string const>{own->second});
                 std::string label;
                 text::append_all(label, model, " (", one.provider, ")");
-                out.push_back({.id = std::move(id), .provider = one.provider, .upstream = model, .display_name = std::move(label)});
+                if (!labels.empty()) {
+                    text::append_all(label, " [", labels.front());
+                    for (auto const& more : labels | std::views::drop(1)) {
+                        text::append_all(label, ", ", more);
+                    }
+                    text::append_all(label, "]");
+                }
+                out.push_back({.id = std::move(id), .provider = one.provider, .upstream = model, .display_name = std::move(label), .labels = std::move(labels)});
             }
         }
     }

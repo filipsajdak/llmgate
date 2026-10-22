@@ -1287,6 +1287,8 @@ const suite gateway_suite = [] {
     "capability_the_overview_gathers_routes_targets_health_spend_and_limits_without_a_secret"_test = [] {
         duo d{[](gateway::config& built) {
             built.providers["b"].limits = {{"model-b", {.prompt_tokens = 200000, .output_tokens = 64000}}};
+            built.providers["b"].labels = {"work"};
+            built.providers["b"].model_labels = {{"model-b", {"acme"}}};
             built.pricing = {{"claude-opus-upstream", {.input = 1000000.0}}};
         }};
         d.second.mode = behaviour::json_usage;
@@ -1303,6 +1305,7 @@ const suite gateway_suite = [] {
         expect(answer.status == 200 && body.contains(R"("schema_version":1)")) << body;
         expect(body.contains(R"("role":"opus")") && body.contains(R"("role":"sonnet")") && body.contains(R"("role":"haiku")")) << body;
         expect(body.contains(R"("id":"claude-model-b@b")") && body.contains(R"("max_input_tokens":200000)")) << body;
+        expect(body.contains(R"("labels":["work","acme"])")) << body;
         expect(body.contains(R"("name":"b")") && body.contains(R"("circuit":"closed")")) << body;
         expect(body.contains(R"("anthropic-ratelimit-unified-5h-utilization":"0.42")") && body.contains(R"("anthropic-ratelimit-unified-status":"allowed")")) << body;
         expect(body.contains(R"("provider":"b")") && body.contains(R"("model":"claude-opus-upstream")") && body.contains(R"("cost":11)")) << body;
@@ -1956,6 +1959,31 @@ const suite gateway_suite = [] {
 
         expect(good.has_value() && good->providers.at("codex").preset == gateway::preset_kind::chatgpt && gateway::config_problem(*good).empty());
         expect(!bad.has_value());
+    };
+
+    "capability_labels_are_read_from_a_provider_and_its_models_and_a_bad_one_is_named"_test = [] {
+        auto const good = json::read_text<gateway::config>(
+            R"({"listen":"127.0.0.1:1","providers":{"w":{"base_url":"http://127.0.0.1:2","labels":["work"],"model_labels":{"m":["acme"]},"offer":["m"]}}})");
+        auto const bad = json::read_text<gateway::config>(R"({"listen":"127.0.0.1:1","providers":{"w":{"base_url":"http://127.0.0.1:2","labels":["a b"]}}})");
+        auto const many = json::read_text<gateway::config>(
+            R"({"listen":"127.0.0.1:1","providers":{"w":{"base_url":"http://127.0.0.1:2","labels":["a","b","c","d","e","f","g"],"model_labels":{"m":["h","i"]}}}})");
+        auto const bad_model = json::read_text<gateway::config>(
+            R"({"listen":"127.0.0.1:1","providers":{"w":{"base_url":"http://127.0.0.1:2","model_labels":{"m":["x,y"]}}}})");
+
+        expect(good.has_value() && gateway::config_problem(*good).empty());
+        expect(bad.has_value() && gateway::config_problem(*bad).contains("provider w") && gateway::config_problem(*bad).contains("label"));
+        expect(many.has_value() && gateway::config_problem(*many).contains("at most"));
+        expect(bad_model.has_value() && gateway::config_problem(*bad_model).contains("model m"));
+    };
+
+    "capability_a_label_reaches_the_catalogue_and_the_model_list_display_name"_test = [] {
+        auto const settings = json::read_text<gateway::config>(
+            R"({"listen":"127.0.0.1:1","providers":{"w":{"base_url":"http://127.0.0.1:2","labels":["work"],"model_labels":{"claude-x":["acme"]},"offer":["claude-x"]}}})");
+        auto const offers = gateway::offers_of_config(*settings);
+
+        expect(offers.size() == 1_u && offers.front().labels == std::vector<std::string>{"work"});
+        auto const targets = llmgate::control::catalogue(offers);
+        expect(targets.size() == 1_u && targets.front().display_name == "claude-x (w) [work, acme]");
     };
 };
 

@@ -40,6 +40,28 @@ const suite control_suite = [] {
         expect(list.back().display_name == "mistral-small-3.1 (thor)");
     };
 
+    "capability_a_target_carries_the_labels_of_its_provider_then_of_its_model_without_duplicates"_test = [] {
+        std::vector<offer> const labelled{{.provider = "work",
+                                           .models = {"claude-sonnet-5.5", "claude-opus-5.5"},
+                                           .labels = {"work", "acme"},
+                                           .model_labels = {{"claude-opus-5.5", {"acme", "big"}}}},
+                                          {.provider = "home", .models = {"claude-sonnet-5.5"}}};
+        auto const list = catalogue(labelled);
+
+        expect(list.size() == 3_u);
+        expect((list[0].labels == std::vector<std::string>{"work", "acme"}));
+        expect((list[1].labels == std::vector<std::string>{"work", "acme", "big"}));
+        expect(list[2].labels.empty());
+        expect(list[0].display_name == "claude-sonnet-5.5 (work) [work, acme]");
+        expect(list[2].display_name == "claude-sonnet-5.5 (home)");
+    };
+
+    "limit_a_label_is_one_to_24_letters_digits_dash_or_underscore"_test = [] {
+        expect(valid_label("work") && valid_label("acme_2-b") && valid_label(std::string(longest_label, 'a')));
+        expect(!valid_label("") && !valid_label(std::string(longest_label + 1, 'a')));
+        expect(!valid_label("a b") && !valid_label("a,b") && !valid_label("a]") && !valid_label("\x1b[2J"));
+    };
+
     "limit_a_model_offered_twice_by_one_provider_is_listed_once"_test = [] {
         std::vector<offer> const twice{{.provider = "p", .models = {"m", "m"}}};
 
