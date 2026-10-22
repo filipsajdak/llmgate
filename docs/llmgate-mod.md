@@ -45,6 +45,7 @@ Limits that shape the design:
 | M13 | **Delivery:** in this repository, `mods/llmgate/`, Apache-2.0, with a README that says what the mod does and calls (`claude plugin validate` output). |
 | M14 | **Surfaces:** terminal first; the Desktop app and VS Code are checked after the bet's smallest test. |
 | M16 | **Labels** on providers and models (display, usage by label, filter, a guard against crossing work and private): [docs/labels.md](labels.md). |
+| M17 | **Setup and cooperation** (add a provider, routes and fallback, role models, plan and execute, advisor, subagents, config reload): [docs/llmgate-setup.md](llmgate-setup.md). |
 | M15 | **Name:** the mod and its commands are `llmgate`; `/llmgate` replaces `/gateway` (kept as an alias for one release). |
 
 ## Architecture
