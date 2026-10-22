@@ -109,7 +109,7 @@ void report_abandoned(std::size_t const abandoned, std::chrono::milliseconds con
 }
 
 int serve_on(async::reactor& loop, gateway::config const& settings, std::string const& host, tls::client_context const& tls_context,
-             net::listener& listening) {
+             net::listener& listening, std::string const& config_path) {
     auto policy = commands::make_policy(settings, host, listening.port());
     if (!policy) {
         return fail(exit_config, policy.error());
@@ -119,6 +119,19 @@ int serve_on(async::reactor& loop, gateway::config const& settings, std::string 
     }
     auto credentials = make_credentials(loop, tls_context, settings);
     gateway::proxy proxy{loop, settings, std::move(*policy), borrowed(credentials), tls_context};
+    std::deque<credential_store> reloaded_credentials;
+    proxy.reload_with([&]() -> std::expected<gateway::reloaded, std::string> {
+        auto fresh = load_config(config_path);
+        if (!fresh) {
+            return std::unexpected{std::move(fresh.error())};
+        }
+        auto fresh_policy = commands::make_policy(*fresh, host, listening.port());
+        if (!fresh_policy) {
+            return std::unexpected{std::move(fresh_policy.error())};
+        }
+        auto const& kept = reloaded_credentials.emplace_back(make_credentials(loop, tls_context, *fresh));
+        return gateway::reloaded{.settings = std::move(*fresh), .credentials = borrowed(kept), .access = std::move(*fresh_policy)};
+    });
     attach_ledger(proxy, settings);
     attach_capture(proxy, settings);
     proxy.use_overrides(commands::read_overrides());
@@ -135,7 +148,7 @@ int serve_on(async::reactor& loop, gateway::config const& settings, std::string 
     return 0;
 }
 
-int serve(gateway::config settings) {
+int serve(gateway::config settings, std::string const& config_path) {
     auto const address = arguments::split_listen(settings.listen);
     if (!address) {
         return fail(exit_config, "listen must look like 127.0.0.1:9480");
@@ -149,7 +162,7 @@ int serve(gateway::config settings) {
     if (!listening) {
         return fail(exit_runtime, std::format("cannot start: {}", listening.error().message()));
     }
-    return serve_on(loop, settings, address->host, *tls_context, *listening);
+    return serve_on(loop, settings, address->host, *tls_context, *listening, config_path);
 }
 
 int save_login(gateway::copilot_config const& target, std::string const& token) {
@@ -287,7 +300,7 @@ int models_command(commands::context const& where) {
 }
 
 int serve_command(commands::context const& where) {
-    return serve(where.settings);
+    return serve(where.settings, where.options.config_path);
 }
 
 int login_command(commands::context const& where) {
@@ -315,6 +328,7 @@ constexpr auto handlers = std::to_array<std::pair<arguments::command, command_ha
     {arguments::command::targets, &commands::run_targets},
     {arguments::command::route, &commands::run_route},
     {arguments::command::models, &models_command},
+    {arguments::command::reload, &commands::run_reload},
     {arguments::command::statusline, &statusline_command},
 });
 

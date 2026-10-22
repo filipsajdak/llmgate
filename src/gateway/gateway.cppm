@@ -665,6 +665,7 @@ struct provider_runtime {
     credential* creds;
     std::optional<routing::endpoint_url> url;
     selection::breaker circuit{};
+    bool retired = false;
 };
 
 control::offer offer_of(std::string const& name, provider_config const& settings) {
@@ -676,13 +677,20 @@ control::offer offer_of(std::string const& name, provider_config const& settings
     return one;
 }
 
-std::vector<control::offer> offers_of(std::span<provider_runtime const> const providers) {
+template <std::ranges::input_range Providers>
+std::vector<control::offer> offers_of(Providers&& providers) {
     std::vector<control::offer> out;
     for (auto const& item : providers) {
         out.push_back(offer_of(item.name, item.settings));
     }
     return out;
 }
+
+constexpr bool alive(provider_runtime const& item) { return !item.retired; }
+
+using live_view = std::ranges::filter_view<std::ranges::ref_view<std::deque<provider_runtime> const>, bool (*)(provider_runtime const&)>;
+
+constexpr std::size_t most_provider_generations = 1024;
 
 }  // namespace llmgate::gateway::detail
 
@@ -695,6 +703,14 @@ std::vector<control::offer> offers_of_config(config const& settings) {
     }
     return out;
 }
+
+struct reloaded {
+    config settings{};
+    credential_map credentials{};
+    std::optional<access_policy> access{};
+};
+
+using reload_source = std::function<std::expected<reloaded, std::string>()>;
 
 class proxy {
 public:
@@ -710,18 +726,19 @@ public:
             providers_.push_back({.name = name, .settings = std::move(item), .creds = found == credentials.end() ? &missing_ : found->second, .url = std::move(url)});
             counters_.providers[name];
         }
-        targets_ = control::catalogue(detail::offers_of(providers_));
+        targets_ = control::catalogue(detail::offers_of(live_providers()));
     }
 
     proxy(async::reactor& loop, config settings, access_policy access, credential& credentials, tls::client_context const& tls_context)
         : proxy{loop, std::move(settings), std::move(access), single(credentials), tls_context} {}
 
+    void reload_with(reload_source source) { reload_source_ = std::move(source); }
     void use_overrides(control::overrides book) { overrides_ = std::move(book); }
     void capture_with(std::function<void(std::string const&)> sink) { capture_ = std::move(sink); }
     void persist_overrides_with(std::function<void(control::overrides const&)> sink) { persist_overrides_ = std::move(sink); }
 
     bool uses_credential_endpoint() const {
-        return std::ranges::any_of(providers_, [](detail::provider_runtime const& item) { return item.creds->endpoint().has_value(); });
+        return std::ranges::any_of(live_providers(), [](detail::provider_runtime const& item) { return item.creds->endpoint().has_value(); });
     }
 
     stats const& counters() const noexcept { return counters_; }
@@ -731,7 +748,7 @@ public:
     void use_clock(std::function<std::int64_t()> clock) { clock_ = std::move(clock); }
     void use_breaker_clock(std::function<std::int64_t()> clock) { breaker_clock_ = std::move(clock); }
 
-    bool configured() const { return !providers_.empty() && usable(); }
+    bool configured() const { return !std::ranges::empty(live_providers()) && usable(); }
 
     template <net::byte_stream Client>
     async::task<net::result_void> operator()(httpio::request const& incoming, httpio::response_writer<Client>& out) {
@@ -760,7 +777,7 @@ public:
 
 private:
     bool usable() const {
-        return std::ranges::all_of(providers_, [](detail::provider_runtime const& item) { return item.url.has_value(); }) &&
+        return std::ranges::all_of(live_providers(), [](detail::provider_runtime const& item) { return item.url.has_value(); }) &&
                selection::route_problem(routes_, declared_).empty();
     }
 
@@ -789,7 +806,7 @@ private:
 
     std::set<std::string> alias_names() const {
         std::set<std::string> aliases;
-        for (auto const& item : providers_) {
+        for (auto const& item : live_providers()) {
             for (auto const& entry : item.settings.models) {
                 aliases.insert(entry.first);
             }
@@ -799,10 +816,81 @@ private:
 
     json::object providers_object() const {
         json::object items;
-        for (auto const& item : providers_) {
+        for (auto const& item : live_providers()) {
             items.push_back(detail::provider_member(item.name, counters_.providers.at(item.name), selection::state_of(item.circuit, breaker_, breaker_clock_())));
         }
         return items;
+    }
+
+    detail::live_view live_providers() const { return detail::live_view{providers_, &detail::alive}; }
+
+    std::string reload_problem(reloaded const& next) const {
+        if (next.settings.listen != settings_.listen) {
+            return "the listen address cannot change in a reload: restart the gateway";
+        }
+        if (auto problem = config_problem(next.settings); !problem.empty()) {
+            return problem;
+        }
+        if (providers_.size() + effective_providers(next.settings).size() > detail::most_provider_generations) {
+            return "too many reloads since start: restart the gateway";
+        }
+        return {};
+    }
+
+    void swap_providers(reloaded& next) {
+        std::vector<detail::provider_runtime> fresh;
+        for (auto& [name, item] : effective_providers(next.settings)) {
+            auto const found = next.credentials.find(name);
+            auto const old = std::ranges::find_if(providers_, [&name](detail::provider_runtime const& each) { return detail::alive(each) && each.name == name; });
+            auto url = detail::parsed_url(item.base_url);
+            fresh.push_back({.name = name,
+                             .settings = std::move(item),
+                             .creds = found == next.credentials.end() ? &missing_ : found->second,
+                             .url = std::move(url),
+                             .circuit = old == providers_.end() ? selection::breaker{} : old->circuit});
+        }
+        for (auto& each : providers_) {
+            each.retired = true;
+        }
+        for (auto& each : fresh) {
+            counters_.providers[each.name];
+            providers_.push_back(std::move(each));
+        }
+    }
+
+    void prune_overrides() {
+        auto const gone = [this](auto const& pin) { return !std::ranges::contains(declared_, pin.second.provider); };
+        std::erase_if(overrides_.global, gone);
+        for (auto& session : overrides_.session) {
+            std::erase_if(session.second, gone);
+        }
+        if (persist_overrides_) {
+            persist_overrides_(overrides_);
+        }
+    }
+
+    routing::reply_body reload() {
+        if (!reload_source_) {
+            return routing::error_reply(409, "invalid_request_error", "this gateway has no config file to reload");
+        }
+        auto next = reload_source_();
+        if (!next) {
+            return routing::error_reply(400, "invalid_request_error", next.error());
+        }
+        if (auto problem = reload_problem(*next); !problem.empty()) {
+            return routing::error_reply(400, "invalid_request_error", problem);
+        }
+        swap_providers(*next);
+        if (next->access) {
+            access_ = std::move(*next->access);
+        }
+        settings_ = std::move(next->settings);
+        breaker_ = {.failures = settings_.fallback.failures, .cooldown_ms = settings_.fallback.cooldown.count()};
+        routes_ = role_routes(settings_);
+        declared_ = provider_names(effective_providers(settings_));
+        targets_ = control::catalogue(detail::offers_of(live_providers()));
+        prune_overrides();
+        return {.status = 200, .body = R"({"status":"ok"})"};
     }
 
     routing::reply_body apply_control(httpio::request const& incoming) {
@@ -813,6 +901,9 @@ private:
         auto const expected = proof::hmac_sha256_hex(access_.identity_key, proof::identity_message(std::format("{}/control", access_.identity_scope), incoming.body));
         if (!routing::secrets_equal(sent, expected)) {
             return routing::error_reply(401, "authentication_error", "invalid or missing control proof");
+        }
+        if (auto const asked = json::read_text<control::command>(incoming.body); asked && asked->action == control::reload_action) {
+            return reload();
         }
         auto changed = overrides_;
         if (auto problem = control::apply(changed, incoming.body, targets_); !problem.empty()) {
@@ -866,7 +957,7 @@ private:
                                         .max_input_tokens = detail::known_limit(limits.prompt_tokens),
                                         .max_tokens = detail::known_limit(limits.output_tokens)});
         }
-        for (auto const& item : providers_) {
+        for (auto const& item : live_providers()) {
             auto const seen = rate_limits_.find(item.name);
             document.providers.push_back({.name = item.name,
                                           .counts = counters_.providers.at(item.name),
@@ -984,7 +1075,7 @@ private:
     }
 
     std::size_t index_of(std::string_view const name) const {
-        auto const found = std::ranges::find(providers_, name, &detail::provider_runtime::name);
+        auto const found = std::ranges::find_if(providers_, [name](detail::provider_runtime const& item) { return detail::alive(item) && item.name == name; });
         return static_cast<std::size_t>(found - providers_.begin());
     }
 
@@ -1105,7 +1196,7 @@ private:
     }
 
     model_limits limits_of(control::target const& item) const {
-        auto const provider = std::ranges::find(providers_, item.provider, &detail::provider_runtime::name);
+        auto const provider = std::ranges::find_if(providers_, [&item](detail::provider_runtime const& each) { return detail::alive(each) && each.name == item.provider; });
         if (provider == providers_.end()) {
             return {};
         }
@@ -1432,7 +1523,8 @@ private:
     tls::client_context const* tls_context_;
     selection::breaker_settings breaker_;
     static_credential missing_{std::string{}};
-    std::vector<detail::provider_runtime> providers_;
+    std::deque<detail::provider_runtime> providers_;
+    reload_source reload_source_;
     std::vector<selection::role_route> routes_;
     std::vector<control::target> targets_;
     control::overrides overrides_;

@@ -787,26 +787,33 @@ struct control_call {
     std::string body;
 };
 
-inline std::expected<control_call, std::string> prepare_control_call(context const& where) {
+inline std::expected<control_call, std::string> sign_control_call(context const& where, std::string body) {
     auto const address = detail::address_of(where.settings);
     if (!address) {
         return std::unexpected{address.error()};
-    }
-    auto body = control_body(where.options.passthrough, where.options.session);
-    if (!body) {
-        return std::unexpected{std::move(body.error())};
     }
     auto const key = identity_key();
     if (!key) {
         return std::unexpected{key.error()};
     }
     auto headers = detail::key_headers(where.settings);
-    headers.emplace_back("x-llmgate-proof", proof::hmac_sha256_hex(*key, proof::identity_message(std::format("{}:{}/control", address->host, address->port), *body)));
-    return control_call{.address = *address, .headers = std::move(headers), .body = std::move(*body)};
+    headers.emplace_back("x-llmgate-proof", proof::hmac_sha256_hex(*key, proof::identity_message(std::format("{}:{}/control", address->host, address->port), body)));
+    return control_call{.address = *address, .headers = std::move(headers), .body = std::move(body)};
 }
 
-inline int run_use(context const& where) {
-    auto const call = prepare_control_call(where);
+inline std::expected<control_call, std::string> prepare_control_call(context const& where) {
+    auto body = control_body(where.options.passthrough, where.options.session);
+    if (!body) {
+        return std::unexpected{std::move(body.error())};
+    }
+    return sign_control_call(where, std::move(*body));
+}
+
+inline std::string reload_body() {
+    return json::write(json::to_value(control::command{.action = std::string{control::reload_action}}));
+}
+
+inline int send_control(std::expected<control_call, std::string> const& call) {
     if (!call) {
         std::println(stderr, "llmgate: {}", call.error());
         return exit_failure;
@@ -818,6 +825,14 @@ inline int run_use(context const& where) {
     }
     std::println("ok");
     return 0;
+}
+
+inline int run_use(context const& where) {
+    return send_control(prepare_control_call(where));
+}
+
+inline int run_reload(context const& where) {
+    return send_control(sign_control_call(where, reload_body()));
 }
 
 inline int show_from_gateway(context const& where, std::string const& target) {

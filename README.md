@@ -27,6 +27,7 @@ llmgate claude         # starts the gateway if it is down, then runs Claude Code
 | `llmgate doctor [--offline] [--json]` | Checks the setup and prints PASS, WARN or FAIL per check with a one-line remedy; exits non-zero on any FAIL. No secret is printed. `--offline` skips the GitHub calls |
 | `llmgate quota [--json]` | GitHub Copilot plan and quota: remaining of total per allowance and the reset date |
 | `llmgate models [--provider NAME] [--json]` | the models a provider lists, with context, prompt and output limits, and a mark on any the account's policy disables; `doctor` runs the same check on every model the config maps |
+| `llmgate reload` | asks the running gateway to re-read the config file and swap providers, routes, labels and the model list without a restart; a file that fails validation, or a changed `listen`, is refused and the running config stays. Session overrides and the usage ledger are kept; an override that names a removed provider is dropped |
 | `llmgate statusline` | The status line command: model, folder, git branch, a context bar, gateway health, request and repair counts, and today's tokens against the budget |
 | `llmgate login` | GitHub Copilot device login |
 | `llmgate --check-config` | Validates the configuration; unknown keys and wrong types are reported with their path |

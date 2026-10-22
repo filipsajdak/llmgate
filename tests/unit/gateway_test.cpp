@@ -823,6 +823,94 @@ const suite gateway_suite = [] {
         expect(w.ask(std::move(request)).body.contains(R"("via":"config")"));
     };
 
+    "capability_a_signed_reload_swaps_the_providers_and_the_model_list_without_a_restart"_test = [] {
+        world w{"upstream-token", "", std::nullopt, "identity-k"};
+        auto changed = world::settings(w.upstream_listener.port(), {});
+        changed.models = {{"opus", "claude-opus-v2"}};
+        changed.providers["extra"] = {.base_url = std::format("http://127.0.0.1:{}", w.upstream_listener.port()), .offer = {"claude-extra-1"}};
+        w.gateway.reload_with([&]() -> std::expected<gateway::reloaded, std::string> {
+            gateway::credential_map all;
+            all.emplace("default", &w.credential);
+            all.emplace("extra", &w.credential);
+            return gateway::reloaded{.settings = changed, .credentials = std::move(all)};
+        });
+        auto models = messages_request("");
+        models.method = "GET";
+        models.target = "/anthropic/v1/models";
+
+        auto const before = w.ask(models).body;
+        auto const answer = w.ask(control_request(R"({"action":"reload"})", "identity-k"));
+        auto const after = w.ask(std::move(models)).body;
+
+        expect(before.contains("claude-opus-upstream@default") && !before.contains("claude-extra-1@extra"));
+        expect(answer.status == 200) << answer.body;
+        expect(after.contains("claude-opus-v2@default") && after.contains("claude-extra-1@extra") && !after.contains("claude-opus-upstream@default")) << after;
+    };
+
+    "limit_a_reload_that_fails_validation_or_moves_the_listen_address_keeps_the_running_config"_test = [] {
+        world w{"upstream-token", "", std::nullopt, "identity-k"};
+        auto invalid = world::settings(w.upstream_listener.port(), {});
+        invalid.routes["opus"] = {"nowhere"};
+        auto moved = world::settings(w.upstream_listener.port(), {});
+        moved.listen = "127.0.0.1:1";
+        moved.models = {{"opus", "claude-opus-moved"}};
+        auto next = invalid;
+        w.gateway.reload_with([&]() -> std::expected<gateway::reloaded, std::string> {
+            gateway::credential_map all;
+            all.emplace("default", &w.credential);
+            return gateway::reloaded{.settings = next, .credentials = std::move(all)};
+        });
+        auto models = messages_request("");
+        models.method = "GET";
+        models.target = "/anthropic/v1/models";
+
+        auto const refused = w.ask(control_request(R"({"action":"reload"})", "identity-k"));
+        next = moved;
+        auto const stayed = w.ask(control_request(R"({"action":"reload"})", "identity-k"));
+        auto const after = w.ask(std::move(models)).body;
+
+        expect(refused.status == 400 && refused.body.contains("nowhere")) << refused.body;
+        expect(stayed.status == 400 && stayed.body.contains("restart")) << stayed.body;
+        expect(after.contains("claude-opus-upstream@default") && !after.contains("claude-opus-moved")) << after;
+    };
+
+    "limit_a_reload_replaces_the_access_policy_so_a_new_client_key_is_required_at_once"_test = [] {
+        world w{"upstream-token", "", std::nullopt, "identity-k"};
+        w.gateway.reload_with([&]() -> std::expected<gateway::reloaded, std::string> {
+            gateway::credential_map all;
+            all.emplace("default", &w.credential);
+            return gateway::reloaded{.settings = world::settings(w.upstream_listener.port(), {}),
+                                     .credentials = std::move(all),
+                                     .access = gateway::access_policy{.client_key = "fresh-key",
+                                                                      .allowed_hosts = routing::default_allowed_hosts(loopback, w.gateway_listener.port()),
+                                                                      .identity_key = "identity-k",
+                                                                      .identity_scope = "scope-a"}};
+        });
+        auto models = [] {
+            auto request = messages_request("");
+            request.method = "GET";
+            request.target = "/anthropic/v1/models";
+            return request;
+        };
+
+        auto const before = w.ask(models()).status;
+        expect(w.ask(control_request(R"({"action":"reload"})", "identity-k")).status == 200);
+        auto const without = w.ask(models()).status;
+        auto with_key = messages_request("", "/anthropic/v1/models", "fresh-key");
+        with_key.method = "GET";
+
+        expect(before == 200 && without == 401 && w.ask(std::move(with_key)).status == 200) << without;
+    };
+
+    "limit_a_reload_with_no_config_source_is_refused_and_an_unsigned_one_is_not_run"_test = [] {
+        world w{"upstream-token", "", std::nullopt, "identity-k"};
+        auto unsigned_request = control_request(R"({"action":"reload"})", "identity-k");
+        unsigned_request.fields = messages_request("").fields;
+
+        expect(w.ask(control_request(R"({"action":"reload"})", "identity-k")).status == 409);
+        expect(w.ask(std::move(unsigned_request)).status == 401);
+    };
+
     "limit_a_gateway_without_an_identity_key_has_no_control_endpoint"_test = [] {
         world w;
 

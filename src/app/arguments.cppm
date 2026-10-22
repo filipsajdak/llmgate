@@ -30,7 +30,8 @@ enum class command {
     use,
     targets,
     route,
-    models
+    models,
+    reload
 };
 static_assert(reflect::unique_values<command>());
 

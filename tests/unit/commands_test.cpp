@@ -239,6 +239,10 @@ const suite commands_suite = [] {
         expect(!policy.has_value());
     };
 
+    "capability_the_reload_command_body_is_the_reload_action"_test = [] {
+        expect(commands::reload_body() == R"({"action":"reload","role":"","provider":"","upstream":"","target":"","session":""})");
+    };
+
     "capability_use_words_become_a_control_command_for_a_role_or_a_clear"_test = [] {
         control::overrides pins;
         std::vector<control::target> const known{{.id = "claude-x@copilot", .provider = "copilot", .upstream = "claude-x"}};
