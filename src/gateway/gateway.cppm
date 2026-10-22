@@ -147,6 +147,36 @@ std::string provider_problem(std::string const& name, provider_config const& ite
     return label_problem(name, item);
 }
 
+constexpr auto request_classes = std::to_array<std::string_view>({"subagent", "workflow", "compaction", "auxiliary"});
+
+std::set<std::string> target_ids_of(std::map<std::string, provider_config> const& providers) {
+    std::set<std::string> ids;
+    for (auto const& [name, item] : providers) {
+        for (auto const& entry : item.models) {
+            ids.insert(control::id_of(entry.second, name));
+        }
+        for (auto const& upstream : item.offer) {
+            ids.insert(control::id_of(upstream, name));
+        }
+    }
+    return ids;
+}
+
+std::string class_route_problem(config const& settings, std::map<std::string, provider_config> const& providers) {
+    auto const ids = target_ids_of(providers);
+    for (auto const& [klass, entries] : settings.routes_by_class) {
+        if (std::ranges::find(request_classes, klass) == request_classes.end()) {
+            return std::format("routes_by_class: '{}' is not a request class (subagent, workflow, compaction, auxiliary)", plain(klass));
+        }
+        for (auto const& entry : entries) {
+            if (!providers.contains(entry) && !ids.contains(entry)) {
+                return std::format("routes_by_class {}: '{}' is neither a provider nor a target id", klass, plain(entry));
+            }
+        }
+    }
+    return {};
+}
+
 std::string config_problem(config const& settings) {
     auto const providers = effective_providers(settings);
     if (providers.empty()) {
@@ -156,6 +186,9 @@ std::string config_problem(config const& settings) {
         if (auto problem = provider_problem(name, item, settings); !problem.empty()) {
             return problem;
         }
+    }
+    if (auto problem = class_route_problem(settings, providers); !problem.empty()) {
+        return problem;
     }
     return selection::route_problem(role_routes(settings), provider_names(providers));
 }
@@ -392,9 +425,15 @@ struct overview_provider {
     std::map<std::string, std::string> rate_limits{};
 };
 
+struct overview_class_spend {
+    std::vector<usage::class_total> today{};
+    std::vector<usage::class_total> month{};
+};
+
 struct overview_spend {
     std::vector<usage::spend> today{};
     std::vector<usage::spend> month{};
+    overview_class_spend by_class{};
 };
 
 struct overview_document {
@@ -453,8 +492,20 @@ struct request_note {
     std::string session{};
     std::chrono::steady_clock::time_point began{};
     std::string kind{};
+    std::string request_class{};
+    std::string agent_type{};
     httpio::request const* request = nullptr;
 };
+
+constexpr std::size_t longest_hint = 24;
+
+std::string hint_of(httpio::request const& incoming, std::string_view const name) {
+    auto const value = incoming.head.fields.find(name);
+    if (!value) {
+        return {};
+    }
+    return std::string{value->substr(0, longest_hint)} | std::views::transform([](char const c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' ? c : '?'; }) | std::ranges::to<std::string>();
+}
 
 struct outcome_text {
     std::string stop_reason{};
@@ -966,7 +1017,8 @@ private:
         }
         auto const today = usage::day_of(clock_());
         document.spend = {.today = usage::spend_between(ledger_, today, today, settings_.pricing),
-                          .month = usage::spend_between(ledger_, usage::first_day_of_month(today), today, settings_.pricing)};
+                          .month = usage::spend_between(ledger_, usage::first_day_of_month(today), today, settings_.pricing),
+                          .by_class = {.today = usage::classes_between(ledger_, today, today), .month = usage::classes_between(ledger_, usage::first_day_of_month(today), today)}};
         document.totals = usage::summary_of(ledger_, settings_.usage.budget, clock_());
         return json::write(json::to_value(document));
     }
@@ -1052,7 +1104,7 @@ private:
             ++counters_.budget_refused;
             co_return co_await reject(out, routing::error_reply(429, "rate_limit_error", usage::refusal_message(now)));
         }
-        detail::request_note note{.requested = std::move(first->requested), .session = usage::session_of(incoming.body), .began = std::chrono::steady_clock::now(), .kind = usage::kind_of(incoming.body), .request = &incoming};
+        detail::request_note note{.requested = std::move(first->requested), .session = usage::session_of(incoming.body), .began = std::chrono::steady_clock::now(), .kind = usage::kind_of(incoming.body), .request_class = detail::hint_of(incoming, "x-claude-code-request-class"), .agent_type = detail::hint_of(incoming, "x-claude-code-agent-type"), .request = &incoming};
         auto order = plan_for(incoming, note);
         note.session = session_for(incoming, note);
         co_return co_await run_providers(incoming, out, std::move(order), std::move(note));
@@ -1068,10 +1120,27 @@ private:
         auto const configured = selection::order_for(routes_, role, declared_);
         auto const chosen = control::resolve({.requested = note.requested, .role = role, .session = session_for(incoming, note)}, targets_, overrides_, configured);
         detail::planned_route out{.source = std::string{reflect::enum_name(chosen.source)}};
+        auto const by_class = settings_.routes_by_class.find(note.request_class);
+        if (chosen.source == control::via::config && by_class != settings_.routes_by_class.end()) {
+            out.source = "class_route";
+            for (auto const& entry : by_class->second) {
+                add_class_step(out, entry);
+            }
+            return out;
+        }
         for (auto const& item : chosen.steps) {
             out.steps.push_back({.index = index_of(item.provider), .upstream = item.upstream});
         }
         return out;
+    }
+
+    void add_class_step(detail::planned_route& out, std::string const& entry) const {
+        auto const target = std::ranges::find(targets_, entry, &control::target::id);
+        if (target != targets_.end()) {
+            out.steps.push_back({.index = index_of(target->provider), .upstream = target->upstream});
+        } else {
+            out.steps.push_back({.index = index_of(entry), .upstream = std::nullopt});
+        }
     }
 
     std::size_t index_of(std::string_view const name) const {
@@ -1346,7 +1415,9 @@ private:
                             .stop_reason = std::move(outcome.stop_reason),
                             .error = std::move(outcome.error),
                             .kind = note.kind,
-                            .verdict = std::move(outcome.verdict)};
+                            .verdict = std::move(outcome.verdict),
+                            .request_class = note.request_class,
+                            .agent_type = note.agent_type};
         ledger_.add(entry);
         if (persist_) {
             persist_(usage::to_line(entry));

@@ -911,6 +911,83 @@ const suite gateway_suite = [] {
         expect(w.ask(std::move(unsigned_request)).status == 401);
     };
 
+    "capability_a_request_class_route_sends_compaction_to_the_named_provider_and_leaves_other_classes_on_the_role_route"_test = [] {
+        duo d{[](gateway::config& built) {
+            route(built, "sonnet", {"a"});
+            built.routes_by_class["compaction"] = {"b"};
+        }};
+        auto compaction = messages_request(chat("claude-sonnet-5-5", false), "/anthropic/v1/messages", "");
+        compaction.fields.add("x-claude-code-request-class", "compaction");
+        auto main_turn = messages_request(chat("claude-sonnet-5-5", false), "/anthropic/v1/messages", "");
+        main_turn.fields.add("x-claude-code-request-class", "main");
+
+        (void)d.ask(std::move(compaction));
+        (void)d.ask(std::move(main_turn));
+
+        expect(d.second.seen.size() == 1_u && d.first.seen.size() == 1_u);
+    };
+
+    "capability_a_class_route_entry_may_be_a_target_id_so_the_cheap_model_is_named_not_the_role_mapping"_test = [] {
+        duo d{[](gateway::config& built) { built.routes_by_class["compaction"] = {"claude-model-extra@b"}; }};
+        auto request = messages_request(chat("claude-opus-5-5", false), "/anthropic/v1/messages", "");
+        request.fields.add("x-claude-code-request-class", "compaction");
+
+        (void)d.ask(std::move(request));
+
+        expect(d.second.seen.size() == 1_u && d.second.seen.front().body.contains(R"("model":"model-extra")")) << (d.second.seen.empty() ? "" : d.second.seen.front().body);
+    };
+
+    "limit_a_session_pin_still_outranks_a_class_route"_test = [] {
+        duo d{[](gateway::config& built) { built.routes_by_class["compaction"] = {"b"}; }};
+        control::overrides book;
+        book.session["s9"]["sonnet"] = {.provider = "a", .upstream = "model-a"};
+        book.order.push_back("s9");
+        d.gateway.use_overrides(std::move(book));
+        auto request = messages_request(chat("claude-sonnet-5-5", false), "/anthropic/v1/messages", "");
+        request.fields.add("x-claude-code-request-class", "compaction");
+        request.fields.add("x-claude-code-session-id", "s9");
+
+        (void)d.ask(std::move(request));
+
+        expect(d.first.seen.size() == 1_u && d.second.seen.empty());
+    };
+
+    "capability_the_ledger_and_the_overview_count_requests_by_class_and_agent_type"_test = [] {
+        duo d{[](gateway::config& built) { built.pricing = {}; }};
+        d.second.mode = behaviour::json_usage;
+        for (auto const* klass : {"compaction", "compaction", "subagent"}) {
+            auto request = messages_request(chat("claude-model-b@b", false), "/anthropic/v1/messages", "");
+            request.fields.add("x-claude-code-request-class", klass);
+            request.fields.add("x-claude-code-agent-type", "custom");
+            (void)d.ask(std::move(request));
+        }
+        auto overview = messages_request("");
+        overview.method = "GET";
+        overview.target = "/llmgate/overview";
+
+        auto const body = d.ask(std::move(overview)).body;
+
+        expect(body.contains(R"("by_class")")) << body;
+        expect(body.contains(R"("class":"compaction")") && body.contains(R"("class":"subagent")")) << body;
+        auto const at = body.find(R"("class":"compaction")");
+        expect(at != std::string::npos && body.substr(at, 200).contains(R"("requests":2)")) << body;
+    };
+
+    "limit_a_class_route_with_an_unknown_class_provider_or_target_is_a_config_problem"_test = [] {
+        auto const make = [](std::string_view const klass, std::string_view const entry) {
+            gateway::config built;
+            built.providers["a"] = {.base_url = "http://127.0.0.1:1", .offer = {"claude-x"}};
+            built.routes_by_class[std::string{klass}] = {std::string{entry}};
+            return built;
+        };
+
+        expect(gateway::config_problem(make("compaction", "a")).empty());
+        expect(gateway::config_problem(make("compaction", "claude-x@a")).empty());
+        expect(gateway::config_problem(make("compaction", "zzz")).contains("zzz"));
+        expect(gateway::config_problem(make("compaction", "claude-nope@a")).contains("claude-nope@a"));
+        expect(gateway::config_problem(make("banana", "a")).contains("banana"));
+    };
+
     "limit_a_gateway_without_an_identity_key_has_no_control_endpoint"_test = [] {
         world w;
 

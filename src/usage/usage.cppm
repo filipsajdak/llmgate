@@ -131,6 +131,8 @@ struct record {
     std::string error{};
     std::string kind{};
     std::string verdict{};
+    [[= json::key{"class"}]] std::string request_class{};
+    std::string agent_type{};
 
     friend constexpr bool operator==(record const&, record const&) = default;
 };
@@ -449,6 +451,14 @@ struct group {
     totals sum{};
 };
 
+constexpr std::string_view unclassified = "unclassified";
+
+struct class_group {
+    std::int64_t day = 0;
+    std::string request_class{};
+    totals sum{};
+};
+
 class ledger {
 public:
     constexpr void add(record const& entry) {
@@ -462,6 +472,7 @@ public:
         }
         found->sum.used += entry.used;
         found->sum.requests = add_sat(found->sum.requests, 1);
+        add_class(day, entry);
     }
 
     constexpr totals on_day(std::int64_t const day) const {
@@ -473,8 +484,20 @@ public:
     }
 
     constexpr std::span<group const> groups() const noexcept { return groups_; }
+    constexpr std::span<class_group const> classes() const noexcept { return classes_; }
 
 private:
+    constexpr void add_class(std::int64_t const day, record const& entry) {
+        auto const name = entry.request_class.empty() ? std::string{unclassified} : label(entry.request_class);
+        auto found = std::ranges::find_if(classes_, [&](class_group const& item) { return item.day == day && item.request_class == name; });
+        if (found == classes_.end()) {
+            classes_.push_back({.day = day, .request_class = name});
+            found = std::prev(classes_.end());
+        }
+        found->sum.used += entry.used;
+        found->sum.requests = add_sat(found->sum.requests, 1);
+    }
+
     template <std::predicate<group const&> Pick>
     constexpr totals sum_where(Pick&& pick) const {
         totals all;
@@ -488,6 +511,7 @@ private:
     }
 
     std::vector<group> groups_{};
+    std::vector<class_group> classes_{};
 };
 
 struct load_result {
@@ -680,6 +704,29 @@ constexpr double cost_of(tokens const& used, price const& rate) {
     return (static_cast<double>(used.input) * rate.input + static_cast<double>(used.output) * rate.output + static_cast<double>(used.cache_read) * rate.cache_read +
             static_cast<double>(used.cache_creation) * rate.cache_creation) /
            tokens_per_million;
+}
+
+struct class_total {
+    [[= json::key{"class"}]] std::string request_class{};
+    [[= json::flatten]] totals sum{};
+};
+
+constexpr std::vector<class_total> classes_between(ledger const& book, std::int64_t const first_day, std::int64_t const last_day) {
+    std::vector<class_total> rows;
+    for (auto const& item : book.classes()) {
+        if (item.day < first_day || item.day > last_day) {
+            continue;
+        }
+        auto const same = std::ranges::find(rows, item.request_class, &class_total::request_class);
+        if (same == rows.end()) {
+            rows.push_back({.request_class = item.request_class, .sum = item.sum});
+        } else {
+            same->sum.used += item.sum.used;
+            same->sum.requests = add_sat(same->sum.requests, item.sum.requests);
+        }
+    }
+    std::ranges::sort(rows, {}, &class_total::request_class);
+    return rows;
 }
 
 struct spend {

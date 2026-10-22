@@ -108,6 +108,7 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `pricing.<name>.cache_read` | number | `0` | US dollars per million cache-read tokens. |
 | `pricing.<name>.cache_creation` | number | `0` | US dollars per million cache-write tokens. |
 | `routes` | map of array of string | `{}` | Per role (opus, sonnet, haiku, fable, other) the providers to try in order. A role without a list uses the other list, then every provider. |
+| `routes_by_class` | map of array of string | `{}` | Per request class (subagent, workflow, compaction, auxiliary) the providers or target ids (claude-NAME@PROVIDER) to try in order, instead of the role's list. A target id names the model too. Claude Code sends the class with CLAUDE_CODE_GATEWAY_HINT_HEADERS=1, which llmgate claude sets. Pins and ids picked in /model still win. |
 | `fallback` | object | - | A provider that fails before any response byte reaches Claude Code (connect error, no response head in time, 5xx, 429) is retried on the next one of the role's list; after failures consecutive failures it is skipped for cooldown. |
 | `fallback.failures` | integer | `3` | Consecutive failures after which a provider is skipped. |
 | `fallback.cooldown` | duration | `"30s"` | How long a skipped provider stays skipped; then one request probes it. |
@@ -225,6 +226,8 @@ Anthropic's gateway guide says that with only `ANTHROPIC_BASE_URL` set, Claude C
 - One Claude subscription account is one Claude Code profile. Anthropic's terms do not allow a gateway to collect, store or intermediate subscription credentials, so llmgate does not hold subscription tokens and cannot switch between two subscription accounts inside a running session; `/login` in Claude Code does that by hand.
 
 ## Switching providers, models and accounts
+
+`routes_by_class` sends a class of request (`subagent`, `workflow`, `compaction`, `auxiliary`) to its own providers or target ids instead of the role's list, for example compaction to a cheap model. The class comes from `x-claude-code-request-class`, which Claude Code sends because the launcher sets `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`; a session or global pin and a model picked in `/model` still win. The usage ledger records `class` and `agent_type` per request and `GET /llmgate/overview` carries `spend.by_class`.
 
 Every model a provider serves is a target with an id of the form `claude-MODEL@PROVIDER` (the `claude` keeps it in Claude Code's `/model` list). `llmgate claude` and `llmgate env` set `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, so `/model` lists them next to the aliases (and `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`, which makes Claude Code send the request class and agent type); picking one sends the session to exactly that provider and model, with no fallback. A provider's `offer` list adds models that are not in its `models` map.
 

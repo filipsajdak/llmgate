@@ -385,11 +385,20 @@ const suite usage_suite = [] {
         expect(text.contains("total"));
         expect(json.contains(R"("date": "2025-10-17")") && json.contains(R"("days": 2)") && !json.contains("old"));
     };
+    "limit_a_ledger_line_written_before_class_and_agent_type_existed_still_loads"_test = [] {
+        constexpr std::string_view old_line = R"({"time":1760702400,"requested":"sonnet","model":"m","role":"sonnet","provider":"p","session":"s","input":1,"output":2,"cache_read":0,"cache_creation":0,"duration_ms":5,"status":200,"repairs":0,"stop_reason":"end_turn","error":"","kind":"main","verdict":""})";
+
+        auto const loaded = load(std::string{old_line} + "\n");
+
+        expect(loaded.skipped == 0_u && loaded.loaded.on_day(day_of(1760702400)).requests == 1_u);
+        expect(loaded.loaded.classes().size() == 1_u && loaded.loaded.classes().front().request_class == "unclassified");
+    };
+
     "capability_the_ledger_line_keeps_its_bytes_and_key_order"_test = [] {
         constexpr std::string_view golden =
-            R"({"time":1760702400,"requested":"sonnet","model":"claude-sonnet-5-5","role":"sonnet","provider":"copilot","session":"s1","input":1,"output":2,"cache_read":3,"cache_creation":4,"duration_ms":350,"status":200,"repairs":1,"stop_reason":"end_turn","error":"","kind":"main","verdict":""})"
+            R"({"time":1760702400,"requested":"sonnet","model":"claude-sonnet-5-5","role":"sonnet","provider":"copilot","session":"s1","input":1,"output":2,"cache_read":3,"cache_creation":4,"duration_ms":350,"status":200,"repairs":1,"stop_reason":"end_turn","error":"","kind":"main","verdict":"","class":"","agent_type":""})"
             "\n";
-        constexpr std::string_view bare = R"({"time":0,"requested":"","model":"","role":"","provider":"","session":"","input":0,"output":0,"cache_read":0,"cache_creation":0,"duration_ms":0,"status":0,"repairs":0,"stop_reason":"","error":"","kind":"","verdict":""})" "\n";
+        constexpr std::string_view bare = R"({"time":0,"requested":"","model":"","role":"","provider":"","session":"","input":0,"output":0,"cache_read":0,"cache_creation":0,"duration_ms":0,"status":0,"repairs":0,"stop_reason":"","error":"","kind":"","verdict":"","class":"","agent_type":""})" "\n";
 
         auto const line = to_line({.time = noon, .requested = "sonnet", .model = "claude-sonnet-5-5", .role = "sonnet", .provider = "copilot", .session = "s1",
                                    .used = {.input = 1, .output = 2, .cache_read = 3, .cache_creation = 4}, .duration_ms = 350, .status = 200, .repairs = 1, .stop_reason = "end_turn", .kind = "main"});
