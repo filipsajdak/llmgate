@@ -102,6 +102,8 @@ struct options {
     [[= flag{"--secret"}]] [[= applies_to{command::provider}]] [[= operand{"SRC"}]] std::string secret{};
     [[= flag{"--ghe-host"}]] [[= applies_to{command::provider}]] [[= operand{"HOST"}]] std::string ghe_host{};
     [[= flag{"--offer"}]] [[= applies_to{command::provider}]] [[= operand{"A,B"}]] std::string offer{};
+    [[= flag{"--offer-from"}]] [[= applies_to{command::provider}]] [[= operand{"FILE"}]] std::string offer_from{};
+    [[= flag{"--offer-filter"}]] [[= applies_to{command::provider}]] [[= operand{"TEXT"}]] std::string offer_filter{};
     [[= flag{"--session"}]] [[= applies_to{command::use, command::route}]] [[= operand{"ID"}]] std::string session{};
     [[= operand{"ARGS..."}]] [[= applies_to{command::claude, command::use, command::route, command::provider, command::routes, command::config, command::models, command::secret}]] std::vector<std::string> passthrough{};
 };

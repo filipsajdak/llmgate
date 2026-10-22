@@ -265,6 +265,43 @@ std::string problem_of(std::string_view const text) {
 
 export namespace llmgate::config_edit {
 
+struct alias_line {
+    std::string_view name{};
+    std::string_view value{};
+};
+
+bool plain_alias(std::string_view const name) {
+    return !name.empty() && std::ranges::none_of(name, [](char const c) { return std::string_view{" ,\"'"}.contains(c); });
+}
+
+std::optional<alias_line> alias_of_line(std::string_view const row) {
+    auto const first = row.find_first_not_of(' ');
+    auto const colon = row.find(':');
+    if (first == std::string_view::npos || row[first] == '#' || colon == std::string_view::npos || colon < first) {
+        return std::nullopt;
+    }
+    alias_line const found{.name = row.substr(first, colon - first), .value = row.substr(colon + 1)};
+    return plain_alias(found.name) ? std::optional<alias_line>{found} : std::nullopt;
+}
+
+bool starts_a_block(std::string_view const row) { return !row.empty() && row.front() != ' ' && row.front() != '#'; }
+
+bool wanted(alias_line const& alias, std::string_view const filter) { return filter.empty() || alias.value.contains(filter) || alias.name.contains(filter); }
+
+std::vector<std::string> alias_names(std::string_view const yaml, std::string_view const filter) {
+    std::vector<std::string> names;
+    bool inside = false;
+    for (auto const line : std::views::split(yaml, '\n')) {
+        std::string_view const row{line.begin(), line.end()};
+        if (starts_a_block(row)) {
+            inside = row.starts_with("aliases:");
+        } else if (auto const alias = inside ? alias_of_line(row) : std::nullopt; alias && wanted(*alias, filter)) {
+            names.emplace_back(alias->name);
+        }
+    }
+    return names;
+}
+
 std::expected<std::string, std::string> secret_file(std::string_view const name) {
     if (!detail::plain_name(name)) {
         return std::unexpected{"a secret name is letters, digits, - and _"};

@@ -303,22 +303,42 @@ bool write_atomically(std::filesystem::path const& target, std::string_view cons
     return !failed;
 }
 
+std::expected<std::string, std::string> offers_of_options(arguments::options const& chosen) {
+    auto offer = chosen.offer;
+    if (chosen.offer_from.empty()) {
+        return offer;
+    }
+    std::ifstream aliases{process::expand_home(chosen.offer_from)};
+    if (!aliases) {
+        return std::unexpected{std::format("cannot read {}", chosen.offer_from)};
+    }
+    for (auto const& name : config_edit::alias_names(std::string{std::istreambuf_iterator<char>{aliases}, std::istreambuf_iterator<char>{}}, chosen.offer_filter)) {
+        offer += (offer.empty() ? "" : ",") + name;
+    }
+    return offer;
+}
+
+std::expected<config_edit::change, std::string> planned_edit(arguments::options const& chosen) {
+    auto const group = reflect::enum_from_name<config_edit::group>(reflect::enum_name(chosen.which));
+    auto offer = offers_of_options(chosen);
+    if (!group || !offer) {
+        return std::unexpected{group ? offer.error() : std::string{"not an edit command"}};
+    }
+    return config_edit::plan({.which = *group,
+                              .words = chosen.passthrough,
+                              .preset = chosen.preset,
+                              .labels = chosen.labels,
+                              .base_url = chosen.base_url,
+                              .token_env = chosen.token_env,
+                              .auth = chosen.auth,
+                              .secret = chosen.secret,
+                              .ghe_host = chosen.ghe_host,
+                              .offer = std::move(*offer)});
+}
+
 int edit_command(commands::context const& where) {
     auto const& chosen = where.options;
-    auto const group = reflect::enum_from_name<config_edit::group>(reflect::enum_name(chosen.which));
-    if (!group) {
-        return fail(exit_usage, "not an edit command");
-    }
-    auto const planned = config_edit::plan({.which = *group,
-                                            .words = chosen.passthrough,
-                                            .preset = chosen.preset,
-                                            .labels = chosen.labels,
-                                            .base_url = chosen.base_url,
-                                            .token_env = chosen.token_env,
-                                            .auth = chosen.auth,
-                                            .secret = chosen.secret,
-                                            .ghe_host = chosen.ghe_host,
-                                            .offer = chosen.offer});
+    auto const planned = planned_edit(chosen);
     if (!planned) {
         return fail(exit_usage, planned.error());
     }

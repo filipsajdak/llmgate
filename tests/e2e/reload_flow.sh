@@ -85,4 +85,16 @@ label="provider add with header auth and a secret file writes the auth block"
 run provider add partner --base-url http://127.0.0.1:9 --auth header:api-key --secret file:~/.config/llmgate/secrets/partner.key --offer m-nx --yes > "$work/nx.out" 2>&1 || true
 check sh -c "grep -q '\"auth\":{\"kind\":\"header\",\"header\":\"api-key\",\"file\"' '$work/config.jsonc'"
 
+cat > "$work/mic.yaml" <<'YAML'
+aliases:
+  gpt-sol: partner/gpt-5.6-sol
+  opus4.6-partner: partner/claude-opus-4.6
+  haiku5.5-copilot: copilot-ghe/claude-haiku-5.5
+logging:
+  debug_dir: /x
+YAML
+label="provider add --offer-from imports the aliases of a gateway config, filtered"
+run provider add mic --base-url http://127.0.0.1:9080 --auth none --offer-from "$work/mic.yaml" --offer-filter partner --yes > "$work/mic.out" 2>&1 || true
+check sh -c "grep -q '\"offer\":\[\"gpt-sol\",\"opus4.6-partner\"\]' '$work/config.jsonc' && ! grep -q 'haiku5.5-copilot' '$work/config.jsonc'"
+
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }

@@ -78,6 +78,15 @@ const suite config_edit_suite = [] {
         expect(!ce::secret_file(std::string(100, 'a')).has_value());
     };
 
+    "capability_the_aliases_of_a_claude_mic_style_yaml_become_model_names_filtered_by_a_substring"_test = [] {
+        constexpr std::string_view yaml = "aliases:\n  haiku5.5-copilot: copilot-ghe/claude-haiku-5.5\n  gpt-sol: partner/gpt-5.6-sol\n  opus4.6-partner: partner/claude-opus-4.6\n  # comment\n  bad name: x/y\nlogging:\n  debug_dir: /x\n";
+
+        expect((ce::alias_names(yaml, "") == std::vector<std::string>{"haiku5.5-copilot", "gpt-sol", "opus4.6-partner"}));
+        expect((ce::alias_names(yaml, "partner") == std::vector<std::string>{"gpt-sol", "opus4.6-partner"}));
+        expect(ce::alias_names("providers:\n  a: b\n", "").empty());
+        expect(ce::alias_names("", "").empty());
+    };
+
     "limit_unclear_edit_words_are_refused_with_the_shape_to_use"_test = [] {
         expect(!ce::plan(ask(ce::group::routes, {"set", "sonnet"})).has_value());
         expect(!ce::plan(ask(ce::group::routes, {"bogus"})).has_value());
