@@ -18,8 +18,10 @@ import llmgate.model_list;
 import llmgate.gateway;
 import llmgate.httpio;
 import llmgate.json;
+import llmgate.jsonedit;
 import llmgate.net;
 import llmgate.process;
+import llmgate.recipes;
 import llmgate.reflect;
 import llmgate.routing;
 import llmgate.shutdown;
@@ -408,6 +410,97 @@ int secret_command(commands::context const& where) {
     return 0;
 }
 
+std::string recipe_text(recipes::recipe const& item) {
+    std::string out = std::format("{}  {}\n  {}\n  needs: ", item.id, item.title, item.summary);
+    for (auto const kind : item.needs) {
+        out += std::format("{} ", recipes::name_of(kind));
+    }
+    out += std::format("  tokens: {}\n", item.tokens);
+    for (auto const& pro : item.pros) {
+        out += std::format("  + {}\n", pro);
+    }
+    for (auto const& con : item.cons) {
+        out += std::format("  - {}\n", con);
+    }
+    return out;
+}
+
+constexpr std::string_view recipe_usage = "usage: llmgate recipe list [--json] | recipe show NAME | recipe apply NAME [--yes]";
+
+int report_missing(recipes::recipe const& item, std::vector<std::string> const& missing) {
+    std::print(stderr, "llmgate: the recipe {} needs providers of kind", item.id);
+    for (auto const& kind : missing) {
+        std::print(stderr, " {}", kind);
+    }
+    std::println(stderr, " (add them with provider add)");
+    return exit_config;
+}
+
+std::expected<std::string, std::string> edited_text(std::string text, std::vector<recipes::edit> const& edits) {
+    for (auto const& step : edits) {
+        auto const done = config_edit::apply(text, {.path = step.path, .value = step.value});
+        if (!done) {
+            return std::unexpected{done.error()};
+        }
+        text = done->text;
+    }
+    return text;
+}
+
+int apply_recipe(commands::context const& where, recipes::recipe const& item) {
+    auto const planned = recipes::plan(item, where.settings);
+    if (!planned.missing.empty()) {
+        return report_missing(item, planned.missing);
+    }
+    auto const path = std::filesystem::path{process::expand_home(where.options.config_path)};
+    std::ifstream in{path};
+    std::string const before{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+    auto const text = edited_text(before, planned.edits);
+    if (!text) {
+        return fail(exit_config, text.error());
+    }
+    std::print("{}", jsonedit::diff(before, *text));
+    if (!where.options.yes) {
+        std::println("not written: add --yes to write {}", path.string());
+        return 0;
+    }
+    if (!write_atomically(path, *text)) {
+        return fail(exit_runtime, std::format("cannot write {}", path.string()));
+    }
+    std::println("written to {}", path.string());
+    if (commands::run_reload(where) != 0) {
+        std::println("the gateway did not reload (is it running?); it picks the change up when it starts");
+    }
+    return 0;
+}
+
+int list_recipes(commands::context const& where) {
+    if (where.options.as_json) {
+        std::println("{}", recipes::list_json());
+        return 0;
+    }
+    for (auto const& item : recipes::all()) {
+        std::print("{}\n", recipe_text(item));
+    }
+    return 0;
+}
+
+int recipe_command(commands::context const& where) {
+    auto const& words = where.options.passthrough;
+    if (words.size() == 1 && words.front() == "list") {
+        return list_recipes(where);
+    }
+    auto const item = words.size() == 2 ? recipes::find(words.back()) : std::nullopt;
+    if (!item || !std::ranges::contains(std::array<std::string_view, 2>{"show", "apply"}, words.front())) {
+        return fail(exit_usage, recipe_usage);
+    }
+    if (words.front() == "show") {
+        std::print("{}", recipe_text(*item));
+        return 0;
+    }
+    return apply_recipe(where, *item);
+}
+
 int models_command(commands::context const& where) {
     if (!where.options.passthrough.empty()) {
         return edit_command(where);
@@ -470,6 +563,7 @@ constexpr auto handlers = std::to_array<std::pair<arguments::command, command_ha
     {arguments::command::routes, &edit_command},
     {arguments::command::config, &edit_command},
     {arguments::command::secret, &secret_command},
+    {arguments::command::recipe, &recipe_command},
     {arguments::command::statusline, &statusline_command},
 });
 

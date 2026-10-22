@@ -97,4 +97,21 @@ label="provider add --offer-from imports the aliases of a gateway config, filter
 run provider add mic --base-url http://127.0.0.1:9080 --auth none --offer-from "$work/mic.yaml" --offer-filter partner --yes > "$work/mic.out" 2>&1 || true
 check sh -c "grep -q '\"offer\":\[\"gpt-sol\",\"opus4.6-partner\"\]' '$work/config.jsonc' && ! grep -q 'haiku5.5-copilot' '$work/config.jsonc'"
 
+label="recipe list names every recipe and recipe show prints pros and cons"
+run recipe list > "$work/recipes.out" 2>&1
+run recipe show spend-evenly > "$work/show.out" 2>&1
+check sh -c "grep -q '^quality-first' '$work/recipes.out' && grep -q '^best-per-job' '$work/recipes.out' && grep -q '^  + ' '$work/show.out' && grep -q '^  - ' '$work/show.out'"
+label="recipe list --json is JSON with an id per recipe"
+check sh -c "'$binary' --config '$work/config.jsonc' recipe list --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert len(d)>=4 and all(\"id\" in r and \"pros\" in r for r in d)'"
+label="a recipe that needs a missing kind is refused with the kinds named and changes nothing"
+cp "$work/config.jsonc" "$work/pre-recipe.jsonc"
+check sh -c "! '$binary' --config '$work/config.jsonc' recipe apply spend-evenly --yes > '$work/miss.out' 2>&1 && grep -q 'needs providers of kind' '$work/miss.out' && cmp -s '$work/config.jsonc' '$work/pre-recipe.jsonc'"
+
+run provider add ant --preset anthropic --yes > /dev/null 2>&1 || true
+label="recipe apply quality-first routes every role to the claude provider, previews without --yes and writes with it"
+run recipe apply quality-first > "$work/dry-recipe.out" 2>&1 || true
+check sh -c "grep -q 'not written' '$work/dry-recipe.out' && ! grep -q '\"opus\": \\[\"ant\"\\]' '$work/config.jsonc'"
+run recipe apply quality-first --yes > "$work/recipe.out" 2>&1 || true
+check sh -c "grep -q '\"opus\": \\[\"ant\"\\]' '$work/config.jsonc' && grep -q '\"haiku\": \\[\"ant\"\\]' '$work/config.jsonc'"
+
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }
