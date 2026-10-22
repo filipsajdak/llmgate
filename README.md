@@ -74,6 +74,12 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `upstream.offer` | array of string | `[]` | Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER. |
 | `upstream.labels` | array of string | `[]` | Labels of this provider, shown beside every model it serves in the pane, the /model picker and the CLI, and used to group usage and filter targets. Each is 1 to 24 letters, digits, - or _. |
 | `upstream.model_labels` | map of array of string | `{}` | Labels added to single models, keyed by upstream model id; a model carries its provider's labels first, at most 8 in all. |
+| `upstream.auth` | object | - | Authentication of this provider: how the secret is sent (kind, header, scheme) and where it is read from (file, env). A provider with a login (copilot, chatgpt) or forward_credentials needs none; static_token_env still works as the bearer secret's variable. |
+| `upstream.auth.kind` | one of `bearer`, `header`, `none` | `"bearer"` | How the provider is authenticated: bearer (Authorization: Bearer SECRET, the default), header (SECRET in the header named by header, after scheme when one is set) or none (no credential, for a local model). |
+| `upstream.auth.header` | string | `"api-key"` | Header that carries the secret when kind is header. |
+| `upstream.auth.scheme` | string | `""` | Text put before the secret in that header, such as Bearer; empty sends the secret alone. |
+| `upstream.auth.env` | string | `""` | Name of the environment variable that holds the secret. |
+| `upstream.auth.file` | string | `""` | File that holds the secret (one line); keep it readable by you only. It is read before the environment variable. |
 | `models` | map of string | `{}` | Claude Code expands aliases such as sonnet to full model names before it calls the gateway, so map full names: client model name to upstream model name. Unknown names go through unchanged. |
 | `providers` | map of object | `{}` | More than one backend: name each one here. A provider with a copilot object uses the Copilot login, one with static_token_env uses that variable. The keys upstream, models, copilot and static_token_env stay valid and act as one provider named default. |
 | `providers.<name>.base_url` | string | `""` | Base URL of the provider; a preset supplies it when this is empty. |
@@ -89,6 +95,12 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `providers.<name>.offer` | array of string | `[]` | Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER. |
 | `providers.<name>.labels` | array of string | `[]` | Labels of this provider, shown beside every model it serves in the pane, the /model picker and the CLI, and used to group usage and filter targets. Each is 1 to 24 letters, digits, - or _. |
 | `providers.<name>.model_labels` | map of array of string | `{}` | Labels added to single models, keyed by upstream model id; a model carries its provider's labels first, at most 8 in all. |
+| `providers.<name>.auth` | object | - | Authentication of this provider: how the secret is sent (kind, header, scheme) and where it is read from (file, env). A provider with a login (copilot, chatgpt) or forward_credentials needs none; static_token_env still works as the bearer secret's variable. |
+| `providers.<name>.auth.kind` | one of `bearer`, `header`, `none` | `"bearer"` | How the provider is authenticated: bearer (Authorization: Bearer SECRET, the default), header (SECRET in the header named by header, after scheme when one is set) or none (no credential, for a local model). |
+| `providers.<name>.auth.header` | string | `"api-key"` | Header that carries the secret when kind is header. |
+| `providers.<name>.auth.scheme` | string | `""` | Text put before the secret in that header, such as Bearer; empty sends the secret alone. |
+| `providers.<name>.auth.env` | string | `""` | Name of the environment variable that holds the secret. |
+| `providers.<name>.auth.file` | string | `""` | File that holds the secret (one line); keep it readable by you only. It is read before the environment variable. |
 | `providers.<name>.static_token_env` | string | `""` | Name of the environment variable that holds the API key sent as the bearer token. |
 | `providers.<name>.copilot` | object | none | GitHub Copilot login of this provider; used instead of static_token_env. |
 | `providers.<name>.copilot.token_file` | string | `""` | File that holds the GitHub OAuth token; run llmgate login once to write it. |
@@ -226,6 +238,8 @@ Anthropic's gateway guide says that with only `ANTHROPIC_BASE_URL` set, Claude C
 - One Claude subscription account is one Claude Code profile. Anthropic's terms do not allow a gateway to collect, store or intermediate subscription credentials, so llmgate does not hold subscription tokens and cannot switch between two subscription accounts inside a running session; `/login` in Claude Code does that by hand.
 
 ## Switching providers, models and accounts
+
+`auth` says how a provider is authenticated: `bearer` (the default, `Authorization: Bearer SECRET`), `header` (the secret in a named header, with an optional scheme, for example `api-key` on the customer's Azure-style endpoints) or `none` (a local model that needs no credential). The secret is read from `auth.file` (a one-line file only you can read), then from the variable named in `auth.env`, then from the older `static_token_env`; llmgate never writes a secret into the config.
 
 `routes_by_class` sends a class of request (`subagent`, `workflow`, `compaction`, `auxiliary`) to its own providers or target ids instead of the role's list, for example compaction to a cheap model. The class comes from `x-claude-code-request-class`, which Claude Code sends because the launcher sets `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`; a session or global pin and a model picked in `/model` still win. The usage ledger records `class` and `agent_type` per request and `GET /llmgate/overview` carries `spend.by_class`.
 

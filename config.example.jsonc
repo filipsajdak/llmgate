@@ -40,6 +40,24 @@
     // Labels added to single models, keyed by upstream model id; a model carries its provider's labels
     // first, at most 8 in all.
     // "model_labels": { "claude-opus-5.5": ["big"] },
+    // Authentication of this provider: how the secret is sent (kind, header, scheme) and where it is read
+    // from (file, env). A provider with a login (copilot, chatgpt) or forward_credentials needs none;
+    // static_token_env still works as the bearer secret's variable.
+    // "auth": {
+    //   // How the provider is authenticated: bearer (Authorization: Bearer SECRET, the default), header
+    //   // (SECRET in the header named by header, after scheme when one is set) or none (no credential, for a
+    //   // local model). One of: bearer, header, none.
+    //   // "kind": "header",
+    //   // Header that carries the secret when kind is header.
+    //   // "header": "api-key",
+    //   // Text put before the secret in that header, such as Bearer; empty sends the secret alone.
+    //   // "scheme": "",
+    //   // Name of the environment variable that holds the secret.
+    //   // "env": "PARTNER_PROD_API_KEY",
+    //   // File that holds the secret (one line); keep it readable by you only. It is read before the
+    //   // environment variable.
+    //   // "file": "~/.config/llmgate/partner.key",
+    // },
   },
 
   // Claude Code expands aliases such as sonnet to full model names before it calls the gateway, so map

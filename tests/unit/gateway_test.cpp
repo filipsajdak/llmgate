@@ -988,6 +988,80 @@ const suite gateway_suite = [] {
         expect(gateway::config_problem(make("banana", "a")).contains("banana"));
     };
 
+    "capability_a_header_auth_sends_the_secret_in_the_named_header_with_its_scheme_and_no_authorization"_test = [] {
+        duo d{[](gateway::config& built) {
+            built.providers["b"].auth = {.kind = gateway::auth_kind::header, .header = "api-key"};
+            route(built, "opus", {"b"});
+        }};
+
+        (void)d.ask(messages_request(chat("opus", false), "/anthropic/v1/messages", ""));
+
+        expect(d.second.seen.size() == 1_u);
+        auto const& sent = d.second.seen.front().headers;
+        expect(sent.contains("api-key") && sent.at("api-key") == "token-b" && !sent.contains("Authorization"));
+    };
+
+    "capability_a_header_auth_with_a_scheme_prefixes_the_secret"_test = [] {
+        duo d{[](gateway::config& built) {
+            built.providers["b"].auth = {.kind = gateway::auth_kind::header, .header = "x-key", .scheme = "Token"};
+            route(built, "opus", {"b"});
+        }};
+
+        (void)d.ask(messages_request(chat("opus", false), "/anthropic/v1/messages", ""));
+
+        expect(d.second.seen.size() == 1_u && d.second.seen.front().headers.at("x-key") == "Token token-b");
+    };
+
+    "capability_a_provider_with_no_auth_needs_no_credential_and_sends_none"_test = [] {
+        duo d{[](gateway::config& built) {
+            built.providers["b"].auth = {.kind = gateway::auth_kind::none};
+            route(built, "opus", {"b"});
+        }};
+
+        (void)d.ask(messages_request(chat("opus", false), "/anthropic/v1/messages", ""));
+
+        expect(d.second.seen.size() == 1_u);
+        auto const& sent = d.second.seen.front().headers;
+        expect(!sent.contains("Authorization") && !sent.contains("api-key"));
+    };
+
+    "limit_an_auth_header_name_must_be_a_plain_header_name_and_none_takes_no_secret"_test = [] {
+        auto const make = [](gateway::auth_config const& auth) {
+            gateway::config built;
+            built.providers["a"] = {.base_url = "http://127.0.0.1:1", .auth = auth};
+            return built;
+        };
+
+        expect(gateway::config_problem(make({.kind = gateway::auth_kind::header, .header = "api-key"})).empty());
+        expect(gateway::config_problem(make({.kind = gateway::auth_kind::header, .header = "bad name"})).contains("provider a"));
+        expect(gateway::config_problem(make({.kind = gateway::auth_kind::header, .header = "Host"})).contains("provider a"));
+        expect(gateway::config_problem(make({.kind = gateway::auth_kind::header, .header = "api-key", .scheme = "a\nb"})).contains("provider a"));
+        expect(gateway::config_problem(make({.kind = gateway::auth_kind::none, .env = "X"})).contains("provider a"));
+        expect(gateway::config_problem(make({.kind = gateway::auth_kind::bearer})).empty());
+    };
+
+    "capability_a_secret_comes_from_a_file_first_then_the_env_name_then_the_legacy_token_env"_test = [] {
+        gateway::secret_readers const readers{.env = [](std::string const& name) -> std::optional<std::string> { return name == "FROM_ENV" ? std::optional<std::string>{"env-secret"} : name == "LEGACY" ? std::optional<std::string>{"legacy-secret"} : std::nullopt; },
+                                              .file = [](std::string const& path) -> std::optional<std::string> { return path == "/k" ? std::optional<std::string>{"file-secret\n"} : std::nullopt; }};
+        gateway::provider_config provider{.auth = {.env = "FROM_ENV", .file = "/k"}, .static_token_env = "LEGACY"};
+
+        expect(gateway::secret_of(provider, readers) == "file-secret");
+        provider.auth.file = "/missing";
+        expect(gateway::secret_of(provider, readers) == "env-secret");
+        provider.auth.env = "NOPE";
+        expect(gateway::secret_of(provider, readers) == "legacy-secret");
+        provider.static_token_env = "NOPE";
+        expect(gateway::secret_of(provider, readers).empty());
+    };
+
+    "capability_auth_is_read_from_the_config_by_name_and_an_unknown_kind_is_refused"_test = [] {
+        auto const good = json::read_text<gateway::config>(R"({"listen":"127.0.0.1:1","providers":{"n":{"base_url":"http://127.0.0.1:2","auth":{"kind":"header","header":"api-key","env":"PARTNER_KEY"}}}})");
+        auto const bad = json::read_text<gateway::config>(R"({"listen":"127.0.0.1:1","providers":{"n":{"base_url":"http://127.0.0.1:2","auth":{"kind":"oauth"}}}})");
+
+        expect(good.has_value() && good->providers.at("n").auth.kind == gateway::auth_kind::header && good->providers.at("n").auth.env == "PARTNER_KEY");
+        expect(!bad.has_value());
+    };
+
     "limit_a_gateway_without_an_identity_key_has_no_control_endpoint"_test = [] {
         world w;
 

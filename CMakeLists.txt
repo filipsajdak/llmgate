@@ -225,7 +225,7 @@ add_test(NAME constexpr_examples COMMAND constexpr_examples)
 set_tests_properties(constexpr_examples PROPERTIES LABELS constexpr)
 
 add_executable(constexpr_example_config tests/constexpr/example_config.cpp)
-target_compile_options(constexpr_example_config PRIVATE -fno-sanitize=all)
+target_compile_options(constexpr_example_config PRIVATE -fno-sanitize=all -fconstexpr-ops-limit=4000000000)
 target_compile_definitions(constexpr_example_config PRIVATE LLMGATE_EXAMPLE_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/config.example.jsonc")
 set_source_files_properties(tests/constexpr/example_config.cpp PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/config.example.jsonc)
 target_link_libraries(constexpr_example_config PRIVATE llmgate_config_docs llmgate_contracts)

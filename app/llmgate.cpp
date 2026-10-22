@@ -49,6 +49,20 @@ std::expected<gateway::config, std::string> load_config(std::string_view const p
 
 using credential_store = std::map<std::string, std::unique_ptr<gateway::credential>>;
 
+gateway::secret_readers process_secret_readers() {
+    return {.env = [](std::string const& name) -> std::optional<std::string> {
+                auto const* value = std::getenv(name.c_str());
+                return value == nullptr ? std::nullopt : std::optional<std::string>{value};
+            },
+            .file = [](std::string const& path) -> std::optional<std::string> {
+                std::ifstream in{process::expand_home(path)};
+                if (!in) {
+                    return std::nullopt;
+                }
+                return std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+            }};
+}
+
 std::unique_ptr<gateway::credential> make_credential(async::reactor& loop, tls::client_context const& tls_context, gateway::provider_config const& provider) {
     if (provider.copilot) {
         return std::make_unique<copilot::copilot_credential>(loop, tls_context, *provider.copilot);
@@ -56,8 +70,7 @@ std::unique_ptr<gateway::credential> make_credential(async::reactor& loop, tls::
     if (provider.chatgpt) {
         return std::make_unique<chatgpt::chatgpt_credential>(loop, tls_context, *provider.chatgpt);
     }
-    auto const* token = provider.static_token_env.empty() ? nullptr : std::getenv(provider.static_token_env.c_str());
-    return std::make_unique<gateway::static_credential>(token == nullptr ? std::string{} : std::string{token});
+    return std::make_unique<gateway::static_credential>(gateway::secret_of(provider, process_secret_readers()));
 }
 
 credential_store make_credentials(async::reactor& loop, tls::client_context const& tls_context, gateway::config const& settings) {

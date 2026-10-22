@@ -112,6 +112,65 @@ std::string plain(std::string_view const text) {
     return text.substr(0, longest_shown_name) | std::views::transform([](char const c) { return c >= ' ' && c < '\x7f' ? c : '?'; }) | std::ranges::to<std::string>();
 }
 
+struct secret_readers {
+    std::function<std::optional<std::string>(std::string const&)> env;
+    std::function<std::optional<std::string>(std::string const&)> file;
+};
+
+std::string trimmed(std::string text) {
+    text.erase(text.find_last_not_of(" \t\r\n") + 1);
+    return text;
+}
+
+std::string secret_of(provider_config const& provider, secret_readers const& readers) {
+    if (!provider.auth.file.empty()) {
+        if (auto const text = readers.file(provider.auth.file)) {
+            return trimmed(*text);
+        }
+    }
+    for (auto const& name : {provider.auth.env, provider.static_token_env}) {
+        if (!name.empty()) {
+            if (auto const value = readers.env(name)) {
+                return *value;
+            }
+        }
+    }
+    return {};
+}
+
+constexpr bool header_name_character(char const c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-';
+}
+
+constexpr auto reserved_headers = std::to_array<std::string_view>({"host", "content-length", "content-type", "transfer-encoding", "connection", "user-agent", "authorization"});
+
+std::string lowercase_of(std::string_view const text) {
+    return text | std::views::transform([](char const c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }) | std::ranges::to<std::string>();
+}
+
+bool usable_header_name(std::string_view const name) {
+    return !name.empty() && std::ranges::all_of(name, header_name_character) && std::ranges::find(reserved_headers, lowercase_of(name)) == reserved_headers.end();
+}
+
+bool printable_text(std::string_view const text) {
+    return std::ranges::all_of(text, [](char const c) { return c >= ' ' && c < '\x7f'; });
+}
+
+std::string header_auth_problem(std::string const& name, auth_config const& auth) {
+    if (!usable_header_name(auth.header)) {
+        return std::format("provider {}: auth.header must be a plain header name other than Authorization, Host or Content-Type", name);
+    }
+    return printable_text(auth.scheme) ? std::string{} : std::format("provider {}: auth.scheme must be printable text", name);
+}
+
+std::string auth_problem(std::string const& name, provider_config const& item) {
+    auto const& auth = item.auth;
+    if (auth.kind == auth_kind::none && (!auth.env.empty() || !auth.file.empty())) {
+        return std::format("provider {}: auth none takes no env or file", name);
+    }
+    return auth.kind == auth_kind::header ? header_auth_problem(name, auth) : std::string{};
+}
+
 std::string label_problem(std::string const& name, provider_config const& item) {
     auto const rule = std::format("a label is 1 to {} letters, digits, - or _", control::longest_label);
     if (std::ranges::any_of(item.labels, [](std::string const& label) { return !control::valid_label(label); })) {
@@ -143,6 +202,9 @@ std::string provider_problem(std::string const& name, provider_config const& ite
     }
     if (item.forward_credentials && item.protocol != wire_protocol::anthropic) {
         return "provider " + name + " forwards the client's credentials (forward_credentials), which only an anthropic provider can use";
+    }
+    if (auto problem = auth_problem(name, item); !problem.empty()) {
+        return problem;
     }
     return label_problem(name, item);
 }
@@ -338,8 +400,16 @@ void add_missing(http::header_map& to, std::span<std::pair<std::string_view, std
     }
 }
 
+void add_authentication(http::header_map& fields, auth_config const& auth, std::string_view const token) {
+    if (auth.kind == auth_kind::bearer) {
+        fields.add("Authorization", std::format("Bearer {}", token));
+    } else if (auth.kind == auth_kind::header) {
+        fields.add(auth.header, auth.scheme.empty() ? std::string{token} : std::format("{} {}", auth.scheme, token));
+    }
+}
+
 http::header_map upstream_headers(httpio::request const& incoming, std::map<std::string, std::string> const& extra, bool const copilot_client,
-                                  bool const forward_credentials, std::string_view const token, wire_protocol const wire) {
+                                  bool const forward_credentials, std::string_view const token, wire_protocol const wire, auth_config const& auth) {
     http::header_map fields;
     copy_request_headers(fields, incoming.head.fields, wire);
     if (forward_credentials) {
@@ -352,7 +422,7 @@ http::header_map upstream_headers(httpio::request const& incoming, std::map<std:
         add_missing(fields, copilot_client_headers);
     }
     if (!forward_credentials) {
-        fields.add("Authorization", std::format("Bearer {}", token));
+        add_authentication(fields, auth, token);
     }
     fields.add("User-Agent", std::string{user_agent});
     return fields;
@@ -1282,7 +1352,7 @@ private:
 
     async::task<std::expected<std::string, detail::attempt_result>> upstream_token(std::size_t const index) {
         auto& chosen = providers_[index];
-        if (chosen.settings.forward_credentials) {
+        if (chosen.settings.forward_credentials || chosen.settings.auth.kind == auth_kind::none) {
             co_return std::string{};
         }
         auto bearer = co_await chosen.creds->bearer();
@@ -1321,7 +1391,7 @@ private:
                                        .target = chosen.url->base_path + effective_messages_path(chosen.settings.protocol, chosen.settings.messages_path),
                                        .host = routing::host_header(*chosen.url),
                                        .fields = detail::upstream_headers(incoming, chosen.settings.headers, chosen.settings.copilot.has_value(), chosen.settings.forward_credentials, *token,
-                                                                          chosen.settings.protocol),
+                                                                          chosen.settings.protocol, chosen.settings.auth),
                                        .body = std::move(*body)};
     }
 

@@ -66,6 +66,18 @@ static_assert(reflect::unique_values<preset_kind>());
 constexpr std::string_view default_messages_path = "/v1/messages";
 constexpr std::string_view default_responses_path = "/responses";
 
+enum class auth_kind { bearer, header, none };
+static_assert(reflect::unique_values<auth_kind>());
+
+struct auth_config {
+    [[= reflect::doc{"How the provider is authenticated: bearer (Authorization: Bearer SECRET, the default), header (SECRET in the header named by header, after scheme when one is set) or none (no credential, for a local model)."}]]
+    [[= reflect::example{R"("header")"}]] [[= reflect::commented]] auth_kind kind = auth_kind::bearer;
+    [[= reflect::doc{"Header that carries the secret when kind is header."}]] [[= reflect::example{R"("api-key")"}]] [[= reflect::commented]] std::string header = "api-key";
+    [[= reflect::doc{"Text put before the secret in that header, such as Bearer; empty sends the secret alone."}]] [[= reflect::commented]] std::string scheme{};
+    [[= reflect::doc{"Name of the environment variable that holds the secret."}]] [[= reflect::example{R"("PARTNER_PROD_API_KEY")"}]] [[= reflect::commented]] std::string env{};
+    [[= reflect::doc{"File that holds the secret (one line); keep it readable by you only. It is read before the environment variable."}]] [[= reflect::example{R"("~/.config/llmgate/partner.key")"}]] [[= reflect::commented]] std::string file{};
+};
+
 struct model_limits {
     [[= reflect::doc{"Context window of the model in tokens; 0 means unknown."}]] std::uint64_t context_tokens = 0;
     [[= reflect::doc{"Largest prompt the model accepts, in tokens; 0 means unknown. Published as max_input_tokens in the model list."}]] std::uint64_t prompt_tokens = 0;
@@ -89,6 +101,7 @@ struct upstream_config {
     [[= reflect::doc{"Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER."}]] [[= reflect::example{R"(["claude-sonnet-5-5"])"}]] [[= reflect::commented]] std::vector<std::string> offer{};
     [[= reflect::doc{"Labels of this provider, shown beside every model it serves in the pane, the /model picker and the CLI, and used to group usage and filter targets. Each is 1 to 24 letters, digits, - or _."}]] [[= reflect::example{R"(["work", "acme"])"}]] [[= reflect::commented]] std::vector<std::string> labels{};
     [[= reflect::doc{"Labels added to single models, keyed by upstream model id; a model carries its provider's labels first, at most 8 in all."}]] [[= reflect::example{R"({ "claude-opus-5.5": ["big"] })"}]] [[= reflect::commented]] std::map<std::string, std::vector<std::string>> model_labels{};
+    [[= reflect::doc{"Authentication of this provider: how the secret is sent (kind, header, scheme) and where it is read from (file, env). A provider with a login (copilot, chatgpt) or forward_credentials needs none; static_token_env still works as the bearer secret's variable."}]] [[= reflect::commented]] auth_config auth{};
 };
 
 constexpr std::string_view vscode_copilot_client_id = "Iv1.b507a08c87ecfe98";
@@ -120,6 +133,7 @@ struct provider_config {
     [[= reflect::doc{"Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER."}]] [[= reflect::example{R"(["claude-sonnet-5-5"])"}]] [[= reflect::commented]] std::vector<std::string> offer{};
     [[= reflect::doc{"Labels of this provider, shown beside every model it serves in the pane, the /model picker and the CLI, and used to group usage and filter targets. Each is 1 to 24 letters, digits, - or _."}]] [[= reflect::example{R"(["work", "acme"])"}]] [[= reflect::commented]] std::vector<std::string> labels{};
     [[= reflect::doc{"Labels added to single models, keyed by upstream model id; a model carries its provider's labels first, at most 8 in all."}]] [[= reflect::example{R"({ "claude-opus-5.5": ["big"] })"}]] [[= reflect::commented]] std::map<std::string, std::vector<std::string>> model_labels{};
+    [[= reflect::doc{"Authentication of this provider: how the secret is sent (kind, header, scheme) and where it is read from (file, env). A provider with a login (copilot, chatgpt) or forward_credentials needs none; static_token_env still works as the bearer secret's variable."}]] [[= reflect::commented]] auth_config auth{};
     [[= reflect::doc{"Name of the environment variable that holds the API key sent as the bearer token."}]]
     [[= reflect::example{R"("ANTHROPIC_UPSTREAM_KEY")"}]] std::string static_token_env{};
     [[= reflect::doc{"GitHub Copilot login of this provider; used instead of static_token_env."}]] std::optional<copilot_config> copilot{};
