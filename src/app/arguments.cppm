@@ -31,7 +31,10 @@ enum class command {
     targets,
     route,
     models,
-    reload
+    reload,
+    provider,
+    routes,
+    config
 };
 static_assert(reflect::unique_values<command>());
 
@@ -89,8 +92,13 @@ struct options {
     [[= flag{"--offline"}]] [[= applies_to{command::doctor}]] bool offline = false;
     [[= flag{"--days"}]] [[= operand{"N"}]] [[= applies_to{command::usage}]] [[= limits{1, longest_report_days}]] unsigned days = default_days;
     [[= flag{"--provider"}]] [[= applies_to{command::login, command::models}]] [[= operand{"NAME"}]] std::string provider{};
+    [[= flag{"--yes"}]] [[= applies_to{command::provider, command::routes, command::config, command::models}]] bool yes = false;
+    [[= flag{"--preset"}]] [[= applies_to{command::provider}]] [[= operand{"NAME"}]] std::string preset{};
+    [[= flag{"--labels"}]] [[= applies_to{command::provider}]] [[= operand{"A,B"}]] std::string labels{};
+    [[= flag{"--base-url"}]] [[= applies_to{command::provider}]] [[= operand{"URL"}]] std::string base_url{};
+    [[= flag{"--token-env"}]] [[= applies_to{command::provider}]] [[= operand{"VAR"}]] std::string token_env{};
     [[= flag{"--session"}]] [[= applies_to{command::use, command::route}]] [[= operand{"ID"}]] std::string session{};
-    [[= operand{"ARGS..."}]] [[= applies_to{command::claude, command::use, command::route}]] std::vector<std::string> passthrough{};
+    [[= operand{"ARGS..."}]] [[= applies_to{command::claude, command::use, command::route, command::provider, command::routes, command::config, command::models}]] std::vector<std::string> passthrough{};
 };
 
 struct gateway_address {
@@ -219,7 +227,7 @@ constexpr step choose_command(parse_state& state, std::string_view const word) {
 }
 
 constexpr bool takes_words(command const which) {
-    return which == command::use || which == command::route;
+    return which == command::use || which == command::route || which == command::provider || which == command::routes || which == command::config || which == command::models;
 }
 
 constexpr step consume(parse_state& state) {

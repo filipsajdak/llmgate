@@ -55,4 +55,25 @@ write_config m-two ',
 run targets > "$work/after.out"
 check sh -c "grep -q 'claude-m-two@alpha' '$work/after.out'"
 
+label="provider add without --yes shows the diff and writes nothing"
+run provider add home --preset anthropic --labels private > "$work/dry.out" 2>&1 || true
+check sh -c "grep -q '^+' '$work/dry.out' && grep -q 'not written' '$work/dry.out' && ! grep -q '\"home\"' '$work/config.jsonc'"
+label="provider add --yes writes, keeps the comments, and the running gateway serves it after the reload"
+sed -i.bak 's|"providers": {|// my providers\n  "providers": {|' "$work/config.jsonc"
+run provider add home --preset anthropic --labels private --yes > "$work/add.out" 2>&1 || true
+run targets > "$work/t3.out"
+check sh -c "grep -q 'my providers' '$work/config.jsonc' && grep -q '\"home\"' '$work/config.jsonc' && grep -q 'written to' '$work/add.out'"
+label="models set and routes set edit the file and the gateway follows"
+run models set home claude-sonnet-5-5 claude-sonnet-home --yes > /dev/null 2>&1 || true
+run routes set sonnet home,alpha --yes > /dev/null 2>&1 || true
+check sh -c "grep -q 'claude-sonnet-home' '$work/config.jsonc' && grep -q '\"sonnet\": \[\"home\",\"alpha\"\]' '$work/config.jsonc'"
+label="a route to an unknown provider is refused and the file is unchanged"
+cp "$work/config.jsonc" "$work/before.jsonc"
+check sh -c "! '$binary' --config '$work/config.jsonc' routes set opus nowhere --yes > '$work/nowhere.out' 2>&1 && grep -q nowhere '$work/nowhere.out' && cmp -s '$work/config.jsonc' '$work/before.jsonc'"
+label="a provider that a route still names cannot be removed, and once the route is cleared it can"
+check sh -c "! '$binary' --config '$work/config.jsonc' provider remove home --yes > '$work/keep.out' 2>&1 && grep -q home '$work/keep.out' && grep -q '\"home\"' '$work/config.jsonc'"
+run routes clear sonnet --yes > /dev/null 2>&1 || true
+run provider remove home --yes > /dev/null 2>&1 || true
+check sh -c "! grep -q '\"home\"' '$work/config.jsonc'"
+
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }

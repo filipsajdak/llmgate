@@ -10,6 +10,7 @@ import llmgate.chatgpt;
 import llmgate.claude;
 import llmgate.commands;
 import llmgate.config_docs;
+import llmgate.config_edit;
 import llmgate.copilot;
 import llmgate.discovery;
 import llmgate.model_list;
@@ -108,6 +109,16 @@ void report_abandoned(std::size_t const abandoned, std::chrono::milliseconds con
     }
 }
 
+std::expected<gateway::reloaded, std::string> reload_config(async::reactor& loop, tls::client_context const& tls_context, std::string const& config_path,
+                                                            std::string const& host, std::uint16_t const port, std::deque<credential_store>& kept) {
+    return load_config(config_path).and_then([&](gateway::config fresh) {
+        return commands::make_policy(fresh, host, port).transform([&](gateway::access_policy policy) {
+            auto const& store = kept.emplace_back(make_credentials(loop, tls_context, fresh));
+            return gateway::reloaded{.settings = std::move(fresh), .credentials = borrowed(store), .access = std::move(policy)};
+        });
+    });
+}
+
 int serve_on(async::reactor& loop, gateway::config const& settings, std::string const& host, tls::client_context const& tls_context,
              net::listener& listening, std::string const& config_path) {
     auto policy = commands::make_policy(settings, host, listening.port());
@@ -120,18 +131,7 @@ int serve_on(async::reactor& loop, gateway::config const& settings, std::string 
     auto credentials = make_credentials(loop, tls_context, settings);
     gateway::proxy proxy{loop, settings, std::move(*policy), borrowed(credentials), tls_context};
     std::deque<credential_store> reloaded_credentials;
-    proxy.reload_with([&]() -> std::expected<gateway::reloaded, std::string> {
-        auto fresh = load_config(config_path);
-        if (!fresh) {
-            return std::unexpected{std::move(fresh.error())};
-        }
-        auto fresh_policy = commands::make_policy(*fresh, host, listening.port());
-        if (!fresh_policy) {
-            return std::unexpected{std::move(fresh_policy.error())};
-        }
-        auto const& kept = reloaded_credentials.emplace_back(make_credentials(loop, tls_context, *fresh));
-        return gateway::reloaded{.settings = std::move(*fresh), .credentials = borrowed(kept), .access = std::move(*fresh_policy)};
-    });
+    proxy.reload_with([&] { return reload_config(loop, tls_context, config_path, host, listening.port(), reloaded_credentials); });
     attach_ledger(proxy, settings);
     attach_capture(proxy, settings);
     proxy.use_overrides(commands::read_overrides());
@@ -274,7 +274,62 @@ commands::model_lister provider_lister(tls::group_policy const tls_groups) {
     };
 }
 
+bool write_atomically(std::filesystem::path const& target, std::string_view const text) {
+    auto const temporary = std::filesystem::path{target}.concat(".new");
+    {
+        std::ofstream out{temporary, std::ios::binary | std::ios::trunc};
+        out << text;
+        if (!out) {
+            return false;
+        }
+    }
+    std::error_code failed;
+    std::filesystem::permissions(temporary, std::filesystem::status(target, failed).permissions(), failed);
+    std::filesystem::rename(temporary, target, failed);
+    return !failed;
+}
+
+int edit_command(commands::context const& where) {
+    auto const& chosen = where.options;
+    auto const group = reflect::enum_from_name<config_edit::group>(reflect::enum_name(chosen.which));
+    if (!group) {
+        return fail(exit_usage, "not an edit command");
+    }
+    auto const planned = config_edit::plan({.which = *group,
+                                            .words = chosen.passthrough,
+                                            .preset = chosen.preset,
+                                            .labels = chosen.labels,
+                                            .base_url = chosen.base_url,
+                                            .token_env = chosen.token_env});
+    if (!planned) {
+        return fail(exit_usage, planned.error());
+    }
+    auto const path = std::filesystem::path{process::expand_home(chosen.config_path)};
+    std::ifstream in{path};
+    std::string const text{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+    auto const edited = config_edit::apply(text, *planned);
+    if (!edited) {
+        return fail(exit_config, edited.error());
+    }
+    std::print("{}", edited->diff);
+    if (!chosen.yes) {
+        std::println("not written: add --yes to write {}", path.string());
+        return 0;
+    }
+    if (!write_atomically(path, edited->text)) {
+        return fail(exit_runtime, std::format("cannot write {}", path.string()));
+    }
+    std::println("written to {}", path.string());
+    if (commands::run_reload(where) != 0) {
+        std::println("the gateway did not reload (is it running?); it picks the change up when it starts");
+    }
+    return 0;
+}
+
 int models_command(commands::context const& where) {
+    if (!where.options.passthrough.empty()) {
+        return edit_command(where);
+    }
     auto const chosen = commands::models_choice(where.settings, where.options.provider);
     if (!chosen) {
         return fail(exit_config, chosen.error());
@@ -329,6 +384,9 @@ constexpr auto handlers = std::to_array<std::pair<arguments::command, command_ha
     {arguments::command::route, &commands::run_route},
     {arguments::command::models, &models_command},
     {arguments::command::reload, &commands::run_reload},
+    {arguments::command::provider, &edit_command},
+    {arguments::command::routes, &edit_command},
+    {arguments::command::config, &edit_command},
     {arguments::command::statusline, &statusline_command},
 });
 
