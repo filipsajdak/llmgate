@@ -1,6 +1,6 @@
 # Guided setup: several providers, one person who does not want to edit a config
 
-Status: design (BET-6). Decisions are the owner's answers of 2026-10-22; facts are marked documented, reported or
+Status: design (BET-6). Contexts, the guard, handover and the orchestrator across Claude accounts are BET-7 ([docs/llmgate-contexts.md](llmgate-contexts.md)); provider kinds and auth are the slices A1 to A4 below. Decisions are the owner's answers of 2026-10-22; facts are marked documented, reported or
 measured. It builds on [docs/llmgate-mod.md](llmgate-mod.md) (the mod), [docs/llmgate-setup.md](llmgate-setup.md)
 (edit commands and reload, whose slices C3 to C5 move here) and [docs/labels.md](labels.md).
 
@@ -112,6 +112,10 @@ cost and time per solved task, paired bootstrap, a judge from a provider absent 
 | 5 | Scorecard, meters and the quick check | unit, e2e, `claude plugin test` |
 | 6 | Image tool if proven, the council and its caps | live run |
 | 7 | The real-user run (G11) and the decision | GIF, findings |
+| A1 | Auth kinds in `provider_config` (`bearer`, `header` with a name and scheme, `none`, `forward`) and secret stores (env, a 0600 file, macOS Keychain); `doctor` checks them without printing a value | unit, e2e with a fake that requires `api-key` |
+| A2 | `llmgate provider add` learns the kinds, the GHE host of Copilot, the local gateway preset, a local no-auth model, and a `secret set NAME` command | unit, golden diffs, e2e |
+| A3 | The wizard for provider kinds: guided form, secret prompt that recommends the most secure store, sign-in link and code through `$.process.spawn`, test | `claude plugin test`, scripted journey |
+| A4 | `llmgate provider import mic`: the local-gateway `config.yaml` as a reference for the mic provider's model list | unit |
 
 ## Open questions
 
