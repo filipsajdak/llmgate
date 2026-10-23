@@ -1,7 +1,8 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
 import { parseRecipes, recipeInvocation } from './recipes'
-import { meterLines, parseQuota, scoreTable } from './scorecard'
+import { checkInvocation, checkTable, checkWarning, meterLines, parseCheck, parseQuota, scoreTable } from './scorecard'
+import type { CheckRow } from './scorecard'
 import type { Quota } from './scorecard'
 import type { Recipe } from './recipes'
 import { addInvocation, followUp, formFor, kinds, nextStep } from './setup'
@@ -30,6 +31,9 @@ let quotas = new Map<string, Quota>()
 let quotaAt = 0
 let window: 'today' | 'month' = 'today'
 const quotaSeconds = 60
+let asked: 'quick' | 'full' | undefined
+let checkRows: CheckRow[] = []
+let checkNote = ''
 let rules = new Map<string, string>()
 let chosen = ''
 let recipeOutput = ''
@@ -66,6 +70,26 @@ async function loadQuotas($: Engine): Promise<void> {
     }
   }
   quotas = found
+}
+
+async function runCheck($: Engine): Promise<void> {
+  const quick = asked === 'quick'
+  asked = undefined
+  const [bin, config] = await Promise.all([$.env.get('LLMGATE_BIN'), $.env.get('LLMGATE_CONFIG')])
+  const plan = checkInvocation(bin, config, quick)
+  checkRows = []
+  if ('refused' in plan) {
+    checkNote = plan.refused
+  } else {
+    try {
+      const ran = await $.process.run(plan.argv, { timeoutMs: 590000 })
+      checkRows = parseCheck(ran.stdout)
+      checkNote = checkRows.length === 0 ? printableBlock((ran.stderr || ran.stdout || `exit ${ran.exitCode}`).replace(/^llmgate: /, '').trim()) : ''
+    } catch (error) {
+      checkNote = printable(`llmgate did not run: ${String(error)}`)
+    }
+  }
+  $.ui.invalidate('ui.render')
 }
 
 function scoreText(): string[] {
@@ -317,6 +341,22 @@ export const register: Register = on => {
               redraw()
             }} />
           </Box>
+          <Box flexDirection="row" columnGap={2}>
+            <Button key="check-quick" label="Quick check" plain onPress={() => {
+              asked = 'quick'
+              redraw()
+            }} />
+            <Button key="check-full" label="Full check" plain onPress={() => {
+              asked = 'full'
+              redraw()
+            }} />
+          </Box>
+          {asked !== undefined && <Text>{checkWarning(asked === 'quick', snapshot.providers.map(item => item.name))}</Text>}
+          {asked !== undefined && <Button key="check-run" label="Run" onPress={() => void runCheck($)} />}
+          {checkNote !== '' && <Text color="red">{checkNote}</Text>}
+          {checkTable(checkRows).map(row => (
+            <Text>{row}</Text>
+          ))}
           {rows.map((row, at) => {
             const heading = row === 'Meters' || row.startsWith('By ')
             const tableHead = at > 0 && rows[at - 1].startsWith('By ')

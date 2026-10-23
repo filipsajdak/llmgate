@@ -38,7 +38,8 @@ enum class command {
     secret [[= tolerant{}]],
     recipe,
     agents,
-    rules
+    rules,
+    check
 };
 static_assert(reflect::unique_values<command>());
 
@@ -89,13 +90,13 @@ struct options {
     [[= flag{"--print-example"}]] [[= prints{document::example}]] bool print_example = false;
     [[= flag{"--print-schema"}]] [[= prints{document::schema}]] bool print_schema = false;
     [[= flag{"--print-config-table"}]] [[= prints{document::config_table}]] bool print_config_table = false;
-    [[= flag{"--json"}]] [[= applies_to{command::env, command::usage, command::doctor, command::quota, command::models, command::recipe}]] bool as_json = false;
+    [[= flag{"--json"}]] [[= applies_to{command::env, command::usage, command::doctor, command::quota, command::models, command::recipe, command::check}]] bool as_json = false;
     [[= flag{"--vscode"}]] [[= applies_to{command::env, command::setup}]] [[= operand{"FILE"}]] std::optional<std::string> vscode{};
     [[= flag{"--service"}]] [[= applies_to{command::setup}]] bool service = false;
     [[= flag{"--dry-run"}]] [[= applies_to{command::setup}]] bool dry_run = false;
     [[= flag{"--offline"}]] [[= applies_to{command::doctor}]] bool offline = false;
     [[= flag{"--days"}]] [[= operand{"N"}]] [[= applies_to{command::usage}]] [[= limits{1, longest_report_days}]] unsigned days = default_days;
-    [[= flag{"--provider"}]] [[= applies_to{command::login, command::models, command::quota}]] [[= operand{"NAME"}]] std::string provider{};
+    [[= flag{"--provider"}]] [[= applies_to{command::login, command::models, command::quota, command::check}]] [[= operand{"NAME"}]] std::string provider{};
     [[= flag{"--yes"}]] [[= applies_to{command::provider, command::routes, command::config, command::models, command::recipe, command::agents, command::rules}]] bool yes = false;
     [[= flag{"--preset"}]] [[= applies_to{command::provider}]] [[= operand{"NAME"}]] std::string preset{};
     [[= flag{"--labels"}]] [[= applies_to{command::provider}]] [[= operand{"A,B"}]] std::string labels{};
@@ -107,6 +108,7 @@ struct options {
     [[= flag{"--offer"}]] [[= applies_to{command::provider}]] [[= operand{"A,B"}]] std::string offer{};
     [[= flag{"--description"}]] [[= applies_to{command::agents}]] [[= operand{"TEXT"}]] std::string description{};
     [[= flag{"--prompt"}]] [[= applies_to{command::agents}]] [[= operand{"TEXT"}]] std::string prompt{};
+    [[= flag{"--quick"}]] [[= applies_to{command::check}]] bool quick = false;
     [[= flag{"--offer-from"}]] [[= applies_to{command::provider}]] [[= operand{"FILE"}]] std::string offer_from{};
     [[= flag{"--offer-filter"}]] [[= applies_to{command::provider}]] [[= operand{"TEXT"}]] std::string offer_filter{};
     [[= flag{"--session"}]] [[= applies_to{command::use, command::route}]] [[= operand{"ID"}]] std::string session{};

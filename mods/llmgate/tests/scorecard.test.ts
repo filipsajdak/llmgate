@@ -56,3 +56,25 @@ test('the meters say what each provider reports and admit what the route does no
     'work       business, resets 2026-11-01: premium_interactions 120 of 300 left (40%)',
   ])
 })
+
+import { checkInvocation, checkWarning, parseCheck } from '../hooks/scorecard'
+
+test('the quick check is asked for by name, warns what it spends and runs by argv', () => {
+  expect(checkInvocation('/opt/llmgate', '/c.jsonc', true)).toEqual({ argv: ['/opt/llmgate', '--config', '/c.jsonc', 'check', '--json', '--quick'] })
+  expect(checkInvocation('/opt/llmgate', undefined, false)).toEqual({ argv: ['/opt/llmgate', 'check', '--json'] })
+  expect(checkInvocation(undefined, undefined, true)).toEqual({ refused: 'LLMGATE_BIN is not set: start Claude Code with llmgate claude' })
+  expect(checkWarning(true, ['codex', 'work'])).toContain('one small request')
+  expect(checkWarning(false, ['codex', 'work'])).toContain('about 16k tokens')
+  expect(checkWarning(false, ['codex', 'work'])).toContain('codex, work')
+})
+
+test('the check result rows are read and lined up with pass, FAIL and skip', () => {
+  const body = JSON.stringify([
+    { provider: 'codex', step: 'ping', result: 'pass', detail: '', milliseconds: 1200 },
+    { provider: 'codex', step: 'tool', result: 'fail', detail: 'no tool call came back', milliseconds: 800 },
+    { provider: 'anthropic', step: 'all', result: 'skipped', detail: 'forwards your Claude login', milliseconds: 0 },
+  ])
+  const rows = parseCheck(body)
+  expect(rows.map(r => r.result)).toEqual(['pass', 'fail', 'skipped'])
+  expect(parseCheck('nope')).toEqual([])
+})

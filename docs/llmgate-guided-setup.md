@@ -109,7 +109,7 @@ cost and time per solved task, paired bootstrap, a judge from a provider absent 
 | 2 | Recipes as data and `llmgate recipe list\|show\|apply NAME --yes` on the edit engine and reload; `doctor` checks sign-in per recipe | unit, golden diffs, e2e |
 | 3 | The wizard and plain-words help in the pane, sign-in link and code, test, recipe cards with preview and Apply | `claude plugin test`, scripted journey |
 | 4 | Recipe agent types and spawn rules, the "who runs what" view, `doctor` on `_FORCE` (built: `agents` and `spawn_rules` in the config with `llmgate agents` and `rules`, the second-opinion recipe's reviewer, the mod's registration, spawn hook and Agents view, the doctor warning; the real-session check that the model reaches the gateway is open) | `claude plugin test`, real session |
-| 5 | Scorecard, meters and the quick check | unit, e2e, `claude plugin test` |
+| 5 | Scorecard, meters and the quick check (built: the ledger's per-provider, class, agent and label aggregate, the overview's scorecard, `quota --provider`, the Scorecard tab and its meters, `llmgate check` and the tab's Quick and Full check; the check proves each provider and each agent's target through the gateway, the real subagent turn needs a live session) | unit, e2e, `claude plugin test` |
 | 6 | Image tool if proven, the council and its caps | live run |
 | 7 | The real-user run (G11) and the decision | GIF, findings |
 | A1 | Auth kinds in `provider_config` (`bearer`, `header` with a name and scheme, `none`, `forward`) and secret stores (env, a 0600 file, macOS Keychain); `doctor` checks them without printing a value | unit, e2e with a fake that requires `api-key` |
@@ -123,6 +123,11 @@ cost and time per solved task, paired bootstrap, a judge from a provider absent 
 in clear. The wizard therefore never asks for a key in the pane: it writes the provider with `--secret
 file:~/.config/llmgate/secrets/NAME.key` and tells the person to type `! llmgate secret set NAME`, which reads the
 value hidden in the terminal and stores it at mode 0600.
+
+## Finding: no quota headers on the ChatGPT plan route
+
+The capture of the owner's Codex gateway (2026-10-23) shows reply headers `x-codex-turn-state` and `x-codex-safety-*` only,
+and no rate-limit or window header, so the ChatGPT meter is the ledger's own token count and the pane says so.
 
 ## Open questions
 

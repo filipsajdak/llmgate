@@ -8,6 +8,7 @@ import std;
 import llmgate.arguments;
 import llmgate.async;
 import llmgate.chatgpt;
+import llmgate.check;
 import llmgate.claude;
 import llmgate.commands;
 import llmgate.config_docs;
@@ -517,6 +518,60 @@ int recipe_command(commands::context const& where) {
     return apply_recipe(where, *item);
 }
 
+check::outcome skipped_outcome(check::job const& item) {
+    return {.provider = item.provider, .step = "all", .skipped = true, .detail = item.skipped};
+}
+
+check::outcome run_step(commands::context const& where, check::job const& item, check::step const which) {
+    auto const began = std::chrono::steady_clock::now();
+    auto const answer = commands::gateway_request(where, "/anthropic/v1/messages", check::request_body(which, item.target), check::headers_of(which));
+    auto const took = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count();
+    return {.provider = item.provider,
+            .step = check::step_name(which),
+            .detail = answer ? check::judge(which, answer->status, answer->body) : answer.error(),
+            .milliseconds = took};
+}
+
+std::vector<check::outcome> run_job(commands::context const& where, check::job const& item, std::span<check::step const> const steps) {
+    if (!item.skipped.empty()) {
+        return {skipped_outcome(item)};
+    }
+    std::vector<check::outcome> rows;
+    for (auto const which : steps) {
+        rows.push_back(run_step(where, item, which));
+        if (!rows.back().detail.empty()) {
+            break;
+        }
+    }
+    return rows;
+}
+
+std::vector<check::outcome> check_all(commands::context const& where, std::vector<check::job> const& jobs) {
+    auto const& chosen = where.options;
+    auto const provider_steps = chosen.quick ? std::vector{check::step::ping} : std::vector{check::step::ping, check::step::tool, check::step::context};
+    std::vector<check::outcome> rows;
+    for (auto const& item : jobs) {
+        std::ranges::move(run_job(where, item, provider_steps), std::back_inserter(rows));
+    }
+    if (chosen.provider.empty() && !chosen.quick) {
+        for (auto const& item : check::agent_jobs(where.settings)) {
+            std::ranges::move(run_job(where, item, std::array{check::step::agent}), std::back_inserter(rows));
+        }
+    }
+    return rows;
+}
+
+int check_command(commands::context const& where) {
+    auto const& chosen = where.options;
+    auto const jobs = check::plan(where.settings, chosen.provider);
+    if (jobs.empty()) {
+        return fail(exit_config, chosen.provider.empty() ? "no provider is configured" : std::format("no provider named {}", chosen.provider));
+    }
+    auto const rows = check_all(where, jobs);
+    std::print("{}", chosen.as_json ? check::to_json(rows) + "\n" : check::render(rows));
+    return check::all_passed(rows) ? 0 : exit_runtime;
+}
+
 int models_command(commands::context const& where) {
     if (!where.options.passthrough.empty()) {
         return edit_command(where);
@@ -582,6 +637,7 @@ constexpr auto handlers = std::to_array<std::pair<arguments::command, command_ha
     {arguments::command::recipe, &recipe_command},
     {arguments::command::agents, &edit_command},
     {arguments::command::rules, &edit_command},
+    {arguments::command::check, &check_command},
     {arguments::command::statusline, &statusline_command},
 });
 

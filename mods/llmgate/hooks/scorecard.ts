@@ -59,3 +59,51 @@ export function meterLines(found: Snapshot, quotas: ReadonlyMap<string, Quota>):
     return `${name}  no quota is reported by this route; ${compact(today.get(item.name) ?? 0)} tokens today`
   })
 }
+
+export type CheckRow = { provider: string; step: string; result: 'pass' | 'fail' | 'skipped'; detail: string; milliseconds: number }
+
+export function parseCheck(body: string): CheckRow[] {
+  let document: unknown
+  try {
+    document = JSON.parse(body)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(document)) return []
+  return document.flatMap((raw: unknown) => {
+    const item = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+    const result = item.result === 'pass' || item.result === 'fail' || item.result === 'skipped' ? item.result : undefined
+    if (result === undefined || typeof item.provider !== 'string') return []
+    return [
+      {
+        provider: printable(item.provider, 48),
+        step: printable(typeof item.step === 'string' ? item.step : '', 16),
+        result,
+        detail: printable(typeof item.detail === 'string' ? item.detail : '', 120),
+        milliseconds: Number(item.milliseconds) || 0,
+      },
+    ]
+  })
+}
+
+export type Plan = { argv: string[] } | { refused: string }
+
+export function checkInvocation(bin: string | undefined, config: string | undefined, quick: boolean): Plan {
+  if (bin === undefined || bin === '') return { refused: 'LLMGATE_BIN is not set: start Claude Code with llmgate claude' }
+  return { argv: [bin, ...(config ? ['--config', config] : []), 'check', '--json', ...(quick ? ['--quick'] : [])] }
+}
+
+export function checkWarning(quick: boolean, providers: readonly string[]): string {
+  const where = providers.join(', ')
+  return quick
+    ? `The quick check sends one small request to each provider (${where}). Press Run to go on.`
+    : `The full check sends one small request, a tool request and one of about 16k tokens to each provider (${where}), and one small request to the target of each agent, and uses that much of their quota. Press Run to go on.`
+}
+
+export function checkTable(rows: readonly CheckRow[]): string[] {
+  return table(
+    ['provider', 'step', 'result', 'time', 'detail'],
+    rows.map(row => [row.provider, row.step, row.result === 'pass' ? 'pass' : row.result === 'fail' ? 'FAIL' : 'skip', row.result === 'skipped' ? '-' : row.milliseconds < 1000 ? `${row.milliseconds} ms` : `${(row.milliseconds / 1000).toFixed(1)} s`, row.detail]),
+    [3],
+  )
+}

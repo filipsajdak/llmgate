@@ -864,6 +864,28 @@ inline int send_control(std::expected<control_call, std::string> const& call) {
     return 0;
 }
 
+inline std::expected<process::http_result, std::string> gateway_request(context const& where, std::string_view const target, std::string_view const body,
+                                                                        std::map<std::string, std::string> const& extra) {
+    auto const address = detail::address_of(where.settings);
+    if (!address) {
+        return std::unexpected{address.error()};
+    }
+    if (!gateway_verified(*address)) {
+        return std::unexpected{std::format("no llmgate gateway of yours answers on {}:{}; start it with llmgate claude or llmgate serve", address->host, address->port)};
+    }
+    auto headers = detail::key_headers(where.settings);
+    headers.emplace_back("anthropic-version", "2023-06-01");
+    for (auto const& [name, value] : extra) {
+        headers.emplace_back(name, value);
+    }
+    constexpr std::chrono::milliseconds check_limit{std::chrono::minutes{3}};
+    auto const answer = process::http_post(address->host, address->port, target, headers, body, check_limit);
+    if (!answer) {
+        return std::unexpected{std::string{"the gateway did not answer in time"}};
+    }
+    return *answer;
+}
+
 inline int run_use(context const& where) {
     return send_control(prepare_control_call(where));
 }

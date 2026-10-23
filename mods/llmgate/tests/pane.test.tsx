@@ -511,3 +511,32 @@ test('the Scorecard tab shows the meters and four tables, and the month button s
   expect(runs[0]).toEqual(['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'quota', '--json', '--provider', 'work'])
   await ui.unmount()
 })
+
+test('the quick check asks first, then runs llmgate check and shows the table', async ($, on) => {
+  mock.env(on, env)
+  mock.clock(on)
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: scoreOverview() } }))
+  const runs: string[][] = []
+  on('process.run', (_, e) => {
+    runs.push([...e.argv])
+    return { value: { exitCode: 1, stdout: JSON.stringify([{ provider: 'work', step: 'ping', result: 'pass', detail: '', milliseconds: 800 }, { provider: 'work', step: 'tool', result: 'fail', detail: 'no tool call came back', milliseconds: 1500 }]), stderr: '' } }
+  })
+  on('command.register', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc-123' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'llmgate', args: 'pane' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'view-scorecard' })
+  await ui.press({ key: 'check-quick' })
+  await must(ui, { type: 'Text', text: /sends one small request to each provider \(codex, work\)/ })
+  expect(runs.some(r => r.includes('check'))).toBe(false)
+  await ui.press({ key: 'check-run' })
+  await must(ui, { type: 'Text', text: /^work +tool +FAIL +1\.5 s +no tool call came back$/ })
+  expect(runs.filter(r => r.includes('check'))).toEqual([['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'check', '--json', '--quick']])
+  await ui.unmount()
+})
