@@ -45,6 +45,9 @@ struct agent_def {
     std::string via_role{};
     std::string description{};
     std::string prompt{};
+    std::vector<std::string> tools{};
+    unsigned max_turns = 0;
+    bool optional = false;
 };
 
 struct recipe {
@@ -54,6 +57,7 @@ struct recipe {
     std::vector<std::string> pros{};
     std::vector<std::string> cons{};
     std::vector<provider_kind> needs{};
+    std::vector<provider_kind> any_of{};
     std::string tokens{};
     std::vector<role_order> roles{};
     std::vector<class_target> classes{};
@@ -85,6 +89,17 @@ std::string kind_name(provider_kind const kind) { return std::string{reflect::en
 
 std::vector<role_order> routed(kinds const& opus, kinds const& sonnet, kinds const& haiku) {
     return {{.role = "opus", .kinds = opus}, {.role = "sonnet", .kinds = sonnet}, {.role = "haiku", .kinds = haiku}};
+}
+
+agent_def council_member(provider_kind const kind) {
+    return {.name = "council-" + kind_name(kind),
+            .kinds = {kind},
+            .via_role = "opus",
+            .description = "An independent expert opinion on a hard problem from a different vendor's strongest model",
+            .prompt = "You are one member of a council of models from different vendors. Answer the question you are given on your own, in at most 400 words: your recommendation, the strongest reasons, and what could make you wrong. Read files if you must, never change anything, and do not ask the others.",
+            .tools = {"Read", "Grep", "Glob"},
+            .max_turns = 8,
+            .optional = true};
 }
 
 std::vector<recipe> built_in() {
@@ -131,6 +146,16 @@ std::vector<recipe> built_in() {
          .tokens = "1x to 1.5x",
          .roles = routed(claude_first, {chatgpt, copilot, claude}, {chatgpt, copilot, claude}),
          .classes = cheap_background},
+        {.id = "hard-problems",
+         .title = "Advanced: a council for hard problems",
+         .summary = "Your main session stays the chair; for a hard question it asks one council member per other vendor, in parallel, then merges their answers (type 'council: your question').",
+         .pros = {"several vendors look at one problem independently", "members are read-only and capped at 8 turns each"},
+         .cons = {"3x to 5x the tokens of one answer, and the quota of every plan that sits on the council", "published results are mixed: debate often only matches majority voting, and a weak member can lower the result"},
+         .needs = {claude},
+         .any_of = {chatgpt, copilot},
+         .tokens = "3x to 5x, capped",
+         .roles = routed(claude_first, claude_first, claude_first),
+         .agents = {council_member(chatgpt), council_member(copilot)}},
     };
 }
 
@@ -146,13 +171,15 @@ std::vector<std::string> providers_of(std::map<std::string, gateway::provider_co
     return names;
 }
 
-std::string array_text(std::span<std::string const> const items) {
+json::value strings(std::span<std::string const> const items) {
     json::array out;
     for (auto const& item : items) {
         out.push_back(json::make_string(item));
     }
-    return json::write(json::value{std::move(out)});
+    return json::value{std::move(out)};
 }
+
+std::string array_text(std::span<std::string const> const items) { return json::write(strings(items)); }
 
 std::optional<std::string> target_of(std::map<std::string, gateway::provider_config> const& all, class_target const& wanted) {
     for (auto const& [name, item] : all) {
@@ -176,6 +203,9 @@ std::vector<std::string> missing_kinds(recipe const& wanted, std::map<std::strin
             missing.push_back(kind_name(kind));
         }
     }
+    if (!wanted.any_of.empty() && std::ranges::none_of(wanted.any_of, [&providers](provider_kind const kind) { return !providers_of(providers, {kind}).empty(); })) {
+        missing.push_back(kind_name(wanted.any_of.front()) + " or " + kind_name(wanted.any_of.back()));
+    }
     return missing;
 }
 
@@ -187,24 +217,48 @@ void add_role_edits(planned& out, recipe const& wanted, std::map<std::string, ga
     }
 }
 
+std::optional<std::string> model_target(std::map<std::string, gateway::provider_config> const& providers, provider_kind const kind, std::string_view const via_role) {
+    for (auto const& [name, item] : providers) {
+        if (kind_of(item) != kind) {
+            continue;
+        }
+        for (auto const& [claude_name, upstream] : item.models) {
+            if (claude_name.contains(via_role)) {
+                return control::id_of(upstream, name);
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<std::string> agent_target(std::map<std::string, gateway::provider_config> const& providers, agent_def const& wanted) {
     for (auto const kind : wanted.kinds) {
-        if (auto const target = target_of(providers, {.kind = kind, .via_role = wanted.via_role})) {
+        if (auto const target = model_target(providers, kind, wanted.via_role)) {
             return target;
         }
     }
     return std::nullopt;
 }
 
+std::string agent_json(agent_def const& item, std::string const& target) {
+    json::object body{{"target", json::make_string(target)}, {"description", json::make_string(item.description)}, {"prompt", json::make_string(item.prompt)}};
+    if (!item.tools.empty()) {
+        body.emplace_back("tools", strings(item.tools));
+    }
+    if (item.max_turns != 0) {
+        body.emplace_back("max_turns", json::value{static_cast<std::int64_t>(item.max_turns)});
+    }
+    return json::write(json::value{std::move(body)});
+}
+
 void add_agent_edits(planned& out, recipe const& wanted, std::map<std::string, gateway::provider_config> const& providers) {
     for (auto const& item : wanted.agents) {
         auto const target = agent_target(providers, item);
-        if (!target) {
+        if (target) {
+            out.edits.push_back({.path = {"agents", item.name}, .value = agent_json(item, *target)});
+        } else if (!item.optional) {
             out.missing.push_back(kind_name(item.kinds.front()) + " or " + kind_name(item.kinds.back()));
-            continue;
         }
-        out.edits.push_back({.path = {"agents", item.name},
-                             .value = json::write(json::make_object({{"target", json::make_string(*target)}, {"description", json::make_string(item.description)}, {"prompt", json::make_string(item.prompt)}}))});
     }
 }
 

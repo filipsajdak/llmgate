@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { agentTable, changes, compact, describeTotals, providerTable, routeTable, spendTable, table, unpricedNote, gatewayRoot, invocation, parseOverview, parseCommand, printable, printableBlock, resolveTarget, statusText, describeTargets } from '../hooks/model'
+import { agentTable, changes, councilPrompt, compact, describeTotals, providerTable, routeTable, spendTable, table, unpricedNote, gatewayRoot, invocation, parseOverview, parseCommand, printable, printableBlock, resolveTarget, statusText, describeTargets } from '../hooks/model'
 
 const overview = JSON.stringify({
   schema_version: 1,
@@ -189,7 +189,7 @@ const withAgents = parseOverview(
 
 test('agents and spawn rules are read with plain names, known targets and clean text', () => {
   expect(withAgents.agents.map(a => a.name)).toEqual(['reviewer', 'ctl'])
-  expect(withAgents.agents[0]).toEqual({ name: 'reviewer', target: 'claude-gpt-6-sol@codex', description: 'A second opinion', prompt: 'Review it.', tools: ['Read', 'Grep'] })
+  expect(withAgents.agents[0]).toEqual({ name: 'reviewer', target: 'claude-gpt-6-sol@codex', description: 'A second opinion', prompt: 'Review it.', tools: ['Read', 'Grep'], maxTurns: 0 })
   expect(withAgents.agents[1].description).toBe('a?[2Jb')
   expect(withAgents.agents[1].tools).toEqual(['Read'])
   expect(withAgents.spawnRules).toEqual([{ agent: 'Explore', target: 'claude-gpt-6-sol@codex' }])
@@ -204,4 +204,22 @@ test('the who-runs-what table lists roles, agent types and spawn rules with the 
     'agent type  ctl       claude-gpt-6-sol@codex  codex',
     'spawn rule  Explore   claude-gpt-6-sol@codex  codex',
   ])
+})
+
+test('an agent with no target runs on the session model and keeps its turn cap', () => {
+  const parsed = parseOverview(
+    's',
+    JSON.stringify({ schema_version: 1, roles: [], targets: [], providers: [], spend: { today: [], month: [] }, agents: [{ name: 'chair', target: '', description: 'd', prompt: 'p', tools: [], max_turns: 8 }] }),
+  )
+  expect(parsed.agents).toEqual([{ name: 'chair', target: '', description: 'd', prompt: 'p', tools: [], maxTurns: 8 }])
+})
+
+test('the council prompt names each member by its registered type, one round, in parallel, and carries the question word for word', () => {
+  const text = councilPrompt('Should we split the service?', ['council-chatgpt', 'council-copilot'])
+  expect(text).toContain('llmgate:council-chatgpt')
+  expect(text).toContain('llmgate:council-copilot')
+  expect(text).toContain('in one message')
+  expect(text).toContain('one round')
+  expect(text.endsWith('Should we split the service?')).toBe(true)
+  expect(councilPrompt('q', ['council-a', 'council-b', 'council-c', 'council-d'])).not.toContain('council-d')
 })

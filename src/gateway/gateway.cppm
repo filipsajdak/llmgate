@@ -243,17 +243,23 @@ std::string class_route_problem(config const& settings, std::map<std::string, pr
     return {};
 }
 
+bool tools_fit(std::vector<std::string> const& tools) {
+    return tools.size() <= most_agent_tools && std::ranges::all_of(tools, [](std::string const& tool) { return plain_name(tool); });
+}
+
+bool text_fits(agent_config const& item) { return item.prompt.size() <= longest_agent_prompt && item.description.size() <= longest_agent_description; }
+
 std::string agent_problem(std::string const& name, agent_config const& item, std::set<std::string> const& ids) {
-    if (!ids.contains(item.target)) {
+    if (!item.target.empty() && !ids.contains(item.target)) {
         return std::format("agents {}: target '{}' is not a target id (see llmgate targets)", plain(name), plain(item.target));
     }
-    if (item.prompt.size() > longest_agent_prompt || item.description.size() > longest_agent_description) {
+    if (item.max_turns > most_agent_turns) {
+        return std::format("agents {}: max_turns is at most {}", plain(name), most_agent_turns);
+    }
+    if (!text_fits(item)) {
         return std::format("agents {}: the prompt is at most {} characters and the description {}", plain(name), longest_agent_prompt, longest_agent_description);
     }
-    if (item.tools.size() > most_agent_tools || !std::ranges::all_of(item.tools, [](std::string const& tool) { return plain_name(tool); })) {
-        return std::format("agents {}: tools are plain tool names, at most {}", plain(name), most_agent_tools);
-    }
-    return {};
+    return tools_fit(item.tools) ? std::string{} : std::format("agents {}: tools are plain tool names, at most {}", plain(name), most_agent_tools);
 }
 
 std::string agents_problem(config const& settings, std::map<std::string, provider_config> const& providers) {
@@ -547,6 +553,7 @@ struct overview_agent {
     std::string description{};
     std::string prompt{};
     std::vector<std::string> tools{};
+    unsigned max_turns = 0;
 };
 
 struct overview_rule {
@@ -1139,7 +1146,7 @@ private:
 
     void add_agents(detail::overview_document& document) const {
         for (auto const& [name, item] : settings_.agents) {
-            document.agents.push_back({.name = name, .target = item.target, .description = item.description, .prompt = item.prompt, .tools = item.tools});
+            document.agents.push_back({.name = name, .target = item.target, .description = item.description, .prompt = item.prompt, .tools = item.tools, .max_turns = item.max_turns});
         }
         for (auto const& [agent, target] : settings_.spawn_rules) {
             document.spawn_rules.push_back({.agent = agent, .target = target});

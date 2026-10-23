@@ -10,7 +10,7 @@ export type Totals = { todayTokens: number; todayRequests: number; monthTokens: 
 export type ScoreRow = { name: string; requests: number; input: number; output: number; cacheRead: number; averageMs: number; maxMs: number; failures: number; fallbacks: number; share: number; cost?: number }
 export type Scores = { byProvider: ScoreRow[]; byClass: ScoreRow[]; byAgent: ScoreRow[]; byLabel: ScoreRow[] }
 export type Scorecard = { today: Scores; month: Scores }
-export type Agent = { name: string; target: string; description: string; prompt: string; tools: string[] }
+export type Agent = { name: string; target: string; description: string; prompt: string; tools: string[]; maxTurns: number }
 export type SpawnRule = { agent: string; target: string }
 export type Snapshot = {
   sessionId: string
@@ -171,7 +171,7 @@ function parseAgent(value: unknown, targets: readonly Target[]): Agent[] {
   const entry = object(value)
   const name = text(entry.name)
   const target = text(entry.target)
-  if (!agentName.test(name) || !knownTarget(targets, target)) return []
+  if (!agentName.test(name) || (target !== '' && !knownTarget(targets, target))) return []
   return [
     {
       name,
@@ -179,6 +179,7 @@ function parseAgent(value: unknown, targets: readonly Target[]): Agent[] {
       description: printable(text(entry.description), 240),
       prompt: printable(text(entry.prompt), 4000),
       tools: list(entry.tools).filter((t): t is string => typeof t === 'string' && toolName.test(t)).slice(0, 24),
+      maxTurns: Math.min(count(entry.max_turns), 100),
     },
   ]
 }
@@ -412,4 +413,17 @@ export function agentTable(found: Snapshot): string[] {
     ...found.spawnRules.map(item => ['spawn rule', item.agent, item.target, provider(item.target)]),
   ]
   return table(['kind', 'name', 'runs on', 'provider'], rows)
+}
+
+const councilMost = 3
+
+export function councilPrompt(question: string, members: readonly string[]): string {
+  const names = members.slice(0, councilMost).map(name => `llmgate:${name}`)
+  return [
+    `Use the Agent tool to put the question below to each of these council members, in one message so they run in parallel: ${names.join(', ')}.`,
+    'Pass the question word for word and nothing else from this conversation. Ask each once, one round only, and do not ask the same member again.',
+    'Then merge their answers: where they agree, where they differ and why, and your recommendation; keep your own opinion separate from theirs.',
+    '',
+    question,
+  ].join('\n')
 }

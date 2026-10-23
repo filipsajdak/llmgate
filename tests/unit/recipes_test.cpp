@@ -69,6 +69,33 @@ const suite recipes_suite = [] {
         expect(reviewer->value->contains(R"("target":"claude-gpt-6-sol@codex")") && reviewer->value->contains("Review")) << reviewer->value.value_or("");
     };
 
+    "capability_the_hard_problems_recipe_installs_one_council_member_per_other_vendor_with_read_only_tools_and_a_turn_cap"_test = [] {
+        auto config = three_providers();
+        config.providers["work"].models = {{"claude-opus-5-5", "claude-opus-5.5"}};
+        auto const planned = rc::plan(rc::find("hard-problems").value(), config);
+
+        auto const edit_of = [&planned](std::string_view const name) {
+            return std::ranges::find_if(planned.edits, [name](rc::edit const& item) { return item.path.size() == 2 && item.path.front() == "agents" && item.path.back() == name; });
+        };
+        expect(planned.missing.empty());
+        auto const codex = edit_of("council-chatgpt");
+        auto const work = edit_of("council-copilot");
+        expect(codex != planned.edits.end() && work != planned.edits.end());
+        expect(codex->value->contains(R"("target":"claude-gpt-6.1-sol@codex")") && codex->value->contains(R"("tools":["Read","Grep","Glob"])") && codex->value->contains(R"("max_turns":8)")) << codex->value.value_or("");
+        expect(work->value->contains(R"("target":"claude-opus-5.5@work")"));
+        expect(edit_of("council-claude") == planned.edits.end() && edit_of("chair") == planned.edits.end());
+    };
+
+    "limit_the_council_leaves_out_a_vendor_without_a_mapped_model_and_needs_at_least_one_vendor"_test = [] {
+        auto const planned = rc::plan(rc::find("hard-problems").value(), three_providers());
+
+        expect(planned.missing.empty());
+        expect(std::ranges::none_of(planned.edits, [](rc::edit const& item) { return item.path.back() == "council-copilot"; }));
+        gw::config alone;
+        alone.providers["anthropic"] = three_providers().providers.at("anthropic");
+        expect(rc::plan(rc::find("hard-problems").value(), alone).missing == std::vector<std::string>{"chatgpt or copilot"});
+    };
+
     "limit_second_opinion_needs_a_non_claude_provider_and_says_which_kinds_would_do"_test = [] {
         gw::config only_claude;
         only_claude.providers["anthropic"] = {.base_url = "https://api.anthropic.com", .preset = gw::preset_kind::anthropic, .forward_credentials = true};

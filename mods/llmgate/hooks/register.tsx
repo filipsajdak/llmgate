@@ -7,7 +7,7 @@ import type { Quota } from './scorecard'
 import type { Recipe } from './recipes'
 import { addInvocation, followUp, formFor, kinds, nextStep } from './setup'
 import type { Form, KindId } from './setup'
-import { agentTable, changes, describeTargets, describeTotals, providerTable, routeTable, spendTable, unpricedNote, gatewayRoot, invocation, parseCommand, parseOverview, printable, printableBlock, resolveTarget, roles, statusText } from './model'
+import { agentTable, changes, councilPrompt, describeTargets, describeTotals, providerTable, routeTable, spendTable, unpricedNote, gatewayRoot, invocation, parseCommand, parseOverview, printable, printableBlock, resolveTarget, roles, statusText } from './model'
 import type { Change, Command, Role, Scope, Snapshot } from './model'
 
 const PANE = 'llmgate'
@@ -108,10 +108,10 @@ function scoreText(): string[] {
 async function syncAgents($: Engine): Promise<void> {
   rules = new Map(snapshot.spawnRules.map(rule => [rule.agent, rule.target]))
   for (const agent of snapshot.agents) {
-    const signature = JSON.stringify([agent.target, agent.description, agent.prompt, agent.tools])
+    const signature = JSON.stringify([agent.target, agent.description, agent.prompt, agent.tools, agent.maxTurns])
     if (registered.get(agent.name) === signature) continue
     try {
-      await $.agent.register({ name: agent.name, description: agent.description || `Runs on ${agent.target}`, prompt: agent.prompt, model: agent.target, ...(agent.tools.length === 0 ? {} : { tools: agent.tools }) })
+      await $.agent.register({ name: agent.name, description: agent.description || `Runs on ${agent.target}`, prompt: agent.prompt, ...(agent.target === '' ? {} : { model: agent.target }), ...(agent.tools.length === 0 ? {} : { tools: agent.tools }), ...(agent.maxTurns === 0 ? {} : { maxTurns: agent.maxTurns }) })
       registered.set(agent.name, signature)
     } catch {
       registered.delete(agent.name)
@@ -281,6 +281,13 @@ export const register: Register = on => {
   on('agent.spawn', async ($, e, next) => {
     const target = rules.get(e.subagentType) ?? rules.get(e.subagentType.replace(/^[^:]*:/, ''))
     return target === undefined ? next(e) : next({ ...e, model: target })
+  })
+
+  on('prompt.submit', async ($, e, next) => {
+    const asked = e.command === undefined ? /^council:\s*([\s\S]+)$/i.exec(e.text.trim()) : null
+    const members = snapshot.agents.filter(item => item.name.startsWith('council-')).map(item => item.name)
+    if (asked === null || members.length === 0) return next(e)
+    return next({ ...e, text: councilPrompt(asked[1], members) })
   })
 
   on('ui.close', async ($, e, next) => {

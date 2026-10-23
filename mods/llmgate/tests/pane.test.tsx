@@ -540,3 +540,37 @@ test('the quick check asks first, then runs llmgate check and shows the table', 
   expect(runs.filter(r => r.includes('check'))).toEqual([['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'check', '--json', '--quick']])
   await ui.unmount()
 })
+
+test('a prompt that starts with council: is rewritten to dispatch the registered council members, and other prompts pass untouched', async ($, on) => {
+  mock.env(on, env)
+  mock.clock(on)
+  const document = JSON.parse(agentOverview())
+  document.agents = [
+    { name: 'council-chatgpt', target: 'claude-gpt-6-sol@codex', description: 'd', prompt: 'p', tools: ['Read'], max_turns: 8 },
+    { name: 'reviewer', target: 'claude-gpt-6-sol@codex', description: 'd', prompt: 'p', tools: [], max_turns: 0 },
+  ]
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(document) } }))
+  const registered: { name: string; maxTurns?: number }[] = []
+  on('agent.register', (_, e) => {
+    registered.push({ name: e.name, maxTurns: e.maxTurns })
+    return { value: { agent: `llmgate:${e.name}` } }
+  })
+  on('command.register', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc-123' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('prompt.submit', (_, e) => ({ text: e.text }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'llmgate', args: 'status' })
+  const rewritten = await $.prompt.submit({ text: 'council: should we split the service?' })
+  const plain = await $.prompt.submit({ text: 'just a normal question' })
+
+  expect(registered).toEqual([{ name: 'council-chatgpt', maxTurns: 8 }, { name: 'reviewer', maxTurns: undefined }])
+  expect(rewritten.text).toContain('llmgate:council-chatgpt')
+  expect(rewritten.text).not.toContain('reviewer')
+  expect(rewritten.text.endsWith('should we split the service?')).toBe(true)
+  expect(plain.text).toBe('just a normal question')
+})
