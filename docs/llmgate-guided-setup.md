@@ -108,7 +108,7 @@ cost and time per solved task, paired bootstrap, a judge from a provider absent 
 | 1 | Hint headers and class routing: launcher env, the gateway reads class, agent type and agent id, ledger fields `class` and `agent_type`, `routes_by_class`, usage by session and by class in the overview | unit and golden overview |
 | 2 | Recipes as data and `llmgate recipe list\|show\|apply NAME --yes` on the edit engine and reload; `doctor` checks sign-in per recipe | unit, golden diffs, e2e |
 | 3 | The wizard and plain-words help in the pane, sign-in link and code, test, recipe cards with preview and Apply | `claude plugin test`, scripted journey |
-| 4 | Recipe agent types and spawn rules, the "who runs what" view, `doctor` on `_FORCE` | `claude plugin test`, real session |
+| 4 | Recipe agent types and spawn rules, the "who runs what" view, `doctor` on `_FORCE` (built: `agents` and `spawn_rules` in the config with `llmgate agents` and `rules`, the second-opinion recipe's reviewer, the mod's registration, spawn hook and Agents view, the doctor warning; the real-session check that the model reaches the gateway is open) | `claude plugin test`, real session |
 | 5 | Scorecard, meters and the quick check | unit, e2e, `claude plugin test` |
 | 6 | Image tool if proven, the council and its caps | live run |
 | 7 | The real-user run (G11) and the decision | GIF, findings |

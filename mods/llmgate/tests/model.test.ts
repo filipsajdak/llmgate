@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { changes, compact, describeTotals, providerTable, routeTable, spendTable, table, unpricedNote, gatewayRoot, invocation, parseOverview, parseCommand, printable, printableBlock, resolveTarget, statusText, describeTargets } from '../hooks/model'
+import { agentTable, changes, compact, describeTotals, providerTable, routeTable, spendTable, table, unpricedNote, gatewayRoot, invocation, parseOverview, parseCommand, printable, printableBlock, resolveTarget, statusText, describeTargets } from '../hooks/model'
 
 const overview = JSON.stringify({
   schema_version: 1,
@@ -117,6 +117,7 @@ test('parseCommand reads the subcommands and refuses the rest with the list of w
   expect(parseCommand('status')).toEqual({ kind: 'status' })
   expect(parseCommand('setup')).toEqual({ kind: 'setup' })
   expect(parseCommand('recipes')).toEqual({ kind: 'recipes' })
+  expect(parseCommand('agents')).toEqual({ kind: 'agents' })
   expect(parseCommand('targets')).toEqual({ kind: 'targets' })
   expect(parseCommand('usage')).toEqual({ kind: 'usage' })
   expect(parseCommand('use sonnet gpt-6-sol')).toEqual({ kind: 'use', role: 'sonnet', word: 'gpt-6-sol', scope: 'session' })
@@ -124,7 +125,7 @@ test('parseCommand reads the subcommands and refuses the rest with the list of w
   expect(parseCommand('use sonnet clear')).toEqual({ kind: 'use', role: 'sonnet', word: 'clear', scope: 'session' })
   expect(parseCommand('use banana x')).toEqual({ kind: 'error', message: 'unknown role banana (opus, sonnet, haiku)' })
   expect(parseCommand('use sonnet')).toEqual({ kind: 'error', message: 'use ROLE TARGET [default]' })
-  expect(parseCommand('rm -rf')).toEqual({ kind: 'error', message: 'unknown subcommand rm (status, targets, usage, use, setup, recipes, pane)' })
+  expect(parseCommand('rm -rf')).toEqual({ kind: 'error', message: 'unknown subcommand rm (status, targets, usage, use, setup, recipes, agents, pane)' })
 })
 
 test('resolveTarget takes a full id, or an upstream name that names one target', () => {
@@ -162,4 +163,44 @@ test('describeTargets lists every target with its provider', () => {
 test('printableBlock keeps lines, replaces control bytes inside them and cuts at the limit', () => {
   expect(printableBlock('a\nb\u001b[2Jc\r\nd')).toBe('a\nb?[2Jc\nd')
   expect(printableBlock('x'.repeat(50), 10)).toBe('xxxxxxxxxx')
+})
+
+const withAgents = parseOverview(
+  's1',
+  JSON.stringify({
+    schema_version: 1,
+    roles: [{ role: 'sonnet', via: 'config', providers: ['work'] }],
+    targets: [{ id: 'claude-gpt-6-sol@codex', provider: 'codex', upstream: 'gpt-6-sol', label: 'gpt-6-sol (codex)' }],
+    providers: [],
+    agents: [
+      { name: 'reviewer', target: 'claude-gpt-6-sol@codex', description: 'A second opinion', prompt: 'Review it.', tools: ['Read', 'Grep'] },
+      { name: 'bad name', target: 'x@y', description: '', prompt: '', tools: [] },
+      { name: 'ctl', target: 'claude-gpt-6-sol@codex', description: 'a\u001b[2Jb', prompt: 'p', tools: ['Read', 'rm -rf'] },
+    ],
+    spawn_rules: [
+      { agent: 'Explore', target: 'claude-gpt-6-sol@codex' },
+      { agent: 'Plan', target: 'not a target' },
+      { agent: '../x', target: 'claude-gpt-6-sol@codex' },
+    ],
+    spend: { today: [], month: [] },
+  }),
+)
+
+test('agents and spawn rules are read with plain names, known targets and clean text', () => {
+  expect(withAgents.agents.map(a => a.name)).toEqual(['reviewer', 'ctl'])
+  expect(withAgents.agents[0]).toEqual({ name: 'reviewer', target: 'claude-gpt-6-sol@codex', description: 'A second opinion', prompt: 'Review it.', tools: ['Read', 'Grep'] })
+  expect(withAgents.agents[1].description).toBe('a?[2Jb')
+  expect(withAgents.agents[1].tools).toEqual(['Read'])
+  expect(withAgents.spawnRules).toEqual([{ agent: 'Explore', target: 'claude-gpt-6-sol@codex' }])
+})
+
+test('the who-runs-what table lists roles, agent types and spawn rules with the provider of each target', () => {
+  expect(agentTable(withAgents)).toEqual([
+    'kind        name      runs on                 provider',
+    '----------  --------  ----------------------  --------',
+    'role        sonnet    work                    work',
+    'agent type  reviewer  claude-gpt-6-sol@codex  codex',
+    'agent type  ctl       claude-gpt-6-sol@codex  codex',
+    'spawn rule  Explore   claude-gpt-6-sol@codex  codex',
+  ])
 })

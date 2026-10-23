@@ -7,6 +7,8 @@ export type Served = { provider: string; upstream: string; source: string; fallb
 export type ProviderHealth = { name: string; circuit: string; attempts: number; answered: number; failures: number; limits: Record<string, string>; labels: string[]; auth: string; ready: boolean }
 export type SpendRow = { provider: string; model: string; input: number; output: number; cacheRead: number; requests: number; cost?: number }
 export type Totals = { todayTokens: number; todayRequests: number; monthTokens: number; budgetState: string; budgetWindow: string; budgetPercent: number; budgetLimit: number }
+export type Agent = { name: string; target: string; description: string; prompt: string; tools: string[] }
+export type SpawnRule = { agent: string; target: string }
 export type Snapshot = {
   sessionId: string
   roles: RoleRoute[]
@@ -15,6 +17,8 @@ export type Snapshot = {
   providers: ProviderHealth[]
   spendToday: SpendRow[]
   spendMonth: SpendRow[]
+  agents: Agent[]
+  spawnRules: SpawnRule[]
   totals?: Totals
   error?: string
 }
@@ -121,6 +125,36 @@ function parseSpend(value: unknown): SpendRow[] {
   ]
 }
 
+const agentName = /^[A-Za-z0-9_-]{1,64}$/
+const toolName = /^[A-Za-z0-9_-]{1,64}$/
+
+function knownTarget(targets: readonly Target[], id: string): boolean {
+  return targets.some(item => item.id === id)
+}
+
+function parseAgent(value: unknown, targets: readonly Target[]): Agent[] {
+  const entry = object(value)
+  const name = text(entry.name)
+  const target = text(entry.target)
+  if (!agentName.test(name) || !knownTarget(targets, target)) return []
+  return [
+    {
+      name,
+      target,
+      description: printable(text(entry.description), 240),
+      prompt: printable(text(entry.prompt), 4000),
+      tools: list(entry.tools).filter((t): t is string => typeof t === 'string' && toolName.test(t)).slice(0, 24),
+    },
+  ]
+}
+
+function parseRule(value: unknown, targets: readonly Target[]): SpawnRule[] {
+  const entry = object(value)
+  const agent = text(entry.agent)
+  const target = text(entry.target)
+  return agentName.test(agent) && knownTarget(targets, target) ? [{ agent, target }] : []
+}
+
 function parseTotals(value: unknown): Totals | undefined {
   const entry = object(value)
   const today = object(entry.today)
@@ -140,7 +174,7 @@ function parseTotals(value: unknown): Totals | undefined {
 }
 
 export function parseOverview(sessionId: string, body: string): Snapshot {
-  const empty: Snapshot = { sessionId, roles: [], targets: [], providers: [], spendToday: [], spendMonth: [] }
+  const empty: Snapshot = { sessionId, roles: [], targets: [], providers: [], spendToday: [], spendMonth: [], agents: [], spawnRules: [] }
   let document: Record<string, unknown>
   try {
     document = object(JSON.parse(body))
@@ -158,6 +192,10 @@ export function parseOverview(sessionId: string, body: string): Snapshot {
     providers: list(document.providers).flatMap(parseProvider),
     spendToday: list(spend.today).flatMap(parseSpend),
     spendMonth: list(spend.month).flatMap(parseSpend),
+    ...(() => {
+      const targets = list(document.targets).flatMap(parseTarget)
+      return { agents: list(document.agents).flatMap(entry => parseAgent(entry, targets)), spawnRules: list(document.spawn_rules).flatMap(entry => parseRule(entry, targets)) }
+    })(),
     ...(text(served.provider) === ''
       ? {}
       : {
@@ -210,16 +248,16 @@ export function invocation(bin: string | undefined, config: string | undefined, 
 }
 
 export type Command =
-  | { kind: 'pane' | 'status' | 'targets' | 'usage' | 'setup' | 'recipes' }
+  | { kind: 'pane' | 'status' | 'targets' | 'usage' | 'setup' | 'recipes' | 'agents' }
   | { kind: 'use'; role: Role; word: string; scope: Scope }
   | { kind: 'error'; message: string }
 
-const subcommands = ['status', 'targets', 'usage', 'use', 'setup', 'recipes', 'pane']
+const subcommands = ['status', 'targets', 'usage', 'use', 'setup', 'recipes', 'agents', 'pane']
 
 export function parseCommand(args: string): Command {
   const [first = '', ...rest] = args.trim().split(/\s+/).filter(word => word !== '')
   if (first === '' || first === 'pane') return { kind: 'pane' }
-  if (first === 'status' || first === 'targets' || first === 'usage' || first === 'setup' || first === 'recipes') return { kind: first }
+  if (first === 'status' || first === 'targets' || first === 'usage' || first === 'setup' || first === 'recipes' || first === 'agents') return { kind: first }
   if (first !== 'use') return { kind: 'error', message: `unknown subcommand ${printable(first, 32)} (${subcommands.join(', ')})` }
   const [role = '', word = '', flag] = rest
   if (role === '' || word === '') return { kind: 'error', message: 'use ROLE TARGET [default]' }
@@ -328,4 +366,14 @@ export function providerTable(items: readonly ProviderHealth[]): string[] {
     ]),
     [5, 6, 7],
   )
+}
+
+export function agentTable(found: Snapshot): string[] {
+  const provider = (id: string) => found.targets.find(item => item.id === id)?.provider ?? '-'
+  const rows: string[][] = [
+    ...found.roles.map(route => ['role', route.role, route.providers.join(', ') || 'none', route.providers.join(', ') || '-']),
+    ...found.agents.map(item => ['agent type', item.name, item.target, provider(item.target)]),
+    ...found.spawnRules.map(item => ['spawn rule', item.agent, item.target, provider(item.target)]),
+  ]
+  return table(['kind', 'name', 'runs on', 'provider'], rows)
 }

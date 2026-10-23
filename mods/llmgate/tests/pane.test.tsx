@@ -67,7 +67,7 @@ test('the command opens the pane, which shows the routes, the last reply and the
   expect(await ui.find({ type: 'Text', text: /sonnet  work      sonnet-9  config/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'gpt-6-sol (codex)' })).toBeDefined()
   expect(await ui.find({ key: 'use-claude-gpt-6-sol@codex' })).toBeDefined()
-  expect(fetched).toEqual(['http://127.0.0.1:9482/llmgate/overview?session=abc-123'])
+  expect(fetched).toEqual(Array(2).fill('http://127.0.0.1:9482/llmgate/overview?session=abc-123'))
   await ui.unmount()
 })
 
@@ -407,5 +407,66 @@ test('the Recipes view lists cards with pros and cons and previews then applies 
     ['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'recipe', 'apply', 'quality-first'],
     ['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'recipe', 'apply', 'quality-first', '--yes'],
   ])
+  await ui.unmount()
+})
+
+const agentOverview = () => {
+  const document = JSON.parse(overview('work'))
+  document.agents = [{ name: 'reviewer', target: 'claude-gpt-6-sol@codex', description: 'A second opinion', prompt: 'Review it.', tools: ['Read', 'Grep'] }]
+  document.spawn_rules = [{ agent: 'Explore', target: 'claude-gpt-6-sol@codex' }]
+  return JSON.stringify(document)
+}
+
+test('the mod registers the configured agent types once and a spawn rule sets the model of the subagent', async ($, on) => {
+  mock.env(on, env)
+  mock.clock(on)
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: agentOverview() } }))
+  const registered: { name: string; model?: string; description: string; prompt: string; tools?: readonly string[] }[] = []
+  on('agent.register', (_, e) => {
+    registered.push({ name: e.name, model: e.model, description: e.description, prompt: e.prompt, tools: e.tools })
+    return { value: { agent: `llmgate:${e.name}` } }
+  })
+  const models: (string | undefined)[] = []
+  on('agent.spawn', (_, e) => {
+    models.push(e.model)
+    return { model: e.model ?? 'main', agentId: 'a1' }
+  })
+  on('command.register', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc-123' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'llmgate', args: 'status' })
+  await $.command.run({ command: 'llmgate', args: 'status' })
+  expect(registered).toEqual([{ name: 'reviewer', model: 'claude-gpt-6-sol@codex', description: 'A second opinion', prompt: 'Review it.', tools: ['Read', 'Grep'] }])
+
+  await $.agent.spawn({ prompt: 'look around', subagentType: 'Explore' })
+  await $.agent.spawn({ prompt: 'plan it', subagentType: 'Plan' })
+  expect(models).toEqual(['claude-gpt-6-sol@codex', undefined])
+})
+
+test('the Agents view and /llmgate agents show who runs what', async ($, on) => {
+  mock.env(on, env)
+  mock.clock(on)
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: agentOverview() } }))
+  on('agent.register', (_, e) => ({ value: { agent: `llmgate:${e.name}` } }))
+  on('command.register', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc-123' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const text = await $.command.run({ command: 'llmgate', args: 'agents' })
+  expect(String(text.text)).toContain('agent type  reviewer')
+  expect(String(text.text)).toContain('spawn rule  Explore')
+  await $.command.run({ command: 'llmgate', args: 'pane' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'view-agents' })
+  await must(ui, { type: 'Text', text: /^agent type +reviewer +claude-gpt-6-sol@codex +codex$/ })
   await ui.unmount()
 })

@@ -707,6 +707,15 @@ void describe_models(context const& where, doctor::facts& seen) {
     seen.models_error = std::move(checked.error);
 }
 
+bool subagent_model_forced(std::string const& profile_dir) {
+    constexpr std::string_view name = "CLAUDE_CODE_SUBAGENT_MODEL_FORCE";
+    if (variable(name).has_value()) {
+        return true;
+    }
+    std::ifstream in{std::filesystem::path{profile_dir} / "settings.json"};
+    return std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}}.contains(name);
+}
+
 doctor::facts gather_facts(context const& where) {
     doctor::facts seen;
     seen.config_error = where.config_error;
@@ -728,6 +737,7 @@ doctor::facts gather_facts(context const& where) {
         probe_network(where.settings, seen);
     }
     describe_models(where, seen);
+    seen.subagent_model_forced = detail::subagent_model_forced(seen.profile_dir);
     return seen;
 }
 

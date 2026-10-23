@@ -4,14 +4,14 @@ import { parseRecipes, recipeInvocation } from './recipes'
 import type { Recipe } from './recipes'
 import { addInvocation, followUp, formFor, kinds, nextStep } from './setup'
 import type { Form, KindId } from './setup'
-import { changes, describeTargets, describeTotals, providerTable, routeTable, spendTable, unpricedNote, gatewayRoot, invocation, parseCommand, parseOverview, printable, printableBlock, resolveTarget, roles, statusText } from './model'
+import { agentTable, changes, describeTargets, describeTotals, providerTable, routeTable, spendTable, unpricedNote, gatewayRoot, invocation, parseCommand, parseOverview, printable, printableBlock, resolveTarget, roles, statusText } from './model'
 import type { Change, Command, Role, Scope, Snapshot } from './model'
 
 const PANE = 'llmgate'
 const pollMilliseconds = 5000
-const unreadable: Snapshot = { sessionId: '', roles: [], targets: [], providers: [], spendToday: [], spendMonth: [] }
+const unreadable: Snapshot = { sessionId: '', roles: [], targets: [], providers: [], spendToday: [], spendMonth: [], agents: [], spawnRules: [] }
 
-type View = 'now' | 'usage' | 'setup' | 'recipes'
+type View = 'now' | 'usage' | 'setup' | 'recipes' | 'agents'
 
 let snapshot: Snapshot = unreadable
 let selected: Role = 'sonnet'
@@ -23,6 +23,8 @@ let form: Form | undefined
 let preview = ''
 let next = ''
 let recipes: Recipe[] = []
+const registered = new Map<string, string>()
+let rules = new Map<string, string>()
 let chosen = ''
 let recipeOutput = ''
 
@@ -41,9 +43,24 @@ async function load($: Engine): Promise<Snapshot> {
   }
 }
 
+async function syncAgents($: Engine): Promise<void> {
+  rules = new Map(snapshot.spawnRules.map(rule => [rule.agent, rule.target]))
+  for (const agent of snapshot.agents) {
+    const signature = JSON.stringify([agent.target, agent.description, agent.prompt, agent.tools])
+    if (registered.get(agent.name) === signature) continue
+    try {
+      await $.agent.register({ name: agent.name, description: agent.description || `Runs on ${agent.target}`, prompt: agent.prompt, model: agent.target, ...(agent.tools.length === 0 ? {} : { tools: agent.tools }) })
+      registered.set(agent.name, signature)
+    } catch {
+      registered.delete(agent.name)
+    }
+  }
+}
+
 async function refresh($: Engine): Promise<void> {
   const before = hasRead ? snapshot : undefined
   snapshot = await load($)
+  await syncAgents($)
   hasRead = true
   await $.ui.status(statusText(snapshot))
   for (const note of changes(before, snapshot)) await $.ui.toast(note)
@@ -161,6 +178,7 @@ async function answer($: Engine, command: Command): Promise<string> {
   if (snapshot.error) return snapshot.error
   if (command.kind === 'targets') return describeTargets(snapshot.targets)
   if (command.kind === 'usage') return usageText().join('\n')
+  if (command.kind === 'agents') return agentTable(snapshot).join('\n')
   if (command.kind === 'use') return useTarget($, command)
   return [summary(), statusText(snapshot)].join('\n')
 }
@@ -176,6 +194,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'llmgate', description: 'Show and switch the llmgate route of this session', immediate: true })
     $.clock.every(pollMilliseconds, () => void refresh($))
+    await refresh($)
     return next(e)
   })
 
@@ -191,6 +210,11 @@ export const register: Register = on => {
     const opened = await $.ui.open({ id: PANE, title: 'llmgate', focus: true, closeOnEscape: true })
     isOpen = opened.isPlaced
     return opened.isPlaced ? {} : { text: summary() }
+  })
+
+  on('agent.spawn', async ($, e, next) => {
+    const target = rules.get(e.subagentType) ?? rules.get(e.subagentType.replace(/^[^:]*:/, ''))
+    return target === undefined ? next(e) : next({ ...e, model: target })
   })
 
   on('ui.close', async ($, e, next) => {
@@ -214,6 +238,7 @@ export const register: Register = on => {
           <Button key="view-now" label="Now" hotkey="n" plain dimColor={view !== 'now'} onPress={show('now')} />
           <Button key="view-usage" label="Usage" hotkey="u" plain dimColor={view !== 'usage'} onPress={show('usage')} />
           <Button key="view-setup" label="Setup" hotkey="s" plain dimColor={view !== 'setup'} onPress={show('setup')} />
+          <Button key="view-agents" label="Agents" hotkey="a" plain dimColor={view !== 'agents'} onPress={show('agents')} />
           <Button key="view-recipes" label="Recipes" hotkey="e" plain dimColor={view !== 'recipes'} onPress={() => {
             view = 'recipes'
             void loadRecipes($).then(() => redraw())
@@ -230,6 +255,18 @@ export const register: Register = on => {
           {row}
         </Text>
       ))
+
+    if (view === 'agents') {
+      return (
+        <Box flexDirection="column">
+          {header}
+          <Text bold>Who runs what</Text>
+          {lines(agentTable(snapshot))}
+          <Text> </Text>
+          <Text dimColor>Add or change one: llmgate agents set NAME TARGET, llmgate rules set AGENT TARGET (targets are listed by /llmgate targets).</Text>
+        </Box>
+      )
+    }
 
     if (view === 'recipes') {
       return (

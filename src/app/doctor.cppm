@@ -11,7 +11,7 @@ import llmgate.text;
 export namespace llmgate::doctor {
 
 enum class status { pass, warn, fail };
-enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, models, ledger, budget, quota };
+enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, models, ledger, budget, quota, subagents };
 static_assert(reflect::unique_values<check>());
 
 enum class port_state { free, ours, foreign };
@@ -83,6 +83,7 @@ struct facts {
     std::optional<quota::summary> quota_summary{};
     std::vector<model_fact> models{};
     std::string models_error{};
+    bool subagent_model_forced = false;
 };
 
 }  // namespace llmgate::doctor
@@ -245,6 +246,13 @@ constexpr std::optional<finding> exchange_finding(facts const& seen) {
     return make(check::copilot_exchange, status::warn, "GitHub answered the token exchange with an error", "retry later; run llmgate login if it persists");
 }
 
+constexpr std::optional<finding> subagent_finding(facts const& seen) {
+    if (!seen.subagent_model_forced) {
+        return std::nullopt;
+    }
+    return make(check::subagents, status::warn, "CLAUDE_CODE_SUBAGENT_MODEL_FORCE is set, so every subagent runs on that one model and the llmgate agent types and spawn rules are ignored", "unset CLAUDE_CODE_SUBAGENT_MODEL_FORCE (also check the env block of the profile's settings.json)");
+}
+
 constexpr finding static_credential_finding(facts const& seen) {
     if (seen.static_token_variable.empty()) {
         return make(check::credential, status::warn, "no upstream credential is configured", "set copilot.token_file, or static_token_env for another upstream");
@@ -385,6 +393,7 @@ constexpr std::vector<finding> diagnose(facts const& seen) {
     out.push_back(detail::ledger_finding(seen));
     out.push_back(detail::budget_finding(seen));
     detail::add(out, detail::quota_finding(seen));
+    detail::add(out, detail::subagent_finding(seen));
     return out;
 }
 
