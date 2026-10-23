@@ -117,6 +117,29 @@ cost and time per solved task, paired bootstrap, a judge from a provider absent 
 | A3 | The wizard for provider kinds: guided form, secret prompt that recommends the most secure store, sign-in link and code through `$.process.spawn`, test | `claude plugin test`, scripted journey |
 | A4 | `llmgate provider import mic`: the local-gateway `config.yaml` as a reference for the mic provider's model list | unit |
 
+## Real run, 2026-10-23 (owner's accounts, a throwaway gateway on 9484, host build)
+
+Setup: a new config built only with the llmgate edit commands (`provider add`, `config set`, `models set`, `recipe apply`,
+`agents`), tokens referenced by path, the Claude Max login of the llmgate profile forwarded, a headless `claude -p`
+through the gateway with the mod loaded. Not run: the pane's screens (a terminal pane cannot be driven headless; they are
+covered by the mod's test kit), the customer's Copilot seat (it needs the owner's device sign-in on the company host),
+compaction routing (needs a long session), the image test (an undocumented route; it would need a hand-built request).
+
+| Check | Result |
+|---|---|
+| `check` ChatGPT plan (ping, tool, 16k context) | pass, 1.6 to 1.8 s each |
+| `check` Partner through the local gateway (Bedrock behind the customer's gateway) | pass on all three steps once the address included `/anthropic` (a 404 before) |
+| `check` personal Copilot seat | ping and tool pass once its protocol was `openai_responses` (GPT-only seat: `/v1/messages` answers 400 "no model endpoints available"); the 16k step answered 503 |
+| Claude Max login forwarded through the gateway | a plain `claude -p` answered |
+| `$.agent.register` with `model: claude-gpt-6-sol@codex`, real subagent turn | **works**: Claude Code logs `unrecognized_model` for it and sends it verbatim; the reviewer answered from the ChatGPT plan. It needed the mod to register at session start, not on the first poll (fixed) |
+| `council:` prompt | **works**: the main session dispatched `llmgate:council-chatgpt` and `llmgate:council-copilot` in one message and merged two answers (one per vendor) |
+| Scorecard on real traffic | by provider, class and agent type filled; a named agent shows as `custom` because Claude Code never sends the name |
+| Editing a model mapping while an agent targeted the old model | was refused by the config check (a dead end: the agent could not be changed first); the check is now a `doctor` warning |
+
+Findings fixed from this run: agents register at session start; a dangling agent or rule target warns in `doctor` instead
+of blocking the edit; the check table's step column fits `context`; the wizard's help says what a company gateway
+address and a GPT-only Copilot seat need.
+
 ## Finding: the pane's Input has no mask
 
 `InputProps` of the 2.1.306 types has no password or mask property, so a secret typed into a pane field would be drawn
