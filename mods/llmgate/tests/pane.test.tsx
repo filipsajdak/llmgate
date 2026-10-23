@@ -470,3 +470,44 @@ test('the Agents view and /llmgate agents show who runs what', async ($, on) => 
   await must(ui, { type: 'Text', text: /^agent type +reviewer +claude-gpt-6-sol@codex +codex$/ })
   await ui.unmount()
 })
+
+const scoreOverview = () => {
+  const document = JSON.parse(setupOverview())
+  const row = (name: string, extra: object = {}) => ({ name, input: 1200, output: 300, cache_read: 3600, cache_creation: 0, requests: 4, average_ms: 250, max_ms: 900, failures: 1, fallbacks: 2, share_percent: 80, ...extra })
+  document.scorecard = {
+    today: { by_provider: [row('work')], by_class: [row('subagent')], by_agent: [row('custom')], by_label: [row('work')] },
+    month: { by_provider: [row('work', { requests: 40 })], by_class: [], by_agent: [], by_label: [] },
+  }
+  return JSON.stringify(document)
+}
+
+test('the Scorecard tab shows the meters and four tables, and the month button switches the window', async ($, on) => {
+  mock.env(on, env)
+  mock.clock(on)
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: scoreOverview() } }))
+  const runs: string[][] = []
+  on('process.run', (_, e) => {
+    runs.push([...e.argv])
+    return { value: { exitCode: 0, stdout: JSON.stringify({ plan: 'business', sku: 'x', reset_date: '2026-11-01', quotas: [{ name: 'premium_interactions', unlimited: false, has_quota: true, entitlement: 300, remaining: 120, percent_remaining: 40 }] }), stderr: '' } }
+  })
+  on('command.register', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc-123' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const text = await $.command.run({ command: 'llmgate', args: 'scorecard' })
+  expect(String(text.text)).toContain('premium_interactions 120 of 300 left (40%)')
+  expect(String(text.text)).toContain('By provider')
+  await $.command.run({ command: 'llmgate', args: 'pane' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'view-scorecard' })
+  await must(ui, { type: 'Text', text: 'By request class' })
+  await must(ui, { type: 'Text', text: /^subagent +4 +80% +1k +300 +75%/ })
+  await ui.press({ key: 'window-month' })
+  await must(ui, { type: 'Text', text: /^work +40 +80%/ })
+  expect(runs[0]).toEqual(['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'quota', '--json', '--provider', 'work'])
+  await ui.unmount()
+})

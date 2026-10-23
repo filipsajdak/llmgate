@@ -1,6 +1,8 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
 import { parseRecipes, recipeInvocation } from './recipes'
+import { meterLines, parseQuota, scoreTable } from './scorecard'
+import type { Quota } from './scorecard'
 import type { Recipe } from './recipes'
 import { addInvocation, followUp, formFor, kinds, nextStep } from './setup'
 import type { Form, KindId } from './setup'
@@ -11,7 +13,7 @@ const PANE = 'llmgate'
 const pollMilliseconds = 5000
 const unreadable: Snapshot = { sessionId: '', roles: [], targets: [], providers: [], spendToday: [], spendMonth: [], agents: [], spawnRules: [] }
 
-type View = 'now' | 'usage' | 'setup' | 'recipes' | 'agents'
+type View = 'now' | 'usage' | 'setup' | 'recipes' | 'agents' | 'scorecard'
 
 let snapshot: Snapshot = unreadable
 let selected: Role = 'sonnet'
@@ -24,6 +26,10 @@ let preview = ''
 let next = ''
 let recipes: Recipe[] = []
 const registered = new Map<string, string>()
+let quotas = new Map<string, Quota>()
+let quotaAt = 0
+let window: 'today' | 'month' = 'today'
+const quotaSeconds = 60
 let rules = new Map<string, string>()
 let chosen = ''
 let recipeOutput = ''
@@ -41,6 +47,38 @@ async function load($: Engine): Promise<Snapshot> {
   } catch (error) {
     return { ...unreadable, sessionId, error: printable(`the gateway did not answer: ${String(error)}`) }
   }
+}
+
+async function loadQuotas($: Engine): Promise<void> {
+  const now = Date.now()
+  if (now - quotaAt < quotaSeconds * 1000) return
+  quotaAt = now
+  const [bin, config] = await Promise.all([$.env.get('LLMGATE_BIN'), $.env.get('LLMGATE_CONFIG')])
+  if (bin === undefined || bin === '') return
+  const found = new Map<string, Quota>()
+  for (const item of snapshot.providers.filter(each => each.auth === 'copilot-login')) {
+    try {
+      const ran = await $.process.run([bin, ...(config ? ['--config', config] : []), 'quota', '--json', '--provider', item.name])
+      const parsed = ran.exitCode === 0 ? parseQuota(ran.stdout) : undefined
+      if (parsed !== undefined) found.set(item.name, parsed)
+    } catch {
+      continue
+    }
+  }
+  quotas = found
+}
+
+function scoreText(): string[] {
+  const scores = window === 'today' ? snapshot.scorecard.today : snapshot.scorecard.month
+  const part = (title: string, rows: ReturnType<typeof scoreTable>) => (rows.length === 0 ? [] : ['', title, ...rows])
+  return [
+    'Meters',
+    ...meterLines(snapshot, quotas),
+    ...part('By provider', scoreTable(scores.byProvider)),
+    ...part('By request class', scoreTable(scores.byClass)),
+    ...part('By agent type', scoreTable(scores.byAgent)),
+    ...part('By label', scoreTable(scores.byLabel)),
+  ]
 }
 
 async function syncAgents($: Engine): Promise<void> {
@@ -179,6 +217,10 @@ async function answer($: Engine, command: Command): Promise<string> {
   if (command.kind === 'targets') return describeTargets(snapshot.targets)
   if (command.kind === 'usage') return usageText().join('\n')
   if (command.kind === 'agents') return agentTable(snapshot).join('\n')
+  if (command.kind === 'scorecard') {
+    await loadQuotas($)
+    return scoreText().join('\n')
+  }
   if (command.kind === 'use') return useTarget($, command)
   return [summary(), statusText(snapshot)].join('\n')
 }
@@ -238,6 +280,10 @@ export const register: Register = on => {
           <Button key="view-now" label="Now" hotkey="n" plain dimColor={view !== 'now'} onPress={show('now')} />
           <Button key="view-usage" label="Usage" hotkey="u" plain dimColor={view !== 'usage'} onPress={show('usage')} />
           <Button key="view-setup" label="Setup" hotkey="s" plain dimColor={view !== 'setup'} onPress={show('setup')} />
+          <Button key="view-scorecard" label="Scorecard" hotkey="o" plain dimColor={view !== 'scorecard'} onPress={() => {
+            view = 'scorecard'
+            void loadQuotas($).then(() => redraw())
+          }} />
           <Button key="view-agents" label="Agents" hotkey="a" plain dimColor={view !== 'agents'} onPress={show('agents')} />
           <Button key="view-recipes" label="Recipes" hotkey="e" plain dimColor={view !== 'recipes'} onPress={() => {
             view = 'recipes'
@@ -255,6 +301,34 @@ export const register: Register = on => {
           {row}
         </Text>
       ))
+
+    if (view === 'scorecard') {
+      const rows = scoreText()
+      return (
+        <Box flexDirection="column">
+          {header}
+          <Box flexDirection="row" columnGap={2}>
+            <Button key="window-today" label="today" plain dimColor={window !== 'today'} onPress={() => {
+              window = 'today'
+              redraw()
+            }} />
+            <Button key="window-month" label="this month" plain dimColor={window !== 'month'} onPress={() => {
+              window = 'month'
+              redraw()
+            }} />
+          </Box>
+          {rows.map((row, at) => {
+            const heading = row === 'Meters' || row.startsWith('By ')
+            const tableHead = at > 0 && rows[at - 1].startsWith('By ')
+            return (
+              <Text bold={heading || tableHead} dimColor={at > 0 && rows[at - 1].startsWith('--')}>
+                {row === '' ? ' ' : row}
+              </Text>
+            )
+          })}
+        </Box>
+      )
+    }
 
     if (view === 'agents') {
       return (

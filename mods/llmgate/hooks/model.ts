@@ -7,6 +7,9 @@ export type Served = { provider: string; upstream: string; source: string; fallb
 export type ProviderHealth = { name: string; circuit: string; attempts: number; answered: number; failures: number; limits: Record<string, string>; labels: string[]; auth: string; ready: boolean }
 export type SpendRow = { provider: string; model: string; input: number; output: number; cacheRead: number; requests: number; cost?: number }
 export type Totals = { todayTokens: number; todayRequests: number; monthTokens: number; budgetState: string; budgetWindow: string; budgetPercent: number; budgetLimit: number }
+export type ScoreRow = { name: string; requests: number; input: number; output: number; cacheRead: number; averageMs: number; maxMs: number; failures: number; fallbacks: number; share: number; cost?: number }
+export type Scores = { byProvider: ScoreRow[]; byClass: ScoreRow[]; byAgent: ScoreRow[]; byLabel: ScoreRow[] }
+export type Scorecard = { today: Scores; month: Scores }
 export type Agent = { name: string; target: string; description: string; prompt: string; tools: string[] }
 export type SpawnRule = { agent: string; target: string }
 export type Snapshot = {
@@ -19,6 +22,7 @@ export type Snapshot = {
   spendMonth: SpendRow[]
   agents: Agent[]
   spawnRules: SpawnRule[]
+  scorecard: Scorecard
   totals?: Totals
   error?: string
 }
@@ -69,6 +73,37 @@ function list(value: unknown): unknown[] {
 }
 
 const overviewVersion = 1
+
+const noScores: Scores = { byProvider: [], byClass: [], byAgent: [], byLabel: [] }
+export const noScorecard: Scorecard = { today: noScores, month: noScores }
+
+function parseScoreRow(value: unknown): ScoreRow[] {
+  const entry = object(value)
+  const name = printable(text(entry.name), 48)
+  if (name === '') return []
+  const cost = entry.cost
+  return [
+    {
+      name,
+      requests: count(entry.requests),
+      input: count(entry.input),
+      output: count(entry.output),
+      cacheRead: count(entry.cache_read),
+      averageMs: count(entry.average_ms),
+      maxMs: count(entry.max_ms),
+      failures: count(entry.failures),
+      fallbacks: count(entry.fallbacks),
+      share: count(entry.share_percent),
+      ...(typeof cost === 'number' && Number.isFinite(cost) ? { cost } : {}),
+    },
+  ]
+}
+
+function parseScores(value: unknown): Scores {
+  const entry = object(value)
+  const rows = (key: string) => list(entry[key]).flatMap(parseScoreRow)
+  return { byProvider: rows('by_provider'), byClass: rows('by_class'), byAgent: rows('by_agent'), byLabel: rows('by_label') }
+}
 
 function parseRole(value: unknown): RoleRoute[] {
   const entry = object(value)
@@ -174,7 +209,7 @@ function parseTotals(value: unknown): Totals | undefined {
 }
 
 export function parseOverview(sessionId: string, body: string): Snapshot {
-  const empty: Snapshot = { sessionId, roles: [], targets: [], providers: [], spendToday: [], spendMonth: [], agents: [], spawnRules: [] }
+  const empty: Snapshot = { sessionId, roles: [], targets: [], providers: [], spendToday: [], spendMonth: [], agents: [], spawnRules: [], scorecard: noScorecard }
   let document: Record<string, unknown>
   try {
     document = object(JSON.parse(body))
@@ -192,6 +227,7 @@ export function parseOverview(sessionId: string, body: string): Snapshot {
     providers: list(document.providers).flatMap(parseProvider),
     spendToday: list(spend.today).flatMap(parseSpend),
     spendMonth: list(spend.month).flatMap(parseSpend),
+    scorecard: { today: parseScores(object(object(document).scorecard).today), month: parseScores(object(object(document).scorecard).month) },
     ...(() => {
       const targets = list(document.targets).flatMap(parseTarget)
       return { agents: list(document.agents).flatMap(entry => parseAgent(entry, targets)), spawnRules: list(document.spawn_rules).flatMap(entry => parseRule(entry, targets)) }
@@ -248,16 +284,16 @@ export function invocation(bin: string | undefined, config: string | undefined, 
 }
 
 export type Command =
-  | { kind: 'pane' | 'status' | 'targets' | 'usage' | 'setup' | 'recipes' | 'agents' }
+  | { kind: 'pane' | 'status' | 'targets' | 'usage' | 'setup' | 'recipes' | 'agents' | 'scorecard' }
   | { kind: 'use'; role: Role; word: string; scope: Scope }
   | { kind: 'error'; message: string }
 
-const subcommands = ['status', 'targets', 'usage', 'use', 'setup', 'recipes', 'agents', 'pane']
+const subcommands = ['status', 'targets', 'usage', 'use', 'setup', 'recipes', 'agents', 'scorecard', 'pane']
 
 export function parseCommand(args: string): Command {
   const [first = '', ...rest] = args.trim().split(/\s+/).filter(word => word !== '')
   if (first === '' || first === 'pane') return { kind: 'pane' }
-  if (first === 'status' || first === 'targets' || first === 'usage' || first === 'setup' || first === 'recipes' || first === 'agents') return { kind: first }
+  if (first === 'status' || first === 'targets' || first === 'usage' || first === 'setup' || first === 'recipes' || first === 'agents' || first === 'scorecard') return { kind: first }
   if (first !== 'use') return { kind: 'error', message: `unknown subcommand ${printable(first, 32)} (${subcommands.join(', ')})` }
   const [role = '', word = '', flag] = rest
   if (role === '' || word === '') return { kind: 'error', message: 'use ROLE TARGET [default]' }
@@ -340,7 +376,7 @@ export function unpricedNote(rows: readonly SpendRow[]): string | undefined {
   return rows.some(row => row.cost === undefined) ? '- no price: add the model to pricing in the llmgate config' : undefined
 }
 
-function limitsOf(item: ProviderHealth): string {
+export function describeProviderLimits(item: ProviderHealth): string {
   const shown = Object.entries(item.limits).flatMap(([key, value]) => {
     const label = limitLabels[key]
     const fraction = Number(value)
@@ -362,7 +398,7 @@ export function providerTable(items: readonly ProviderHealth[]): string[] {
       String(item.attempts),
       String(item.answered),
       String(item.failures),
-      limitsOf(item) || '-',
+      describeProviderLimits(item) || '-',
     ]),
     [5, 6, 7],
   )
