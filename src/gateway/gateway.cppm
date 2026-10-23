@@ -554,6 +554,18 @@ struct overview_rule {
     std::string target{};
 };
 
+struct overview_scores {
+    std::vector<usage::score_row> by_provider{};
+    std::vector<usage::score_row> by_class{};
+    std::vector<usage::score_row> by_agent{};
+    std::vector<usage::score_row> by_label{};
+};
+
+struct overview_scorecard {
+    overview_scores today{};
+    overview_scores month{};
+};
+
 struct overview_class_spend {
     std::vector<usage::class_total> today{};
     std::vector<usage::class_total> month{};
@@ -573,6 +585,7 @@ struct overview_document {
     std::vector<overview_provider> providers{};
     std::vector<overview_agent> agents{};
     std::vector<overview_rule> spawn_rules{};
+    overview_scorecard scorecard{};
     overview_spend spend{};
     usage::summary totals{};
 };
@@ -625,6 +638,7 @@ struct request_note {
     std::string kind{};
     std::string request_class{};
     std::string agent_type{};
+    bool fallback = false;
     httpio::request const* request = nullptr;
 };
 
@@ -1115,6 +1129,14 @@ private:
         return {.status = 200, .body = R"({"status":"ok"})"};
     }
 
+    detail::overview_scores scores_between(std::int64_t const first, std::int64_t const last) const {
+        auto const& prices = settings_.pricing;
+        return {.by_provider = usage::scorecard(ledger_, usage::dimension::provider, first, last, prices),
+                .by_class = usage::scorecard(ledger_, usage::dimension::request_class, first, last, prices),
+                .by_agent = usage::scorecard(ledger_, usage::dimension::agent_type, first, last, prices),
+                .by_label = usage::scorecard(ledger_, usage::dimension::label, first, last, prices)};
+    }
+
     void add_agents(detail::overview_document& document) const {
         for (auto const& [name, item] : settings_.agents) {
             document.agents.push_back({.name = name, .target = item.target, .description = item.description, .prompt = item.prompt, .tools = item.tools});
@@ -1182,6 +1204,7 @@ private:
                           .month = usage::spend_between(ledger_, usage::first_day_of_month(today), today, settings_.pricing),
                           .by_class = {.today = usage::classes_between(ledger_, today, today), .month = usage::classes_between(ledger_, usage::first_day_of_month(today), today)}};
         add_agents(document);
+        document.scorecard = {.today = scores_between(today, today), .month = scores_between(usage::first_day_of_month(today), today)};
         document.totals = usage::summary_of(ledger_, settings_.usage.budget, clock_());
         return json::write(json::to_value(document));
     }
@@ -1321,6 +1344,7 @@ private:
             if (!admit(index)) {
                 continue;
             }
+            note.fallback = step.index != order.steps.front().index;
             auto result = co_await attempt(index, step.upstream, incoming, out, note);
             settle(index, result.state);
             if (result.delivered) {
@@ -1562,6 +1586,16 @@ private:
         return std::string{reflect::enum_name(found)};
     }
 
+    std::string labels_csv(std::string_view const provider, std::string_view const model) const {
+        auto const found = std::ranges::find_if(providers_, [provider](detail::provider_runtime const& item) { return detail::alive(item) && item.name == provider; });
+        if (found == providers_.end()) {
+            return {};
+        }
+        auto const own = found->settings.model_labels.find(std::string{model});
+        auto const merged = control::merged_labels(found->settings.labels, own == found->settings.model_labels.end() ? std::span<std::string const>{} : std::span<std::string const>{own->second});
+        return merged | std::views::join_with(',') | std::ranges::to<std::string>();
+    }
+
     void record_entry(detail::request_note const& note, std::string_view const provider, int const status, std::string_view const model,
                       usage::tokens const& used, std::uint64_t const repairs, detail::outcome_text outcome) {
         auto const elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - note.began);
@@ -1580,7 +1614,9 @@ private:
                             .kind = note.kind,
                             .verdict = std::move(outcome.verdict),
                             .request_class = note.request_class,
-                            .agent_type = note.agent_type};
+                            .agent_type = note.agent_type,
+                            .fallback = note.fallback,
+                            .labels = labels_csv(provider, model.empty() ? std::string_view{note.requested} : model)};
         ledger_.add(entry);
         if (persist_) {
             persist_(usage::to_line(entry));

@@ -385,6 +385,41 @@ const suite usage_suite = [] {
         expect(text.contains("total"));
         expect(json.contains(R"("date": "2025-10-17")") && json.contains(R"("days": 2)") && !json.contains("old"));
     };
+    "capability_the_scorecard_groups_by_provider_class_agent_and_label_with_time_failures_and_fallbacks"_test = [] {
+        ledger book;
+        auto const day = day_of(noon);
+        book.add({.time = noon, .model = "m1", .provider = "a", .used = {.input = 100, .output = 10}, .duration_ms = 100, .status = 200, .request_class = "main"});
+        book.add({.time = noon, .model = "m1", .provider = "b", .used = {.input = 200, .output = 20}, .duration_ms = 300, .status = 200, .request_class = "subagent", .agent_type = "custom", .fallback = true, .labels = "work,acme"});
+        book.add({.time = noon, .model = "m2", .provider = "b", .used = {.input = 50}, .duration_ms = 500, .status = 502, .error = "upstream", .request_class = "subagent", .agent_type = "custom", .labels = "work"});
+        std::map<std::string, price> const prices{{"m1", {.input = 1000000.0}}};
+
+        auto const providers = scorecard(book, dimension::provider, day, day, prices);
+        auto const classes = scorecard(book, dimension::request_class, day, day, {});
+        auto const labels = scorecard(book, dimension::label, day, day, {});
+
+        expect(providers.size() == 2_u && providers.front().name == "a" && providers.back().name == "b");
+        auto const& b = providers.back();
+        expect(b.sum.requests == 2_u && b.average_ms == 400 && b.max_ms == 500 && b.failures == 1_u && b.fallbacks == 1_u && b.share_percent == 66) << b.share_percent;
+        expect(providers.front().cost.value_or(-1) == 100.0 && !b.cost.has_value());
+        expect(classes.size() == 2_u && classes.front().name == "main" && classes.back().name == "subagent" && classes.back().sum.requests == 2_u);
+        auto const work = std::ranges::find(labels, std::string{"work"}, &score_row::name);
+        auto const acme = std::ranges::find(labels, std::string{"acme"}, &score_row::name);
+        expect(work != labels.end() && work->sum.requests == 2_u && acme != labels.end() && acme->sum.requests == 1_u);
+        auto const agents = scorecard(book, dimension::agent_type, day, day, {});
+        expect(agents.size() == 2_u && agents.front().name == "custom" && agents.front().sum.requests == 2_u && agents.back().name == "unclassified");
+        expect(scorecard(book, dimension::provider, day + 1, day + 1, {}).empty());
+    };
+
+    "limit_the_scorecard_names_a_request_with_no_class_or_agent_or_label_unclassified"_test = [] {
+        ledger book;
+        book.add({.time = noon, .model = "m", .provider = "a", .used = {.input = 1}, .duration_ms = 10, .status = 200});
+
+        auto const day = day_of(noon);
+        expect(scorecard(book, dimension::request_class, day, day, {}).front().name == "unclassified");
+        expect(scorecard(book, dimension::agent_type, day, day, {}).front().name == "unclassified");
+        expect(scorecard(book, dimension::label, day, day, {}).front().name == "unlabelled");
+    };
+
     "limit_a_ledger_line_written_before_class_and_agent_type_existed_still_loads"_test = [] {
         constexpr std::string_view old_line = R"({"time":1760702400,"requested":"sonnet","model":"m","role":"sonnet","provider":"p","session":"s","input":1,"output":2,"cache_read":0,"cache_creation":0,"duration_ms":5,"status":200,"repairs":0,"stop_reason":"end_turn","error":"","kind":"main","verdict":""})";
 
@@ -396,9 +431,9 @@ const suite usage_suite = [] {
 
     "capability_the_ledger_line_keeps_its_bytes_and_key_order"_test = [] {
         constexpr std::string_view golden =
-            R"({"time":1760702400,"requested":"sonnet","model":"claude-sonnet-5-5","role":"sonnet","provider":"copilot","session":"s1","input":1,"output":2,"cache_read":3,"cache_creation":4,"duration_ms":350,"status":200,"repairs":1,"stop_reason":"end_turn","error":"","kind":"main","verdict":"","class":"","agent_type":""})"
+            R"({"time":1760702400,"requested":"sonnet","model":"claude-sonnet-5-5","role":"sonnet","provider":"copilot","session":"s1","input":1,"output":2,"cache_read":3,"cache_creation":4,"duration_ms":350,"status":200,"repairs":1,"stop_reason":"end_turn","error":"","kind":"main","verdict":"","class":"","agent_type":"","fallback":false,"labels":""})"
             "\n";
-        constexpr std::string_view bare = R"({"time":0,"requested":"","model":"","role":"","provider":"","session":"","input":0,"output":0,"cache_read":0,"cache_creation":0,"duration_ms":0,"status":0,"repairs":0,"stop_reason":"","error":"","kind":"","verdict":"","class":"","agent_type":""})" "\n";
+        constexpr std::string_view bare = R"({"time":0,"requested":"","model":"","role":"","provider":"","session":"","input":0,"output":0,"cache_read":0,"cache_creation":0,"duration_ms":0,"status":0,"repairs":0,"stop_reason":"","error":"","kind":"","verdict":"","class":"","agent_type":"","fallback":false,"labels":""})" "\n";
 
         auto const line = to_line({.time = noon, .requested = "sonnet", .model = "claude-sonnet-5-5", .role = "sonnet", .provider = "copilot", .session = "s1",
                                    .used = {.input = 1, .output = 2, .cache_read = 3, .cache_creation = 4}, .duration_ms = 350, .status = 200, .repairs = 1, .stop_reason = "end_turn", .kind = "main"});

@@ -35,7 +35,7 @@ static_assert(usage::to_line(*usage::from_line(usage::to_line({.time = 176000000
               usage::to_line({.time = 1760000000, .requested = "a", .model = "b", .role = "opus", .session = "s", .used = {1, 2, 3, 4}, .duration_ms = 9, .status = 200, .repairs = 2}));
 static_assert(!usage::from_line("{}") && !usage::from_line("garbage") && usage::from_line(R"({"time":5})")->time == 5);
 static_assert(usage::to_line({.time = 7, .model = "m", .used = {.input = 1}, .status = 200}) ==
-              R"({"time":7,"requested":"","model":"m","role":"","provider":"","session":"","input":1,"output":0,"cache_read":0,"cache_creation":0,"duration_ms":0,"status":200,"repairs":0,"stop_reason":"","error":"","kind":"","verdict":"","class":"","agent_type":""})"
+              R"({"time":7,"requested":"","model":"m","role":"","provider":"","session":"","input":1,"output":0,"cache_read":0,"cache_creation":0,"duration_ms":0,"status":200,"repairs":0,"stop_reason":"","error":"","kind":"","verdict":"","class":"","agent_type":"","fallback":false,"labels":""})"
               "\n");
 static_assert([] {
     usage::ledger book;

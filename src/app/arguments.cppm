@@ -95,7 +95,7 @@ struct options {
     [[= flag{"--dry-run"}]] [[= applies_to{command::setup}]] bool dry_run = false;
     [[= flag{"--offline"}]] [[= applies_to{command::doctor}]] bool offline = false;
     [[= flag{"--days"}]] [[= operand{"N"}]] [[= applies_to{command::usage}]] [[= limits{1, longest_report_days}]] unsigned days = default_days;
-    [[= flag{"--provider"}]] [[= applies_to{command::login, command::models}]] [[= operand{"NAME"}]] std::string provider{};
+    [[= flag{"--provider"}]] [[= applies_to{command::login, command::models, command::quota}]] [[= operand{"NAME"}]] std::string provider{};
     [[= flag{"--yes"}]] [[= applies_to{command::provider, command::routes, command::config, command::models, command::recipe, command::agents, command::rules}]] bool yes = false;
     [[= flag{"--preset"}]] [[= applies_to{command::provider}]] [[= operand{"NAME"}]] std::string preset{};
     [[= flag{"--labels"}]] [[= applies_to{command::provider}]] [[= operand{"A,B"}]] std::string labels{};

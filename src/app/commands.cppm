@@ -589,9 +589,9 @@ bool has_token_file(gateway::provider_config const& provider) {
     return provider.copilot && !provider.copilot->token_file.empty();
 }
 
-std::optional<gateway::copilot_config> copilot_target(gateway::config const& settings) {
+std::optional<gateway::copilot_config> copilot_target(gateway::config const& settings, std::string_view const name = {}) {
     for (auto const& entry : gateway::effective_providers(settings)) {
-        if (has_token_file(entry.second)) {
+        if (has_token_file(entry.second) && (name.empty() || entry.first == name)) {
             return entry.second.copilot;
         }
     }
@@ -758,8 +758,10 @@ inline int run_doctor(context const& where) {
     return doctor::exit_code(found) == 0 ? 0 : exit_failure;
 }
 
+inline std::optional<gateway::copilot_config> copilot_target_of(gateway::config const& settings, std::string_view const name) { return detail::copilot_target(settings, name); }
+
 inline int run_quota(context const& where) {
-    auto const copilot_settings = detail::copilot_target(where.settings);
+    auto const copilot_settings = detail::copilot_target(where.settings, where.options.provider);
     if (!copilot_settings) {
         std::println(stderr, "llmgate: quota needs a Copilot login: a copilot block with token_file, at the top level or under a provider");
         return exit_failure;

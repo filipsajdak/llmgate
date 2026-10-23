@@ -1008,6 +1008,32 @@ const suite gateway_suite = [] {
         expect(gateway::config_problem(bad_tool).contains("tool"));
     };
 
+    "capability_the_scorecard_counts_a_fallback_and_the_labels_of_the_provider_that_answered_and_leaves_failed_attempts_to_the_providers_table"_test = [] {
+        duo d{[](gateway::config& built) {
+            route(built, "opus", {"a", "b"});
+            built.providers["b"].labels = {"work"};
+            built.providers["b"].model_labels = {{"model-b", {"acme"}}};
+        }};
+        d.first.mode = behaviour::server_error;
+        d.second.mode = behaviour::json_usage;
+        auto request = messages_request(chat("opus", false), "/anthropic/v1/messages", "");
+        request.fields.add("x-claude-code-request-class", "subagent");
+        request.fields.add("x-claude-code-agent-type", "custom");
+        (void)d.ask(std::move(request));
+        auto overview = messages_request("");
+        overview.method = "GET";
+        overview.target = "/llmgate/overview";
+
+        auto const body = d.ask(std::move(overview)).body;
+        auto const at = body.find(R"("scorecard")");
+
+        expect(at != std::string::npos) << body;
+        auto const card = body.substr(at);
+        expect(card.contains(R"("by_provider")") && card.contains(R"("by_class")") && card.contains(R"("by_agent")") && card.contains(R"("by_label")")) << card;
+        expect(card.contains(R"("name":"b")") && card.contains(R"("fallbacks":1)") && !card.contains(R"("name":"a")")) << card;
+        expect(card.contains(R"("name":"work")") && card.contains(R"("name":"subagent")") && card.contains(R"("name":"custom")")) << card;
+    };
+
     "limit_a_class_route_with_an_unknown_class_provider_or_target_is_a_config_problem"_test = [] {
         auto const make = [](std::string_view const klass, std::string_view const entry) {
             gateway::config built;

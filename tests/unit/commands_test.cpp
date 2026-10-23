@@ -263,6 +263,17 @@ const suite commands_suite = [] {
         expect(rows.back().model == "claude-x@work");
     };
 
+    "capability_the_copilot_target_can_be_chosen_by_provider_name_and_defaults_to_the_first_login"_test = [] {
+        gateway::config built;
+        built.providers["a"] = {.base_url = "http://127.0.0.1:1", .copilot = gateway::copilot_config{.token_file = "/a.json"}};
+        built.providers["b"] = {.base_url = "http://127.0.0.1:2", .copilot = gateway::copilot_config{.token_file = "/b.json"}};
+        built.providers["c"] = {.base_url = "http://127.0.0.1:3"};
+
+        expect(commands::copilot_target_of(built, "").value().token_file == "/a.json");
+        expect(commands::copilot_target_of(built, "b").value().token_file == "/b.json");
+        expect(!commands::copilot_target_of(built, "c").has_value() && !commands::copilot_target_of(built, "zzz").has_value());
+    };
+
     "capability_the_reload_command_body_is_the_reload_action"_test = [] {
         expect(commands::reload_body() == R"({"action":"reload","role":"","provider":"","upstream":"","target":"","session":""})");
     };

@@ -133,6 +133,8 @@ struct record {
     std::string verdict{};
     [[= json::key{"class"}]] std::string request_class{};
     std::string agent_type{};
+    bool fallback = false;
+    std::string labels{};
 
     friend constexpr bool operator==(record const&, record const&) = default;
 };
@@ -459,6 +461,28 @@ struct class_group {
     totals sum{};
 };
 
+struct score_stats {
+    totals sum{};
+    std::uint64_t duration_ms = 0;
+    std::uint64_t slowest_ms = 0;
+    std::uint64_t failures = 0;
+    std::uint64_t fallbacks = 0;
+};
+
+struct detail_group {
+    std::int64_t day = 0;
+    std::string provider{};
+    std::string model{};
+    std::string request_class{};
+    std::string agent_type{};
+    std::string label{};
+    score_stats stats{};
+};
+
+constexpr std::string_view unlabelled = "unlabelled";
+
+constexpr bool failed(record const& entry) { return entry.status >= 400 || !entry.error.empty(); }
+
 class ledger {
 public:
     constexpr void add(record const& entry) {
@@ -473,6 +497,11 @@ public:
         found->sum.used += entry.used;
         found->sum.requests = add_sat(found->sum.requests, 1);
         add_class(day, entry);
+        add_detail(details_, day, entry, {});
+        auto const names = labels_of(entry.labels);
+        for (auto const& one : names.empty() ? std::vector<std::string>{std::string{}} : names) {
+            add_detail(label_details_, day, entry, one);
+        }
     }
 
     constexpr totals on_day(std::int64_t const day) const {
@@ -485,8 +514,50 @@ public:
 
     constexpr std::span<group const> groups() const noexcept { return groups_; }
     constexpr std::span<class_group const> classes() const noexcept { return classes_; }
+    constexpr std::span<detail_group const> details() const noexcept { return details_; }
+    constexpr std::span<detail_group const> label_details() const noexcept { return label_details_; }
 
 private:
+    static constexpr std::vector<std::string> labels_of(std::string_view const csv) {
+        std::vector<std::string> out;
+        for (auto const part : std::views::split(csv, ',')) {
+            if (std::string_view const one{part.begin(), part.end()}; !one.empty()) {
+                out.emplace_back(label(one));
+            }
+        }
+        return out;
+    }
+
+    static constexpr std::string or_unclassified(std::string const& value) { return value.empty() ? std::string{unclassified} : label(value); }
+
+    static constexpr void count_into(score_stats& stats, record const& entry) {
+        auto const took = static_cast<std::uint64_t>(std::max<std::int64_t>(entry.duration_ms, 0));
+        stats.sum.used += entry.used;
+        stats.sum.requests = add_sat(stats.sum.requests, 1);
+        stats.duration_ms = add_sat(stats.duration_ms, took);
+        stats.slowest_ms = std::max(stats.slowest_ms, took);
+        stats.failures = add_sat(stats.failures, failed(entry) ? 1 : 0);
+        stats.fallbacks = add_sat(stats.fallbacks, entry.fallback ? 1 : 0);
+    }
+
+    static constexpr void add_detail(std::vector<detail_group>& into, std::int64_t const day, record const& entry, std::string const& one_label) {
+        detail_group key{.day = day,
+                         .provider = label(entry.provider),
+                         .model = label(entry.model.empty() ? entry.requested : entry.model),
+                         .request_class = or_unclassified(entry.request_class),
+                         .agent_type = or_unclassified(entry.agent_type),
+                         .label = one_label};
+        auto found = std::ranges::find_if(into, [&key](detail_group const& item) {
+            return item.day == key.day && item.provider == key.provider && item.model == key.model && item.request_class == key.request_class &&
+                   item.agent_type == key.agent_type && item.label == key.label;
+        });
+        if (found == into.end()) {
+            into.push_back(std::move(key));
+            found = std::prev(into.end());
+        }
+        count_into(found->stats, entry);
+    }
+
     constexpr void add_class(std::int64_t const day, record const& entry) {
         auto const name = entry.request_class.empty() ? std::string{unclassified} : label(entry.request_class);
         auto found = std::ranges::find_if(classes_, [&](class_group const& item) { return item.day == day && item.request_class == name; });
@@ -512,6 +583,8 @@ private:
 
     std::vector<group> groups_{};
     std::vector<class_group> classes_{};
+    std::vector<detail_group> details_{};
+    std::vector<detail_group> label_details_{};
 };
 
 struct load_result {
@@ -706,6 +779,19 @@ constexpr double cost_of(tokens const& used, price const& rate) {
            tokens_per_million;
 }
 
+enum class dimension { provider, request_class, agent_type, label };
+
+struct score_row {
+    std::string name{};
+    [[= json::flatten]] totals sum{};
+    std::uint64_t average_ms = 0;
+    std::uint64_t max_ms = 0;
+    std::uint64_t failures = 0;
+    std::uint64_t fallbacks = 0;
+    std::uint64_t share_percent = 0;
+    std::optional<double> cost{};
+};
+
 struct class_total {
     [[= json::key{"class"}]] std::string request_class{};
     [[= json::flatten]] totals sum{};
@@ -763,6 +849,68 @@ constexpr std::vector<spend> spend_between(ledger const& book, std::int64_t cons
     }
     price_spend(rows, prices);
     std::ranges::sort(rows, [](spend const& left, spend const& right) { return left.provider != right.provider ? left.provider < right.provider : left.model < right.model; });
+    return rows;
+}
+
+constexpr std::string const& name_in(detail_group const& item, dimension const which) {
+    switch (which) {
+        case dimension::provider: return item.provider;
+        case dimension::request_class: return item.request_class;
+        case dimension::agent_type: return item.agent_type;
+        case dimension::label: break;
+    }
+    return item.label;
+}
+
+struct score_total {
+    score_row row{};
+    std::uint64_t duration_ms = 0;
+    bool priced = true;
+    double cost = 0;
+};
+
+constexpr void merge_score(std::vector<score_total>& rows, detail_group const& item, dimension const which, std::map<std::string, price> const& prices) {
+    auto const name = item.label.empty() && which == dimension::label ? std::string{unlabelled} : name_in(item, which);
+    auto found = std::ranges::find(rows, name, [](score_total const& each) { return each.row.name; });
+    if (found == rows.end()) {
+        rows.push_back({.row = {.name = name}});
+        found = std::prev(rows.end());
+    }
+    found->row.sum.used += item.stats.sum.used;
+    found->row.sum.requests = add_sat(found->row.sum.requests, item.stats.sum.requests);
+    found->duration_ms = add_sat(found->duration_ms, item.stats.duration_ms);
+    found->row.max_ms = std::max(found->row.max_ms, item.stats.slowest_ms);
+    found->row.failures = add_sat(found->row.failures, item.stats.failures);
+    found->row.fallbacks = add_sat(found->row.fallbacks, item.stats.fallbacks);
+    if (auto const rate = prices.find(item.model); rate != prices.end()) {
+        found->cost += cost_of(item.stats.sum.used, rate->second);
+    } else {
+        found->priced = false;
+    }
+}
+
+constexpr score_row finished_row(score_total& each, std::uint64_t const everything) {
+    each.row.average_ms = each.row.sum.requests == 0 ? 0 : each.duration_ms / each.row.sum.requests;
+    each.row.share_percent = everything == 0 ? 0 : each.row.sum.requests * 100 / everything;
+    each.row.cost = each.priced ? std::optional<double>{each.cost} : std::nullopt;
+    return std::move(each.row);
+}
+
+constexpr std::vector<score_row> scorecard(ledger const& book, dimension const which, std::int64_t const first_day, std::int64_t const last_day,
+                                           std::map<std::string, price> const& prices) {
+    std::vector<score_total> totals_by_name;
+    std::uint64_t everything = 0;
+    for (auto const& item : which == dimension::label ? book.label_details() : book.details()) {
+        if (item.day >= first_day && item.day <= last_day) {
+            merge_score(totals_by_name, item, which, prices);
+            everything = add_sat(everything, item.stats.sum.requests);
+        }
+    }
+    std::vector<score_row> rows;
+    for (auto& each : totals_by_name) {
+        rows.push_back(finished_row(each, everything));
+    }
+    std::ranges::sort(rows, {}, &score_row::name);
     return rows;
 }
 
