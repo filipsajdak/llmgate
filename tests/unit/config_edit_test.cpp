@@ -110,14 +110,16 @@ const suite config_edit_suite = [] {
         expect(!ce::plan(ask(ce::group::rules, {"set", "../x", "claude-x@a"})).has_value());
     };
 
-    "capability_a_rule_to_an_unknown_target_is_refused_when_applied_to_the_whole_config"_test = [] {
+    "capability_a_rule_is_written_even_when_no_provider_offers_its_target_because_doctor_reports_it"_test = [] {
         constexpr std::string_view text = R"({ "listen": "127.0.0.1:1", "providers": { "a": { "base_url": "http://127.0.0.1:2", "offer": ["claude-x"] } } })";
 
-        auto const good = ce::apply(text, *ce::plan(ask(ce::group::rules, {"set", "Explore", "claude-x@a"})));
-        auto const bad = ce::apply(text, *ce::plan(ask(ce::group::rules, {"set", "Explore", "claude-nope@a"})));
+        auto const known = ce::apply(text, *ce::plan(ask(ce::group::rules, {"set", "Explore", "claude-x@a"})));
+        auto const unknown = ce::apply(text, *ce::plan(ask(ce::group::rules, {"set", "Explore", "claude-nope@a"})));
+        auto const bad_name = ce::plan(ask(ce::group::rules, {"set", "../x", "claude-x@a"}));
 
-        expect(good.has_value() && good->text.contains("spawn_rules")) << (good ? "" : good.error());
-        expect(!bad.has_value() && bad.error().contains("Explore")) << (bad ? "" : bad.error());
+        expect(known.has_value() && known->text.contains("spawn_rules")) << (known ? "" : known.error());
+        expect(unknown.has_value() && unknown->text.contains("claude-nope@a")) << (unknown ? "" : unknown.error());
+        expect(!bad_name.has_value());
     };
 
     "limit_unclear_edit_words_are_refused_with_the_shape_to_use"_test = [] {

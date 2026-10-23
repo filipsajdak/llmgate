@@ -988,17 +988,20 @@ const suite gateway_suite = [] {
         expect(body.contains(R"("tools":["Read","Grep"])") && body.contains(R"("agent":"Explore")")) << body;
     };
 
-    "limit_an_agent_or_a_spawn_rule_must_name_a_catalogue_target_and_plain_names"_test = [] {
+    "limit_an_agent_or_a_spawn_rule_needs_plain_names_and_bounded_text_but_a_missing_target_is_left_to_doctor"_test = [] {
         auto const make = [](std::string_view const name, std::string_view const target) {
             gateway::config built;
             built.providers["a"] = {.base_url = "http://127.0.0.1:1", .offer = {"claude-x"}};
             built.agents[std::string{name}] = {.target = std::string{target}, .description = "d", .prompt = "p"};
-            built.spawn_rules[std::string{name}] = std::string{target};
+            if (!target.empty()) {
+                built.spawn_rules[std::string{name}] = std::string{target};
+            }
             return built;
         };
 
         expect(gateway::config_problem(make("reviewer", "claude-x@a")).empty());
-        expect(gateway::config_problem(make("reviewer", "claude-x@zzz")).contains("reviewer"));
+        expect(gateway::config_problem(make("reviewer", "claude-x@zzz")).empty());
+        expect(gateway::config_problem(make("reviewer", "")).empty());
         expect(gateway::config_problem(make("bad name", "claude-x@a")).contains("bad name"));
         gateway::config long_prompt = make("reviewer", "claude-x@a");
         long_prompt.agents["reviewer"].prompt = std::string(gateway::longest_agent_prompt + 1, 'p');
@@ -1006,6 +1009,9 @@ const suite gateway_suite = [] {
         gateway::config bad_tool = make("reviewer", "claude-x@a");
         bad_tool.agents["reviewer"].tools = {"Read", "rm -rf"};
         expect(gateway::config_problem(bad_tool).contains("tool"));
+        gateway::config many_turns = make("reviewer", "claude-x@a");
+        many_turns.agents["reviewer"].max_turns = gateway::most_agent_turns + 1;
+        expect(gateway::config_problem(many_turns).contains("max_turns"));
     };
 
     "capability_the_scorecard_counts_a_fallback_and_the_labels_of_the_provider_that_answered_and_leaves_failed_attempts_to_the_providers_table"_test = [] {

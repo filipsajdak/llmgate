@@ -249,10 +249,7 @@ bool tools_fit(std::vector<std::string> const& tools) {
 
 bool text_fits(agent_config const& item) { return item.prompt.size() <= longest_agent_prompt && item.description.size() <= longest_agent_description; }
 
-std::string agent_problem(std::string const& name, agent_config const& item, std::set<std::string> const& ids) {
-    if (!item.target.empty() && !ids.contains(item.target)) {
-        return std::format("agents {}: target '{}' is not a target id (see llmgate targets)", plain(name), plain(item.target));
-    }
+std::string agent_problem(std::string const& name, agent_config const& item) {
     if (item.max_turns > most_agent_turns) {
         return std::format("agents {}: max_turns is at most {}", plain(name), most_agent_turns);
     }
@@ -262,19 +259,18 @@ std::string agent_problem(std::string const& name, agent_config const& item, std
     return tools_fit(item.tools) ? std::string{} : std::format("agents {}: tools are plain tool names, at most {}", plain(name), most_agent_tools);
 }
 
-std::string agents_problem(config const& settings, std::map<std::string, provider_config> const& providers) {
-    auto const ids = target_ids_of(providers);
+std::string agents_problem(config const& settings) {
     for (auto const& [name, item] : settings.agents) {
         if (!plain_name(name)) {
             return std::format("agents: '{}' is not a plain agent name (letters, digits, - and _)", plain(name));
         }
-        if (auto problem = agent_problem(name, item, ids); !problem.empty()) {
+        if (auto problem = agent_problem(name, item); !problem.empty()) {
             return problem;
         }
     }
     for (auto const& [agent, target] : settings.spawn_rules) {
-        if (!plain_name(agent) || !ids.contains(target)) {
-            return std::format("spawn_rules {}: the agent type is plain and the target must be a target id", plain(agent));
+        if (!plain_name(agent) || target.empty()) {
+            return std::format("spawn_rules {}: the agent type is a plain name and the target is not empty", plain(agent));
         }
     }
     return {};
@@ -293,7 +289,7 @@ std::string config_problem(config const& settings) {
     if (auto problem = class_route_problem(settings, providers); !problem.empty()) {
         return problem;
     }
-    if (auto problem = agents_problem(settings, providers); !problem.empty()) {
+    if (auto problem = agents_problem(settings); !problem.empty()) {
         return problem;
     }
     return selection::route_problem(role_routes(settings), provider_names(providers));

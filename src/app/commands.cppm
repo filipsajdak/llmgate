@@ -707,6 +707,25 @@ void describe_models(context const& where, doctor::facts& seen) {
     seen.models_error = std::move(checked.error);
 }
 
+std::vector<std::string> dangling_targets_of(gateway::config const& settings) {
+    std::set<std::string> ids;
+    for (auto const& target : control::catalogue(gateway::offers_of_config(settings))) {
+        ids.insert(target.id);
+    }
+    std::vector<std::string> out;
+    for (auto const& [name, item] : settings.agents) {
+        if (!item.target.empty() && !ids.contains(item.target)) {
+            out.push_back(std::format("agent {} targets {}", name, item.target));
+        }
+    }
+    for (auto const& [agent, target] : settings.spawn_rules) {
+        if (!ids.contains(target)) {
+            out.push_back(std::format("rule {} targets {}", agent, target));
+        }
+    }
+    return out;
+}
+
 bool subagent_model_forced(std::string const& profile_dir) {
     constexpr std::string_view name = "CLAUDE_CODE_SUBAGENT_MODEL_FORCE";
     if (variable(name).has_value()) {
@@ -738,6 +757,7 @@ doctor::facts gather_facts(context const& where) {
     }
     describe_models(where, seen);
     seen.subagent_model_forced = detail::subagent_model_forced(seen.profile_dir);
+    seen.dangling_targets = dangling_targets_of(where.settings);
     return seen;
 }
 

@@ -11,7 +11,7 @@ import llmgate.text;
 export namespace llmgate::doctor {
 
 enum class status { pass, warn, fail };
-enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, models, ledger, budget, quota, subagents };
+enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, models, ledger, budget, quota, subagents, agent_targets };
 static_assert(reflect::unique_values<check>());
 
 enum class port_state { free, ours, foreign };
@@ -84,6 +84,7 @@ struct facts {
     std::vector<model_fact> models{};
     std::string models_error{};
     bool subagent_model_forced = false;
+    std::vector<std::string> dangling_targets{};
 };
 
 }  // namespace llmgate::doctor
@@ -253,6 +254,17 @@ constexpr std::optional<finding> subagent_finding(facts const& seen) {
     return make(check::subagents, status::warn, "CLAUDE_CODE_SUBAGENT_MODEL_FORCE is set, so every subagent runs on that one model and the llmgate agent types and spawn rules are ignored", "unset CLAUDE_CODE_SUBAGENT_MODEL_FORCE (also check the env block of the profile's settings.json)");
 }
 
+constexpr std::optional<finding> agent_targets_finding(facts const& seen) {
+    if (seen.dangling_targets.empty()) {
+        return std::nullopt;
+    }
+    std::string detail = "no provider offers the target of:";
+    for (auto const& item : seen.dangling_targets) {
+        text::append_all(detail, " ", item, ";");
+    }
+    return make(check::agent_targets, status::warn, detail, "llmgate agents set NAME TARGET (or agents remove NAME, rules set AGENT TARGET); llmgate targets lists the targets");
+}
+
 constexpr finding static_credential_finding(facts const& seen) {
     if (seen.static_token_variable.empty()) {
         return make(check::credential, status::warn, "no upstream credential is configured", "set copilot.token_file, or static_token_env for another upstream");
@@ -394,6 +406,7 @@ constexpr std::vector<finding> diagnose(facts const& seen) {
     out.push_back(detail::budget_finding(seen));
     detail::add(out, detail::quota_finding(seen));
     detail::add(out, detail::subagent_finding(seen));
+    detail::add(out, detail::agent_targets_finding(seen));
     return out;
 }
 

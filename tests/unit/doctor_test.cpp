@@ -58,6 +58,19 @@ const suite doctor_suite = [] {
         expect(exit_code(loud) == 0);
     };
 
+    "capability_an_agent_or_rule_whose_target_no_provider_offers_is_a_warning_naming_it_and_the_fix"_test = [] {
+        auto seen = healthy();
+        seen.dangling_targets = {"agent council-copilot targets claude-x@copilot", "rule Explore targets claude-y@codex"};
+
+        auto const findings = diagnose(seen);
+        auto const found = std::ranges::find(findings, std::string{"agent-targets"}, &finding::check);
+
+        expect(found != findings.end() && found->status == status::warn);
+        expect(found->detail.contains("council-copilot") && found->detail.contains("Explore") && found->remedy.contains("agents set"));
+        expect(!std::ranges::any_of(diagnose(healthy()), [](finding const& item) { return item.check == "agent-targets"; }));
+        expect(exit_code(diagnose(seen)) == 0);
+    };
+
     "capability_a_healthy_setup_passes_every_check_and_exits_zero"_test = [] {
         auto const found = diagnose(healthy());
 

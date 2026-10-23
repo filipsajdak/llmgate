@@ -127,8 +127,7 @@ run rules set Explore claude-m-late@late --yes > /dev/null 2>&1 || true
 label="agents set and rules set write an agent type and a spawn rule and the overview reports them"
 check sh -c "grep -q '\"reviewer\"' '$work/config.jsonc' && grep -q '\"Explore\": \"claude-m-late@late\"' '$work/config.jsonc'"
 check sh -c "'$binary' --config '$work/config.jsonc' route > /dev/null 2>&1; true"
-label="a rule to a target that does not exist is refused and changes nothing"
-cp "$work/config.jsonc" "$work/pre-rule.jsonc"
-check sh -c "! '$binary' --config '$work/config.jsonc' rules set Explore claude-nope@late --yes > '$work/rule.out' 2>&1 && grep -q Explore '$work/rule.out' && cmp -s '$work/config.jsonc' '$work/pre-rule.jsonc'"
+label="a rule to a target that no provider offers is written, so a model mapping can still change, and doctor names it"
+check sh -c "'$binary' --config '$work/config.jsonc' rules set Explore claude-nope@late --yes > /dev/null 2>&1 && '$binary' --config '$work/config.jsonc' doctor --offline 2>&1 | grep -q 'agent-targets.*Explore'"
 
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }
