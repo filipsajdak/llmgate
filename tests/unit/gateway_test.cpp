@@ -1241,6 +1241,19 @@ const suite gateway_suite = [] {
         expect(!seen.headers.contains("anthropic-beta") && !seen.headers.contains("anthropic-version"));
     };
 
+    "capability_one_provider_speaks_each_models_own_protocol_so_a_seat_can_mix_messages_and_responses_models"_test = [] {
+        duo d{[](gateway::config& built) { built.providers["b"].model_protocols = {{"model-b", gateway::wire_protocol::openai_responses}}; }};
+
+        (void)d.chat_with("claude-model-b@b", true);
+        (void)d.chat_with("claude-model-extra@b", true);
+
+        expect(d.second.seen.size() == 2_u);
+        auto const& responses_call = d.second.seen.at(0);
+        auto const& messages_call = d.second.seen.at(1);
+        expect(responses_call.target == "/responses" && responses_call.body.contains(R"("input":[)") && !responses_call.headers.contains("anthropic-version")) << responses_call.target;
+        expect(messages_call.target == "/v1/messages" && messages_call.body.contains(R"("messages":[)") && messages_call.headers.contains("anthropic-version")) << messages_call.target;
+    };
+
     "capability_a_responses_provider_with_an_explicit_path_keeps_it"_test = [] {
         duo d{[](gateway::config& built) {
             built.providers["b"].protocol = gateway::wire_protocol::openai_responses;
