@@ -5,8 +5,9 @@ import sys
 LISTING = {
     "object": "list",
     "data": [
-        {"id": "up-on", "capabilities": {"family": "up-on", "tokenizer": "o200k_base", "limits": {"max_context_window_tokens": 300000, "max_prompt_tokens": 200000, "max_output_tokens": 100000}}, "policy": {"state": "enabled"}},
+        {"id": "up-on", "capabilities": {"family": "up-on", "tokenizer": "o200k_base", "limits": {"max_context_window_tokens": 300000, "max_prompt_tokens": 200000, "max_output_tokens": 100000}}, "policy": {"state": "enabled"}, "supported_endpoints": ["/responses"]},
         {"id": "up-off", "capabilities": {"family": "up-off", "limits": {"max_context_window_tokens": 264000, "max_prompt_tokens": 200000, "max_output_tokens": 64000}}, "policy": {"state": "disabled"}},
+        {"id": "up-chat", "capabilities": {"family": "up-chat"}, "policy": {"state": "enabled"}, "supported_endpoints": ["/chat/completions"]},
     ],
 }
 

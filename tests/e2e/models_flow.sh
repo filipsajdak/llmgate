@@ -41,4 +41,13 @@ check sh -c "grep -q 'maps claude-off to up-off, which is disabled' '$work/docto
 label="doctor --offline does not list models"
 check sh -c "! '$binary' --config '$work/config.jsonc' doctor --offline 2>&1 | grep -q 'models'"
 
+label="models offer previews the offer, the limits and the protocol the model's endpoints need"
+run models offer p up-on > "$work/offer.out" 2>&1 || true
+check sh -c "grep -q '\"offer\": \[\"up-on\"\]' '$work/offer.out' && grep -q 'context_tokens\":300000' '$work/offer.out' && grep -q 'model_protocols' '$work/offer.out' && grep -q 'openai_responses' '$work/offer.out' && grep -q 'not written' '$work/offer.out'"
+label="models offer refuses a disabled model and a chat-only model by name"
+check sh -c "! '$binary' --config '$work/config.jsonc' models offer p up-off 2>&1 | grep -qv 'policy' && ! '$binary' --config '$work/config.jsonc' models offer p up-chat 2>&1 | grep -qv '/chat/completions'"
+label="models offer all --yes writes only the recommended models"
+run models offer p all --yes > "$work/offer-all.out" 2>&1 || true
+check sh -c "grep -q 'up-on' '$work/config.jsonc' && ! grep -q 'up-chat\\|\"offer\": \[[^]]*up-off' '$work/config.jsonc'"
+
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }

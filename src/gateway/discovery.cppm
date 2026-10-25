@@ -8,6 +8,8 @@ import llmgate.tls;
 
 export namespace llmgate::discovery {
 
+std::string models_target_of(gateway::provider_config const& provider);
+
 async::task<std::expected<fetch::reply, std::string>> fetch_models(async::reactor& loop, tls::client_context const& tls_context, gateway::provider_config const& provider,
                                                                      gateway::credential& credential);
 
