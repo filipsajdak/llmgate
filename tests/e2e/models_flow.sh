@@ -39,6 +39,20 @@ label="doctor warns for the disabled and the unlisted mapped model, not for the 
 run doctor > "$work/doctor.out" 2>&1 || true
 check sh -c "grep -q 'maps claude-off to up-off, which is disabled' '$work/doctor.out' && grep -q 'maps claude-gone to up-gone, which is not listed' '$work/doctor.out' && ! grep -q 'maps claude-on' '$work/doctor.out'"
 label="doctor --offline does not list models"
-check sh -c "! '$binary' --config '$work/config.jsonc' doctor --offline 2>&1 | grep -q 'models'"
+check sh -c "! '$binary' --config '$work/config.jsonc' doctor --offline 2>&1 | grep -q 'maps claude'"
+
+label="models offer previews the offer, the limits and the protocol the model's endpoints need"
+run models offer p up-on > "$work/offer.out" 2>&1 || true
+check sh -c "grep -q '\"offer\": \[\"up-on\"\]' '$work/offer.out' && grep -q 'context_tokens\":300000' '$work/offer.out' && grep -q 'model_protocols' '$work/offer.out' && grep -q 'openai_responses' '$work/offer.out' && grep -q 'not written' '$work/offer.out'"
+label="models offer refuses a disabled model and a chat-only model by name"
+check sh -c "! '$binary' --config '$work/config.jsonc' models offer p up-off 2>&1 | grep -qv 'policy' && ! '$binary' --config '$work/config.jsonc' models offer p up-chat 2>&1 | grep -qv '/chat/completions'"
+label="models offer all --yes writes only the recommended models"
+run models offer p all --yes > "$work/offer-all.out" 2>&1 || true
+check sh -c "grep -q 'up-on' '$work/config.jsonc' && ! grep -q 'up-chat\\|\"offer\": \[[^]]*up-off' '$work/config.jsonc'"
+
+label="models list shows every model with its protocol, its window and a recommendation, as text and as JSON"
+run models list p > "$work/list.out" 2>&1 || true
+run models list p --json > "$work/list.json" 2>&1 || true
+check sh -c "grep -q 'up-on  openai_responses  context 300000  enabled  recommended' '$work/list.out' && grep -q 'up-off  anthropic' '$work/list.out' && grep -q 'up-chat  unsupported' '$work/list.out' && python3 -c \"import json,sys; d=json.load(open('$work/list.json')); assert [r['id'] for r in d]==['up-on','up-off','up-chat'] and d[0]['recommended'] and not d[1]['recommended'] and d[2]['protocol']=='unsupported'\""
 
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }

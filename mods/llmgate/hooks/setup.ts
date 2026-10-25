@@ -82,3 +82,94 @@ export function nextStep(bin: string, config: string | undefined, form: Form): s
 export function describeForm(form: Form): string {
   return printable(`${form.kind} ${form.name}`)
 }
+
+export type LoginEvent = { event: 'link' | 'done' | 'failed' | 'idle'; url?: string; code?: string; detail?: string }
+
+const loginEvents: readonly string[] = ['link', 'done', 'failed', 'idle']
+
+export function loginInvocation(bin: string | undefined, config: string | undefined, name: string, mode: 'detach' | 'progress'): Plan {
+  if (bin === undefined || bin === '') return { refused: 'LLMGATE_BIN is not set: start Claude Code with llmgate claude' }
+  return { argv: [bin, ...(config ? ['--config', config] : []), 'login', '--provider', name, '--json', `--${mode}`] }
+}
+
+export function parseLoginEvent(text: string): LoginEvent | undefined {
+  for (const line of text.split('\n').reverse()) {
+    if (!line.startsWith('{')) continue
+    try {
+      const found = JSON.parse(line) as Record<string, unknown>
+      if (typeof found.event !== 'string' || !loginEvents.includes(found.event)) return undefined
+      const text = (key: string) => (typeof found[key] === 'string' ? { [key]: found[key] as string } : {})
+      return { event: found.event as LoginEvent['event'], ...text('url'), ...text('code'), ...text('detail') }
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
+}
+
+export function signInLines(item: LoginEvent): string[] {
+  if (item.event === 'link' && item.code !== undefined) {
+    return [`Open ${printable(item.url ?? '')} and enter the code ${printable(item.code)}`, 'Waiting for you to authorise (this view follows by itself)...']
+  }
+  if (item.event === 'link') {
+    return [`Open ${printable(item.url ?? '')} in your browser`, 'Waiting for the browser to come back (this view follows by itself)...']
+  }
+  if (item.event === 'done') return [`Signed in: ${printable(item.detail ?? '')}`]
+  if (item.event === 'failed') return [`Sign-in failed: ${printable(item.detail ?? 'no reason was given')}`]
+  return ['No sign-in is under way']
+}
+
+export type Candidate = { id: string; context: number; policy: string; protocol: string; recommended: boolean; offered: boolean }
+
+const tokensPerThousand = 1000
+const plainModelId = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$/
+
+export function candidatesInvocation(bin: string | undefined, config: string | undefined, provider: string): Plan {
+  if (bin === undefined || bin === '') return { refused: 'LLMGATE_BIN is not set: start Claude Code with llmgate claude' }
+  return { argv: [bin, ...(config ? ['--config', config] : []), 'models', 'list', provider, '--json'] }
+}
+
+export function parseCandidates(text: string): Candidate[] {
+  try {
+    const found: unknown = JSON.parse(text)
+    if (!Array.isArray(found)) return []
+    return found.flatMap((item: Record<string, unknown>) =>
+      typeof item.id === 'string' && plainModelId.test(item.id)
+        ? [
+            {
+              id: printable(item.id),
+              context: typeof item.context === 'number' ? item.context : 0,
+              policy: typeof item.policy === 'string' ? printable(item.policy) : 'unknown',
+              protocol: typeof item.protocol === 'string' ? printable(item.protocol) : 'unsupported',
+              recommended: item.recommended === true,
+              offered: item.offered === true,
+            },
+          ]
+        : [],
+    )
+  } catch {
+    return []
+  }
+}
+
+export function candidateLabel(item: Candidate, ticked: boolean): string {
+  const mark = ticked ? '[x]' : '[ ]'
+  if (item.protocol === 'unsupported') return `${mark} ${item.id}  not translated yet  ${windowText(item)}`
+  const note = item.policy === 'disabled' ? 'disabled by the account' : item.recommended ? 'recommended' : ''
+  return `${mark} ${item.id}  ${item.protocol}  ${windowText(item)}${note === '' ? '' : `  ${note}`}`
+}
+
+function windowText(item: Candidate): string {
+  return item.context === 0 ? 'window unknown' : `${Math.round(item.context / tokensPerThousand)}k tokens`
+}
+
+export function canTick(item: Candidate): boolean {
+  return item.protocol !== 'unsupported' && item.policy !== 'disabled'
+}
+
+export function offerInvocation(bin: string | undefined, config: string | undefined, provider: string, ids: readonly string[]): Plan {
+  if (bin === undefined || bin === '') return { refused: 'LLMGATE_BIN is not set: start Claude Code with llmgate claude' }
+  if (ids.length === 0) return { refused: 'tick at least one model' }
+  if (!ids.every(id => plainModelId.test(id))) return { refused: 'a model name may hold letters, digits and . _ : / @ + - only, and must not start with -' }
+  return { argv: [bin, ...(config ? ['--config', config] : []), 'models', 'offer', provider, ...ids, '--yes'] }
+}

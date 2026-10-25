@@ -16,6 +16,8 @@ import llmgate.config_edit;
 import llmgate.copilot;
 import llmgate.discovery;
 import llmgate.model_list;
+import llmgate.offer;
+import llmgate.text;
 import llmgate.gateway;
 import llmgate.httpio;
 import llmgate.json;
@@ -182,40 +184,65 @@ int serve(gateway::config settings, std::string const& config_path) {
     return serve_on(loop, settings, address->host, *tls_context, *listening, config_path);
 }
 
-int save_login(gateway::copilot_config const& target, std::string const& token) {
-    if (auto const saved = copilot::save_oauth_token(target.token_file, token); !saved) {
-        return fail(exit_runtime, std::format("cannot save the token: {}", saved.error().message()));
+void emit_event(commands::login_event const& item) {
+    std::println("{}", commands::login_event_line(item));
+    std::fflush(stdout);
+}
+
+int login_failed(bool const json, int const code, std::string const& message) {
+    if (!json) {
+        return fail(code, message);
     }
-    std::println("Logged in. The token is stored in {}", target.token_file);
+    emit_event({.event = "failed", .detail = message});
+    return code;
+}
+
+int save_login(gateway::copilot_config const& target, std::string const& token, bool const json) {
+    if (auto const saved = copilot::save_oauth_token(target.token_file, token); !saved) {
+        return login_failed(json, exit_runtime, std::format("cannot save the token: {}", saved.error().message()));
+    }
+    if (json) {
+        emit_event({.event = "done", .detail = std::format("the token is stored in {}", target.token_file)});
+    } else {
+        std::println("Logged in. The token is stored in {}", target.token_file);
+    }
     return 0;
 }
 
-int await_login(async::reactor& loop, tls::client_context const& tls_context, gateway::copilot_config const& target, copilot::device_code const& code) {
+void announce_code(copilot::device_code const& code, bool const json) {
+    if (json) {
+        emit_event({.event = "link", .url = code.verification_uri, .code = code.user_code});
+        return;
+    }
     std::println("Open {} and enter the code {}", code.verification_uri, code.user_code);
     std::println("Waiting for you to authorise...");
     std::fflush(stdout);
+}
+
+int await_login(async::reactor& loop, tls::client_context const& tls_context, gateway::copilot_config const& target, copilot::device_code const& code, bool const json) {
+    announce_code(code, json);
     auto const token = loop.run(copilot::wait_for_authorisation(loop, tls_context, target, code));
     if (!token) {
-        return fail(exit_runtime, std::format("login failed: {}", token.error().message()));
+        return login_failed(json, exit_runtime, std::format("login failed: {}", token.error().message()));
     }
-    return save_login(target, *token);
+    return save_login(target, *token, json);
 }
 
-int request_login(async::reactor& loop, tls::client_context const& tls_context, gateway::copilot_config const& target) {
+int request_login(async::reactor& loop, tls::client_context const& tls_context, gateway::copilot_config const& target, bool const json) {
     auto const code = loop.run(copilot::request_device_code(loop, tls_context, target));
     if (!code) {
-        return fail(exit_runtime, std::format("cannot reach GitHub: {}", code.error().message()));
+        return login_failed(json, exit_runtime, std::format("cannot reach GitHub: {}", code.error().message()));
     }
-    return await_login(loop, tls_context, target, *code);
+    return await_login(loop, tls_context, target, *code, json);
 }
 
-int login_with(gateway::config const& settings, gateway::copilot_config const& target) {
+int login_with(gateway::config const& settings, gateway::copilot_config const& target, bool const json) {
     async::reactor loop;
     auto tls_context = tls::client_context::make(settings.tls_groups);
     if (!tls_context) {
         return exit_runtime;
     }
-    return request_login(loop, *tls_context, target);
+    return request_login(loop, *tls_context, target, json);
 }
 
 constexpr std::string_view no_browser_variable = "LLMGATE_NO_BROWSER";
@@ -230,38 +257,48 @@ void open_in_browser(std::string const& url) {
 #endif
 }
 
-int chatgpt_sign_in(gateway::config const& settings, gateway::chatgpt_config const& target) {
+void announce_browser(std::string const& url, bool const json) {
+    if (json) {
+        emit_event({.event = "link", .url = url});
+    } else {
+        std::println("Sign in with ChatGPT in your browser (it opens by itself on macOS); if it does not, open this address:\n\n  {}\n", url);
+        std::println("Waiting for the browser to come back...");
+        std::fflush(stdout);
+    }
+    open_in_browser(url);
+}
+
+int chatgpt_sign_in(gateway::config const& settings, gateway::chatgpt_config const& target, bool const json) {
     async::reactor loop;
     auto tls_context = tls::client_context::make(settings.tls_groups);
     if (!tls_context) {
         return exit_runtime;
     }
-    chatgpt::sign_in_options options{.announce = [](std::string const& url) {
-        std::println("Sign in with ChatGPT in your browser (it opens by itself on macOS); if it does not, open this address:\n\n  {}\n", url);
-        std::println("Waiting for the browser to come back...");
-        std::fflush(stdout);
-        open_in_browser(url);
-    }};
+    chatgpt::sign_in_options options{.announce = [json](std::string const& url) { announce_browser(url, json); }};
     auto const done = loop.run(chatgpt::sign_in(loop, *tls_context, target, std::move(options)));
     if (!done) {
-        return fail(exit_runtime, std::format("sign-in failed: {}", chatgpt::advice(done.error())));
+        return login_failed(json, exit_runtime, std::format("sign-in failed: {}", chatgpt::advice(done.error())));
     }
-    std::println("Signed in as {}. Tokens saved to {}.", done->account, target.token_file);
     if (!done->plan_enabled) {
-        return fail(exit_runtime, "ChatGPT plan use is not enabled for this account: enable it in ChatGPT settings or use an OpenAI API key instead");
+        return login_failed(json, exit_runtime, "ChatGPT plan use is not enabled for this account: enable it in ChatGPT settings or use an OpenAI API key instead");
+    }
+    if (json) {
+        emit_event({.event = "done", .detail = std::format("signed in as {}; tokens saved to {}", done->account, target.token_file)});
+    } else {
+        std::println("Signed in as {}. Tokens saved to {}.", done->account, target.token_file);
     }
     return 0;
 }
 
-int login(gateway::config const& settings, std::string_view const provider) {
+int login(gateway::config const& settings, std::string_view const provider, bool const json) {
     auto const target = commands::login_choice(settings, provider);
     if (!target) {
-        return fail(exit_config, target.error());
+        return login_failed(json, exit_config, target.error());
     }
     if (auto const* chatgpt_target = std::get_if<gateway::chatgpt_config>(&*target)) {
-        return chatgpt_sign_in(settings, *chatgpt_target);
+        return chatgpt_sign_in(settings, *chatgpt_target, json);
     }
-    return login_with(settings, std::get<gateway::copilot_config>(*target));
+    return login_with(settings, std::get<gateway::copilot_config>(*target), json);
 }
 
 std::expected<std::string, std::string> fetch_listing(tls::group_policy const tls_groups, gateway::provider_config const& provider) {
@@ -452,9 +489,9 @@ int report_missing(recipes::recipe const& item, std::vector<std::string> const& 
     return exit_config;
 }
 
-std::expected<std::string, std::string> edited_text(std::string text, std::vector<recipes::edit> const& edits) {
+std::expected<std::string, std::string> edited_text(std::string text, std::vector<config_edit::change> const& edits) {
     for (auto const& step : edits) {
-        auto const done = config_edit::apply(text, {.path = step.path, .value = step.value});
+        auto const done = config_edit::apply(text, step);
         if (!done) {
             return std::unexpected{done.error()};
         }
@@ -463,15 +500,11 @@ std::expected<std::string, std::string> edited_text(std::string text, std::vecto
     return text;
 }
 
-int apply_recipe(commands::context const& where, recipes::recipe const& item) {
-    auto const planned = recipes::plan(item, where.settings);
-    if (!planned.missing.empty()) {
-        return report_missing(item, planned.missing);
-    }
+int commit_edits(commands::context const& where, std::vector<config_edit::change> const& edits) {
     auto const path = std::filesystem::path{process::expand_home(where.options.config_path)};
     std::ifstream in{path};
     std::string const before{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
-    auto const text = edited_text(before, planned.edits);
+    auto const text = edited_text(before, edits);
     if (!text) {
         return fail(exit_config, text.error());
     }
@@ -489,6 +522,15 @@ int apply_recipe(commands::context const& where, recipes::recipe const& item) {
         std::println("the gateway did not reload (is it running?); it picks the change up when it starts");
     }
     return 0;
+}
+
+int apply_recipe(commands::context const& where, recipes::recipe const& item) {
+    auto const planned = recipes::plan(item, where.settings);
+    if (!planned.missing.empty()) {
+        return report_missing(item, planned.missing);
+    }
+    auto const changes = planned.edits | std::views::transform([](recipes::edit const& step) { return config_edit::change{.path = step.path, .value = step.value}; }) | std::ranges::to<std::vector>();
+    return commit_edits(where, changes);
 }
 
 int list_recipes(commands::context const& where) {
@@ -572,27 +614,52 @@ int check_command(commands::context const& where) {
     return check::all_passed(rows) ? 0 : exit_runtime;
 }
 
-int models_command(commands::context const& where) {
-    if (!where.options.passthrough.empty()) {
-        return edit_command(where);
+constexpr std::string_view offer_usage = "usage: llmgate models offer PROVIDER MODEL... | all  (llmgate models --provider PROVIDER lists the models)";
+constexpr std::string_view offer_all = "all";
+
+std::expected<std::vector<model_list::entry>, std::string> listed_models(commands::context const& where, gateway::provider_config const& provider) {
+    auto const body = fetch_listing(where.settings.tls_groups, provider);
+    if (!body) {
+        return std::unexpected{body.error()};
     }
-    auto const chosen = commands::models_choice(where.settings, where.options.provider);
+    return model_list::parse(*body);
+}
+
+std::vector<std::string> offered_ids(std::span<std::string const> const words, std::vector<model_list::entry> const& listed, gateway::wire_protocol const provider) {
+    if (words.size() == 1 && words.front() == offer_all) {
+        return listed | std::views::filter([&](model_list::entry const& each) { return offer::recommended(each, provider); }) | std::views::transform(&model_list::entry::id) |
+               std::ranges::to<std::vector>();
+    }
+    return {words.begin(), words.end()};
+}
+
+int offer_command(commands::context const& where) {
+    auto const& words = where.options.passthrough;
+    if (words.size() < 3) {
+        return fail(exit_usage, offer_usage);
+    }
+    auto const chosen = commands::models_choice(where.settings, words[1]);
     if (!chosen) {
         return fail(exit_config, chosen.error());
     }
-    auto const body = fetch_listing(where.settings.tls_groups, chosen->second);
-    if (!body) {
-        return fail(exit_runtime, body.error());
+    auto const listed = listed_models(where, chosen->second);
+    if (!listed) {
+        return fail(exit_runtime, listed.error());
     }
+    auto const planned = offer::plan(chosen->first, chosen->second, *listed, offered_ids(std::span{words}.subspan(2), *listed, chosen->second.protocol));
+    return planned ? commit_edits(where, *planned) : fail(exit_config, planned.error());
+}
+
+int print_listing(commands::context const& where, std::string const& body) {
     if (where.options.as_json) {
-        auto const document = json::parse(*body, {.jsonc = false});
+        auto const document = json::parse(body, {.jsonc = false});
         if (!document) {
             return fail(exit_runtime, "the provider's reply is not JSON");
         }
         std::println("{}", json::write(*document));
         return 0;
     }
-    auto const models = model_list::parse(*body);
+    auto const models = model_list::parse(body);
     if (!models) {
         return fail(exit_runtime, models.error());
     }
@@ -600,12 +667,66 @@ int models_command(commands::context const& where) {
     return 0;
 }
 
+constexpr std::string_view list_usage = "usage: llmgate models list PROVIDER [--json]";
+
+std::string candidates_text(std::vector<offer::candidate> const& rows) {
+    std::string out;
+    for (auto const& row : rows) {
+        text::append_all(out, row.offered ? "[x] " : "[ ] ", model_list::printable(row.id, model_list::longest_text), "  ", row.protocol, "  context ", text::decimal(row.context), "  ", row.policy, row.recommended ? "  recommended" : "", "\n");
+    }
+    return out;
+}
+
+int list_command(commands::context const& where) {
+    auto const& words = where.options.passthrough;
+    if (words.size() != 2) {
+        return fail(exit_usage, list_usage);
+    }
+    auto const chosen = commands::models_choice(where.settings, words[1]);
+    if (!chosen) {
+        return fail(exit_config, chosen.error());
+    }
+    auto const listed = listed_models(where, chosen->second);
+    if (!listed) {
+        return fail(exit_runtime, listed.error());
+    }
+    auto const rows = offer::candidates(chosen->second, *listed);
+    std::print("{}", where.options.as_json ? offer::candidates_json(rows) + "\n" : candidates_text(rows));
+    return 0;
+}
+
+int models_subcommand(commands::context const& where) {
+    auto const& first = where.options.passthrough.front();
+    if (first == "offer") {
+        return offer_command(where);
+    }
+    return first == "list" ? list_command(where) : edit_command(where);
+}
+
+int models_command(commands::context const& where) {
+    if (!where.options.passthrough.empty()) {
+        return models_subcommand(where);
+    }
+    auto const chosen = commands::models_choice(where.settings, where.options.provider);
+    if (!chosen) {
+        return fail(exit_config, chosen.error());
+    }
+    auto const body = fetch_listing(where.settings.tls_groups, chosen->second);
+    return body ? print_listing(where, *body) : fail(exit_runtime, body.error());
+}
+
 int serve_command(commands::context const& where) {
     return serve(where.settings, where.options.config_path);
 }
 
 int login_command(commands::context const& where) {
-    return login(where.settings, where.options.provider);
+    if (where.options.detach) {
+        return commands::run_login_detached(where);
+    }
+    if (where.options.progress) {
+        return commands::run_login_progress(where);
+    }
+    return login(where.settings, where.options.provider, where.options.as_json);
 }
 
 int statusline_command(commands::context const& where) {

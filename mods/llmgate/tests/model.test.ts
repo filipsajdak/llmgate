@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { agentTable, changes, councilPrompt, compact, describeTotals, providerTable, routeTable, spendTable, table, unpricedNote, gatewayRoot, invocation, parseOverview, parseCommand, printable, printableBlock, resolveTarget, statusText, describeTargets } from '../hooks/model'
+import { agentTable, atPrompt, changes, councilPrompt, parsePrefix, compact, describeTotals, providerTable, routeTable, spendTable, table, unpricedNote, gatewayRoot, invocation, parseOverview, parseCommand, printable, printableBlock, resolveTarget, statusText, describeTargets } from '../hooks/model'
 
 const overview = JSON.stringify({
   schema_version: 1,
@@ -140,6 +140,8 @@ test('resolveTarget takes a full id, or an upstream name that names one target',
 test('statusText names the provider and model of the last reply with its markers, or the problem', () => {
   expect(statusText(found)).toBe('work sonnet-9 (fallback)')
   expect(statusText({ ...found, served: { ...found.served!, fallback: false, switched: true } })).toBe('work sonnet-9 (switched)')
+  expect(statusText({ ...found, served: { ...found.served!, fallback: false, switched: false, source: 'signal_image' } })).toBe('work sonnet-9 (image)')
+  expect(statusText({ ...found, served: { ...found.served!, fallback: false, switched: false, source: 'class_route' } })).toBe('work sonnet-9 (class route)')
   expect(statusText({ ...found, served: undefined })).toBe('no reply yet')
   expect(statusText({ ...found, error: 'the gateway answered 404' })).toBe('the gateway answered 404')
 })
@@ -222,4 +224,27 @@ test('the council prompt names each member by its registered type, one round, in
   expect(text).toContain('one round')
   expect(text.endsWith('Should we split the service?')).toBe(true)
   expect(councilPrompt('q', ['council-a', 'council-b', 'council-c', 'council-d'])).not.toContain('council-d')
+})
+
+const choices = [
+  { id: 'claude-gpt-6-sol@codex', label: 'gpt-6-sol (codex)', provider: 'codex', upstream: 'gpt-6-sol' },
+  { id: 'claude-gpt-6-luna@codex', label: 'gpt-6-luna (codex)', provider: 'codex', upstream: 'gpt-6-luna' },
+  { id: 'claude-sonnet-9@work', label: 'sonnet-9 (work)', provider: 'work', upstream: 'sonnet-9' },
+]
+
+test('an @target: prefix names one target by provider, or by provider/model when the provider has several', () => {
+  expect(parsePrefix('@work: refactor the parser', choices)).toEqual({ target: 'claude-sonnet-9@work', task: 'refactor the parser' })
+  expect(parsePrefix('@codex/gpt-6-luna: a\nb', choices)).toEqual({ target: 'claude-gpt-6-luna@codex', task: 'a\nb' })
+  expect(parsePrefix('@codex: refactor', choices)).toEqual({ refused: 'codex has several models: write @codex/gpt-6-sol or @codex/gpt-6-luna' })
+  expect(parsePrefix('@nowhere: x', choices)).toEqual({ refused: 'no target matches @nowhere: use a provider name such as @codex' })
+  expect(parsePrefix('@work:', choices)).toEqual({ refused: 'write the task after @work:' })
+  expect(parsePrefix('see @work: later', choices)).toBeUndefined()
+  expect(parsePrefix('plain', choices)).toBeUndefined()
+})
+
+test('the prompt that hands a task to the at agent says to ask once and relay the answer', () => {
+  const text = atPrompt('refactor the parser')
+  expect(text).toContain('llmgate:at')
+  expect(text).toContain('once')
+  expect(text.endsWith('refactor the parser')).toBe(true)
 })

@@ -34,6 +34,11 @@ export namespace llmgate::gateway {
 
 using reflect::member_named;
 
+constexpr wire_protocol wire_for(provider_config const& settings, std::string_view const upstream_model) {
+    auto const found = settings.model_protocols.find(std::string{upstream_model});
+    return found == settings.model_protocols.end() ? settings.protocol : found->second;
+}
+
 constexpr std::string effective_messages_path(wire_protocol const protocol, std::string_view const configured) {
     return protocol == wire_protocol::openai_responses && configured == default_messages_path ? std::string{default_responses_path} : std::string{configured};
 }
@@ -228,19 +233,44 @@ std::set<std::string> target_ids_of(std::map<std::string, provider_config> const
     return ids;
 }
 
-std::string class_route_problem(config const& settings, std::map<std::string, provider_config> const& providers) {
-    auto const ids = target_ids_of(providers);
-    for (auto const& [klass, entries] : settings.routes_by_class) {
-        if (std::ranges::find(request_classes, klass) == request_classes.end()) {
-            return std::format("routes_by_class: '{}' is not a request class (subagent, workflow, compaction, auxiliary)", plain(klass));
-        }
-        for (auto const& entry : entries) {
-            if (!providers.contains(entry) && !ids.contains(entry)) {
-                return std::format("routes_by_class {}: '{}' is neither a provider nor a target id", klass, plain(entry));
-            }
+constexpr auto request_signals = std::to_array<std::string_view>({"image", "long"});
+
+std::string route_entries_problem(std::string_view const table, std::string const& key, std::vector<std::string> const& entries, std::map<std::string, provider_config> const& providers,
+                                  std::set<std::string> const& ids) {
+    for (auto const& entry : entries) {
+        if (!providers.contains(entry) && !ids.contains(entry)) {
+            return std::format("{} {}: '{}' is neither a provider nor a target id", table, key, plain(entry));
         }
     }
     return {};
+}
+
+std::string route_table_problem(std::string_view const table, std::map<std::string, std::vector<std::string>> const& routes, std::span<std::string_view const> const known,
+                                std::map<std::string, provider_config> const& providers, std::set<std::string> const& ids) {
+    for (auto const& [key, entries] : routes) {
+        if (std::ranges::find(known, key) == known.end()) {
+            return std::format("{}: '{}' is not a known key", table, plain(key));
+        }
+        if (auto const problem = route_entries_problem(table, key, entries, providers, ids); !problem.empty()) {
+            return problem;
+        }
+    }
+    return {};
+}
+
+std::string class_route_problem(config const& settings, std::map<std::string, provider_config> const& providers) {
+    auto const ids = target_ids_of(providers);
+    if (auto const problem = route_table_problem("routes_by_class", settings.routes_by_class, request_classes, providers, ids); !problem.empty()) {
+        return problem;
+    }
+    return route_table_problem("routes_by_signal", settings.routes_by_signal, request_signals, providers, ids);
+}
+
+std::string signal_of(std::string_view const body, std::uint64_t const long_bytes) {
+    if (body.contains(R"("type":"image")") || body.contains(R"("type": "image")")) {
+        return "image";
+    }
+    return body.size() > long_bytes ? "long" : std::string{};
 }
 
 bool tools_fit(std::vector<std::string> const& tools) {
@@ -642,6 +672,7 @@ struct request_note {
     std::string request_class{};
     std::string agent_type{};
     bool fallback = false;
+    wire_protocol wire = wire_protocol::anthropic;
     httpio::request const* request = nullptr;
 };
 
@@ -669,6 +700,7 @@ constexpr int too_many_requests = 429;
 struct relay_state {
     stats* counters;
     std::size_t buffer_limit;
+    wire_protocol wire = wire_protocol::anthropic;
     std::optional<http::message_head> head{};
     bool head_sent = false;
     bool streaming = false;
@@ -1309,18 +1341,36 @@ private:
         auto const configured = selection::order_for(routes_, role, declared_);
         auto const chosen = control::resolve({.requested = note.requested, .role = role, .session = session_for(incoming, note)}, targets_, overrides_, configured);
         detail::planned_route out{.source = std::string{reflect::enum_name(chosen.source)}};
-        auto const by_class = settings_.routes_by_class.find(note.request_class);
-        if (chosen.source == control::via::config && by_class != settings_.routes_by_class.end()) {
-            out.source = "class_route";
-            for (auto const& entry : by_class->second) {
-                add_class_step(out, entry);
+        if (chosen.source == control::via::config) {
+            if (auto const picked = picked_route(incoming, note)) {
+                out.source = picked->source;
+                for (auto const& entry : *picked->entries) {
+                    add_class_step(out, entry);
+                }
+                return out;
             }
-            return out;
         }
         for (auto const& item : chosen.steps) {
             out.steps.push_back({.index = index_of(item.provider), .upstream = item.upstream});
         }
         return out;
+    }
+
+    struct picked {
+        std::string source{};
+        std::vector<std::string> const* entries = nullptr;
+    };
+
+    std::optional<picked> picked_route(httpio::request const& incoming, detail::request_note const& note) const {
+        if (auto const by_class = settings_.routes_by_class.find(note.request_class); by_class != settings_.routes_by_class.end()) {
+            return picked{.source = "class_route", .entries = &by_class->second};
+        }
+        auto const signal = signal_of(incoming.body, settings_.long_prompt_bytes);
+        auto const by_signal = settings_.routes_by_signal.find(signal);
+        if (signal.empty() || by_signal == settings_.routes_by_signal.end()) {
+            return std::nullopt;
+        }
+        return picked{.source = "signal_" + signal, .entries = &by_signal->second};
     }
 
     void add_class_step(detail::planned_route& out, std::string const& entry) const {
@@ -1411,7 +1461,8 @@ private:
     template <net::byte_stream Client>
     async::task<detail::attempt_result> attempt(std::size_t const index, std::optional<std::string> upstream_model, httpio::request const& incoming,
                                                 httpio::response_writer<Client>& out, detail::request_note note) {
-        auto spec = co_await build_spec(index, upstream_model, incoming, note.session);
+        note.wire = wire_for(providers_[index].settings, detail::upstream_name_of(providers_[index].settings.models, upstream_model, note.requested));
+        auto spec = co_await build_spec(index, upstream_model, note.wire, incoming, note.session);
         if (!spec) {
             co_return std::move(spec.error());
         }
@@ -1463,8 +1514,8 @@ private:
         return found == provider->settings.limits.end() ? model_limits{} : found->second;
     }
 
-    std::expected<std::string, detail::attempt_result> upstream_body(detail::provider_runtime const& chosen, httpio::request const& incoming, std::string body) {
-        if (chosen.settings.protocol != wire_protocol::openai_responses) {
+    std::expected<std::string, detail::attempt_result> upstream_body(wire_protocol const wire, httpio::request const& incoming, std::string body) {
+        if (wire != wire_protocol::openai_responses) {
             return body;
         }
         return detail::to_responses_body(body, incoming, counters_);
@@ -1483,7 +1534,7 @@ private:
         co_return std::move(*bearer);
     }
 
-    async::task<std::expected<httpio::request_spec, detail::attempt_result>> build_spec(std::size_t const index, std::optional<std::string> upstream_model, httpio::request const& incoming,
+    async::task<std::expected<httpio::request_spec, detail::attempt_result>> build_spec(std::size_t const index, std::optional<std::string> upstream_model, wire_protocol const wire, httpio::request const& incoming,
                                                                                                   std::string session) {
         auto& chosen = providers_[index];
         if (!chosen.url) {
@@ -1494,7 +1545,7 @@ private:
             co_return std::unexpected{detail::refused(std::move(prepared.error()), detail::health::neutral)};
         }
         auto const upstream_name = detail::upstream_name_of(chosen.settings.models, upstream_model, prepared->requested);
-        auto body = upstream_body(chosen, incoming, history_for(chosen, session, clamp_output(chosen, upstream_name, std::move(prepared->body))));
+        auto body = upstream_body(wire, incoming, history_for(chosen, session, clamp_output(chosen, upstream_name, std::move(prepared->body))));
         if (!body) {
             co_return std::unexpected{std::move(body.error())};
         }
@@ -1508,10 +1559,10 @@ private:
             }
         }
         co_return httpio::request_spec{.method = "POST",
-                                       .target = chosen.url->base_path + effective_messages_path(chosen.settings.protocol, chosen.settings.messages_path),
+                                       .target = chosen.url->base_path + effective_messages_path(wire, chosen.settings.messages_path),
                                        .host = routing::host_header(*chosen.url),
                                        .fields = detail::upstream_headers(incoming, chosen.settings.headers, chosen.settings.copilot.has_value(), chosen.settings.forward_credentials, *token,
-                                                                          chosen.settings.protocol, chosen.settings.auth),
+                                                                          wire, chosen.settings.auth),
                                        .body = std::move(*body)};
     }
 
@@ -1667,10 +1718,10 @@ private:
     template <net::byte_stream Client>
     async::task<detail::attempt_result> read_reply(std::size_t const index, net::any_stream& upstream, httpio::response_writer<Client>& out,
                                                    detail::request_note note) {
-        detail::relay_state state{.counters = &counters_, .buffer_limit = buffer_limit};
+        detail::relay_state state{.counters = &counters_, .buffer_limit = buffer_limit, .wire = note.wire};
         state.observed.collect_text(note.kind == usage::classifier_kind);
         state.capture = static_cast<bool>(capture_);
-        if (providers_[index].settings.protocol == wire_protocol::openai_responses) {
+        if (state.wire == wire_protocol::openai_responses) {
             state.translator.emplace(note.requested);
         }
         auto const drained = co_await pump(upstream, state, out);
@@ -1721,7 +1772,7 @@ private:
         }
         return {.held = detail::held_reply{.status = state.head->status,
                                            .fields = routing::downstream_headers(state.head->fields),
-                                           .body = detail::client_error_body(providers_[index].settings.protocol, state.head->status, std::move(state.buffered))},
+                                           .body = detail::client_error_body(state.wire, state.head->status, std::move(state.buffered))},
                 .state = state.head->status == detail::too_many_requests ? detail::health::neutral : detail::health::failing};
     }
 
@@ -1770,7 +1821,7 @@ private:
         }
         settle_connection(index, upstream, *state.head);
         auto const fields = routing::downstream_headers(state.head->fields);
-        if (detail::translates_errors(providers_[index].settings.protocol, state.head->status)) {
+        if (detail::translates_errors(state.wire, state.head->status)) {
             co_return co_await out.send(state.head->status, fields, responses::error_body(state.head->status, state.buffered));
         }
         co_return co_await out.send(state.head->status, fields, state.buffered);

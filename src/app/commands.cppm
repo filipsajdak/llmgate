@@ -355,10 +355,34 @@ inline bool gateway_verified(arguments::gateway_address const& address) {
     return answer && answer->status == 200 && routing::secrets_equal(detail::proof_in(answer->body), proof::hmac_sha256_hex(*key, proof::identity_message(std::format("{}:{}", address.host, address.port), *challenge)));
 }
 
+struct login_event {
+    std::string event{};
+    std::optional<std::string> url{};
+    std::optional<std::string> code{};
+    std::optional<std::string> detail{};
+};
+
+inline std::string login_event_line(login_event const& item) {
+    return json::write(json::to_value(item));
+}
+
+inline constexpr std::uint64_t tokens_per_thousand = 1000;
+
+inline std::string picker_description(std::map<std::string, gateway::provider_config> const& providers, control::target const& target) {
+    auto const served = std::format("served by the provider {}", target.provider);
+    auto const provider = providers.find(target.provider);
+    auto const known = provider == providers.end() ? std::map<std::string, gateway::model_limits>::const_iterator{} : provider->second.limits.find(target.upstream);
+    if (provider == providers.end() || known == provider->second.limits.end() || known->second.context_tokens == 0) {
+        return served;
+    }
+    return std::format("{}, {}k tokens of context", served, known->second.context_tokens / tokens_per_thousand);
+}
+
 inline std::vector<claude::picker_row> picker_rows_of(gateway::config const& settings) {
+    auto const providers = gateway::effective_providers(settings);
     std::vector<claude::picker_row> rows;
     for (auto const& target : control::catalogue(gateway::offers_of_config(settings))) {
-        rows.push_back({.model = target.id, .label = target.display_name, .description = std::format("served by the provider {}", target.provider)});
+        rows.push_back({.model = target.id, .label = target.display_name, .description = picker_description(providers, target)});
     }
     return rows;
 }
@@ -411,6 +435,58 @@ inline outcome ensure_gateway(context const& where) {
         return std::unexpected{"the gateway did not come up; see " + log.string()};
     }
     return {};
+}
+
+inline constexpr std::string_view login_log_default = "default";
+inline constexpr std::chrono::milliseconds login_link_limit{15000};
+
+inline std::filesystem::path login_log(std::string_view const provider) {
+    return detail::state_directory() / std::format("login-{}.log", provider.empty() ? login_log_default : provider);
+}
+
+inline std::vector<std::string> login_lines(std::filesystem::path const& log) {
+    std::ifstream in{log};
+    std::vector<std::string> lines;
+    for (std::string line; std::getline(in, line);) {
+        if (line.starts_with('{')) {
+            lines.push_back(line);
+        }
+    }
+    return lines;
+}
+
+inline bool settles_link(std::string const& line) {
+    return line.contains(R"("event":"link")") || line.contains(R"("event":"failed")");
+}
+
+inline std::optional<std::string> first_settled_line(std::filesystem::path const& log) {
+    auto const lines = login_lines(log);
+    auto const found = std::ranges::find_if(lines, settles_link);
+    return found == lines.end() ? std::nullopt : std::optional<std::string>{*found};
+}
+
+inline int run_login_detached(context const& where) {
+    auto const log = login_log(where.options.provider);
+    std::error_code ignored;
+    std::filesystem::remove(log, ignored);
+    std::vector<std::string> arguments{"--config", process::expand_home(where.options.config_path), "login", "--json"};
+    if (!where.options.provider.empty()) {
+        arguments.insert(arguments.end(), {"--provider", where.options.provider});
+    }
+    if (auto const started = process::start_detached(where.binary, arguments, log); !started) {
+        std::println("{}", login_event_line({.event = "failed", .detail = "cannot start the sign-in: " + started.error().message()}));
+        return 1;
+    }
+    process::wait_until([&log] { return first_settled_line(log).has_value(); }, login_link_limit);
+    auto const line = first_settled_line(log);
+    std::println("{}", line.value_or(login_event_line({.event = "failed", .detail = "the sign-in gave no link in time"})));
+    return line && line->contains(R"("event":"link")") ? 0 : 1;
+}
+
+inline int run_login_progress(context const& where) {
+    auto const lines = login_lines(login_log(where.options.provider));
+    std::println("{}", lines.empty() ? login_event_line({.event = "idle", .detail = "no sign-in is under way"}) : lines.back());
+    return 0;
 }
 
 inline int run_env(context const& where) {
@@ -707,6 +783,27 @@ void describe_models(context const& where, doctor::facts& seen) {
     seen.models_error = std::move(checked.error);
 }
 
+bool claude_named(std::string_view const model) {
+    return model.starts_with("claude-");
+}
+
+std::vector<std::string> unknown_limits_of(gateway::config const& settings) {
+    std::vector<std::string> out;
+    for (auto const& [name, provider] : gateway::effective_providers(settings)) {
+        std::set<std::string> upstream(provider.offer.begin(), provider.offer.end());
+        for (auto const& [alias, model] : provider.models) {
+            upstream.insert(model);
+        }
+        for (auto const& model : upstream) {
+            auto const known = provider.limits.find(model);
+            if (!claude_named(model) && (known == provider.limits.end() || known->second.context_tokens == 0)) {
+                out.push_back(std::format("{}/{}", name, model));
+            }
+        }
+    }
+    return out;
+}
+
 std::vector<std::string> dangling_targets_of(gateway::config const& settings) {
     std::set<std::string> ids;
     for (auto const& target : control::catalogue(gateway::offers_of_config(settings))) {
@@ -758,6 +855,7 @@ doctor::facts gather_facts(context const& where) {
     describe_models(where, seen);
     seen.subagent_model_forced = detail::subagent_model_forced(seen.profile_dir);
     seen.dangling_targets = dangling_targets_of(where.settings);
+    seen.unknown_limits = unknown_limits_of(where.settings);
     return seen;
 }
 

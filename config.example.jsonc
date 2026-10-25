@@ -26,6 +26,10 @@
     // Limits per upstream model id, as the provider reports them (llmgate models lists them). max_tokens
     // above output_tokens is clamped; the model list carries prompt_tokens and output_tokens.
     // "limits": { "claude-sonnet-5.5": { "context_tokens": 328000, "prompt_tokens": 200000, "output_tokens": 128000 } },
+    // Wire protocol of single models, keyed by upstream model id; a model not listed uses the provider's
+    // protocol. A provider whose list gives supported_endpoints (a Copilot seat serves Claude models on
+    // /v1/messages and GPT models on /responses) needs one entry per model that differs.
+    // "model_protocols": { "gpt-6-luna": "openai_responses" },
     // Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to
     // this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a
     // gateway credential. For an Anthropic provider only; refused together with client_key_env or a
@@ -93,6 +97,16 @@
   // Claude Code sends the class with CLAUDE_CODE_GATEWAY_HINT_HEADERS=1, which llmgate claude sets. Pins
   // and ids picked in /model still win.
   // "routes_by_class": { "compaction": ["claude-gpt-6-luna@codex", "copilot"] },
+
+  // Per signal in the request itself (image: a message carries an image block; long: the body is larger
+  // than long_prompt_bytes) the providers or target ids to try in order, instead of the role's list. A
+  // class route (routes_by_class) wins over a signal route, and a pin or a session override wins over
+  // both. The overview names the signal that routed a request.
+  // "routes_by_signal": { "image": ["claude-gpt-6-sol@codex"], "long": ["copilot"] },
+
+  // Size in bytes of a request body from which it counts as long for routes_by_signal; about four bytes
+  // make a token.
+  // "long_prompt_bytes": 400000,
 
   // Subagent types the llmgate mod registers in Claude Code, each bound to a target on any provider
   // (Claude can then delegate to it by name).

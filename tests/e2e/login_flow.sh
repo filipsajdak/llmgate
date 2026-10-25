@@ -70,4 +70,19 @@ if "$binary" --config "$work/missing.jsonc" env >/dev/null 2>"$work/err.txt"; th
 check sh -c "[ $rc -eq 3 ] && grep -q 'cannot read' '$work/err.txt'"
 
 echo "failures: $failures"
+label="login --json prints the link and the code as events and never the token"
+rm -f "$work/token.json"
+"$binary" --config "$work/llmgate.jsonc" login --json > "$work/events.txt"
+check sh -c "grep -q '\"event\":\"link\"' '$work/events.txt' && grep -q '\"code\":\"ABCD-1234\"' '$work/events.txt' && grep -q '\"event\":\"done\"' '$work/events.txt' && ! grep -q 'gho_e2e_token' '$work/events.txt'"
+label="login --detach --json returns the link at once and --progress later reports done"
+rm -f "$work/token.json"
+"$binary" --config "$work/llmgate.jsonc" login --json --detach > "$work/detached.txt"
+check sh -c "grep -q '\"event\":\"link\"' '$work/detached.txt' && grep -q 'ABCD-1234' '$work/detached.txt'"
+label="login --progress --json reports the last event of the detached sign-in"
+for _ in $(seq 100); do "$binary" --config "$work/llmgate.jsonc" login --json --progress > "$work/progress.txt" 2>&1 || true; grep -q '"event":"done"' "$work/progress.txt" && break; sleep 0.1; done
+check sh -c "grep -q '\"event\":\"done\"' '$work/progress.txt' && grep -q 'gho_e2e_token' '$work/token.json'"
+label="login --progress with no sign-in under way says so"
+rm -f "$work"/state/llmgate/login-*.log
+check sh -c "'$binary' --config '$work/llmgate.jsonc' login --json --progress | grep -q '\"event\":\"idle\"'"
+
 [ "$failures" -eq 0 ]

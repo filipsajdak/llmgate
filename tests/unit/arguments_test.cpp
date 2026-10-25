@@ -17,6 +17,15 @@ std::vector<std::string> words(std::initializer_list<std::string_view> const lis
 }
 
 const suite arguments_suite = [] {
+    "capability_login_takes_json_detach_and_progress_and_the_usage_text_says_so"_test = [] {
+        auto const detached = parse(words({"login", "--provider", "work", "--json", "--detach"}));
+        auto const progress = parse(words({"login", "--provider", "work", "--json", "--progress"}));
+
+        expect(detached.has_value() && detached->detach && detached->as_json && !detached->progress);
+        expect(progress.has_value() && progress->progress && !progress->detach);
+        expect(usage_text.contains("login [--json] [--detach] [--progress] [--provider NAME]"));
+    };
+
     "capability_doctor_and_quota_are_commands_and_offline_is_a_flag"_test = [] {
         auto const checked = parse(words({"doctor", "--offline", "--json"}));
         auto const quota = parse(words({"quota", "--json"}));
@@ -199,7 +208,7 @@ const suite arguments_suite = [] {
 
     "capability_the_usage_text_is_pinned"_test = [] {
         expect(usage_text ==
-               "usage: llmgate [--config PATH] [--profile NAME] [serve | login [--provider NAME] | claude ARGS... | env [--json] [--vscode [FILE]] | setup [--vscode [FILE]] [--service] [--dry-run] | "
+               "usage: llmgate [--config PATH] [--profile NAME] [serve | login [--json] [--detach] [--progress] [--provider NAME] | claude ARGS... | env [--json] [--vscode [FILE]] | setup [--vscode [FILE]] [--service] [--dry-run] | "
                "statusline | status | stop | usage [--json] [--days N] | doctor [--json] [--offline] | quota [--json] [--provider NAME] | use [--session ID] ARGS... | targets | route [--session ID] ARGS... | models [--json] [--provider NAME] [--yes] ARGS... | reload | provider [--yes] [--preset NAME] [--labels A,B] [--base-url URL] [--token-env VAR] [--auth KIND] [--secret SRC] [--ghe-host HOST] [--offer A,B] [--offer-from FILE] [--offer-filter TEXT] ARGS... | routes [--yes] ARGS... | config [--yes] ARGS... | secret ARGS... | recipe [--json] [--yes] ARGS... | agents [--yes] [--description TEXT] [--prompt TEXT] ARGS... | rules [--yes] ARGS... | check [--json] [--provider NAME] [--quick]] | --check-config | --version | --print-example | --print-schema | --print-config-table")
             << usage_text;
     };

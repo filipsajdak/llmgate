@@ -254,13 +254,27 @@ const suite commands_suite = [] {
 
     "capability_the_profile_picker_rows_are_the_catalogue_targets_with_their_labels"_test = [] {
         gateway::config built;
-        built.providers["work"] = {.base_url = "http://127.0.0.1:1", .offer = {"claude-x"}, .labels = {"customer"}, .models = {{"claude-sonnet-5-5", "gpt-6-sol"}}};
+        built.providers["work"] = {.base_url = "http://127.0.0.1:1",
+                                   .limits = {{"gpt-6-sol", {.context_tokens = 272000}}},
+                                   .offer = {"claude-x"},
+                                   .labels = {"customer"},
+                                   .models = {{"claude-sonnet-5-5", "gpt-6-sol"}}};
 
         auto const rows = commands::picker_rows_of(built);
 
         expect(rows.size() == 2_u);
-        expect(rows.front().model == "claude-gpt-6-sol@work" && rows.front().label == "gpt-6-sol (work) [customer]" && rows.front().description == "served by the provider work");
-        expect(rows.back().model == "claude-x@work");
+        expect(rows.front().model == "claude-gpt-6-sol@work" && rows.front().label == "gpt-6-sol (work) [customer]" &&
+               rows.front().description == "served by the provider work, 272k tokens of context");
+        expect(rows.back().model == "claude-x@work" && rows.back().description == "served by the provider work");
+    };
+
+    "capability_a_login_event_is_one_json_line_that_omits_the_fields_it_does_not_have"_test = [] {
+        auto const link = commands::login_event_line({.event = "link", .url = "https://github.com/login/device", .code = "ABCD-1234"});
+        auto const done = commands::login_event_line({.event = "done", .detail = "token stored"});
+
+        expect(link == R"({"event":"link","url":"https://github.com/login/device","code":"ABCD-1234"})") << link;
+        expect(done == R"({"event":"done","detail":"token stored"})") << done;
+        expect(!link.contains('\n') && !done.contains("url"));
     };
 
     "capability_the_copilot_target_can_be_chosen_by_provider_name_and_defaults_to_the_first_login"_test = [] {

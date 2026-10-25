@@ -78,6 +78,8 @@ struct auth_config {
     [[= reflect::doc{"File that holds the secret (one line); keep it readable by you only. It is read before the environment variable."}]] [[= reflect::example{R"("~/.config/llmgate/partner.key")"}]] [[= reflect::commented]] std::string file{};
 };
 
+constexpr std::uint64_t default_long_prompt_bytes = 400000;
+
 struct model_limits {
     [[= reflect::doc{"Context window of the model in tokens; 0 means unknown."}]] std::uint64_t context_tokens = 0;
     [[= reflect::doc{"Largest prompt the model accepts, in tokens; 0 means unknown. Published as max_input_tokens in the model list."}]] std::uint64_t prompt_tokens = 0;
@@ -97,6 +99,8 @@ struct upstream_config {
     std::map<std::string, std::string> headers{};
     [[= reflect::doc{"Limits per upstream model id, as the provider reports them (llmgate models lists them). max_tokens above output_tokens is clamped; the model list carries prompt_tokens and output_tokens."}]]
     [[= reflect::example{R"({ "claude-sonnet-5.5": { "context_tokens": 328000, "prompt_tokens": 200000, "output_tokens": 128000 } })"}]] [[= reflect::commented]] std::map<std::string, model_limits> limits{};
+    [[= reflect::doc{"Wire protocol of single models, keyed by upstream model id; a model not listed uses the provider's protocol. A provider whose list gives supported_endpoints (a Copilot seat serves Claude models on /v1/messages and GPT models on /responses) needs one entry per model that differs."}]]
+    [[= reflect::example{R"({ "gpt-6-luna": "openai_responses" })"}]] [[= reflect::commented]] std::map<std::string, wire_protocol> model_protocols{};
     [[= reflect::doc{"Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen."}]] [[= reflect::commented]] bool forward_credentials = false;
     [[= reflect::doc{"Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER."}]] [[= reflect::example{R"(["claude-sonnet-5-5"])"}]] [[= reflect::commented]] std::vector<std::string> offer{};
     [[= reflect::doc{"Labels of this provider, shown beside every model it serves in the pane, the /model picker and the CLI, and used to group usage and filter targets. Each is 1 to 24 letters, digits, - or _."}]] [[= reflect::example{R"(["work", "acme"])"}]] [[= reflect::commented]] std::vector<std::string> labels{};
@@ -129,6 +133,8 @@ struct provider_config {
     [[= reflect::doc{"Extra headers sent to the provider on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here."}]] std::map<std::string, std::string> headers{};
     [[= reflect::doc{"Limits per upstream model id, as the provider reports them (llmgate models lists them). max_tokens above output_tokens is clamped; the model list carries prompt_tokens and output_tokens."}]]
     [[= reflect::example{R"({ "claude-sonnet-5.5": { "context_tokens": 328000, "prompt_tokens": 200000, "output_tokens": 128000 } })"}]] [[= reflect::commented]] std::map<std::string, model_limits> limits{};
+    [[= reflect::doc{"Wire protocol of single models, keyed by upstream model id; a model not listed uses the provider's protocol. A provider whose list gives supported_endpoints (a Copilot seat serves Claude models on /v1/messages and GPT models on /responses) needs one entry per model that differs."}]]
+    [[= reflect::example{R"({ "gpt-6-luna": "openai_responses" })"}]] [[= reflect::commented]] std::map<std::string, wire_protocol> model_protocols{};
     [[= reflect::doc{"Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen."}]] [[= reflect::commented]] bool forward_credentials = false;
     [[= reflect::doc{"Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER."}]] [[= reflect::example{R"(["claude-sonnet-5-5"])"}]] [[= reflect::commented]] std::vector<std::string> offer{};
     [[= reflect::doc{"Labels of this provider, shown beside every model it serves in the pane, the /model picker and the CLI, and used to group usage and filter targets. Each is 1 to 24 letters, digits, - or _."}]] [[= reflect::example{R"(["work", "acme"])"}]] [[= reflect::commented]] std::vector<std::string> labels{};
@@ -203,6 +209,10 @@ struct config {
     [[= reflect::commented]] std::map<std::string, std::vector<std::string>> routes{};
     [[= reflect::doc{"Per request class (subagent, workflow, compaction, auxiliary) the providers or target ids (claude-NAME@PROVIDER) to try in order, instead of the role's list. A target id names the model too. Claude Code sends the class with CLAUDE_CODE_GATEWAY_HINT_HEADERS=1, which llmgate claude sets. Pins and ids picked in /model still win."}]]
     [[= reflect::example{R"({ "compaction": ["claude-gpt-6-luna@codex", "copilot"] })"}]] [[= reflect::commented]] std::map<std::string, std::vector<std::string>> routes_by_class{};
+    [[= reflect::doc{"Per signal in the request itself (image: a message carries an image block; long: the body is larger than long_prompt_bytes) the providers or target ids to try in order, instead of the role's list. A class route (routes_by_class) wins over a signal route, and a pin or a session override wins over both. The overview names the signal that routed a request."}]]
+    [[= reflect::example{R"({ "image": ["claude-gpt-6-sol@codex"], "long": ["copilot"] })"}]] [[= reflect::commented]] std::map<std::string, std::vector<std::string>> routes_by_signal{};
+    [[= reflect::doc{"Size in bytes of a request body from which it counts as long for routes_by_signal; about four bytes make a token."}]]
+    [[= reflect::example{R"(400000)"}]] [[= reflect::commented]] std::uint64_t long_prompt_bytes = default_long_prompt_bytes;
     [[= reflect::doc{"Subagent types the llmgate mod registers in Claude Code, each bound to a target on any provider (Claude can then delegate to it by name)."}]]
     [[= reflect::example{R"({ "reviewer": { "target": "claude-gpt-6-sol@codex", "description": "Reviews a change as a second opinion", "prompt": "Review the change and list defects.", "tools": ["Read", "Grep"], "max_turns": 8 } })"}]]
     [[= reflect::commented]] std::map<std::string, agent_config> agents{};

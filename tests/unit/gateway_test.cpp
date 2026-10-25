@@ -937,6 +937,52 @@ const suite gateway_suite = [] {
         expect(d.second.seen.size() == 1_u && d.second.seen.front().body.contains(R"("model":"model-extra")")) << (d.second.seen.empty() ? "" : d.second.seen.front().body);
     };
 
+    "capability_a_signal_route_sends_a_request_with_an_image_or_a_very_long_body_to_the_named_provider_and_says_why"_test = [] {
+        duo d{[](gateway::config& built) {
+            route(built, "sonnet", {"a"});
+            built.routes_by_signal["image"] = {"b"};
+            built.routes_by_signal["long"] = {"claude-model-extra@b"};
+            built.long_prompt_bytes = 600;
+        }};
+        auto const with_image = R"({"model":"claude-sonnet-5-5","max_tokens":8,"stream":false,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}},{"type":"text","text":"what is this"}]}]})";
+        auto const long_text = std::format(R"({{"model":"claude-sonnet-5-5","max_tokens":8,"stream":false,"messages":[{{"role":"user","content":"{}"}}]}})", std::string(800, 'x'));
+
+        auto const plain_reply = d.ask(messages_request(chat("claude-sonnet-5-5", false), "/anthropic/v1/messages", ""));
+        auto const long_reply = d.ask(messages_request(long_text, "/anthropic/v1/messages", ""));
+        auto image_turn = messages_request(with_image, "/anthropic/v1/messages", "");
+        image_turn.fields.add("x-claude-code-session-id", "sess-7");
+        auto const image_reply = d.ask(std::move(image_turn));
+
+        expect(image_reply.status == 200 && long_reply.status == 200 && plain_reply.status == 200) << image_reply.status << long_reply.status << plain_reply.status;
+        expect(d.second.seen.size() == 2_u && d.first.seen.size() == 1_u);
+        expect(d.second.seen.at(0).body.contains(R"("model":"model-extra")"));
+        auto view = messages_request("");
+        view.method = "GET";
+        view.target = "/llmgate/session?id=sess-7";
+        expect(d.ask(std::move(view)).body.contains(R"json("source":"signal_image")json")) << "the session view names the signal route as the source";
+    };
+
+    "limit_a_class_route_outranks_a_signal_route_and_a_signal_name_must_be_known"_test = [] {
+        duo d{[](gateway::config& built) {
+            route(built, "sonnet", {"a"});
+            built.routes_by_class["compaction"] = {"a"};
+            built.routes_by_signal["image"] = {"b"};
+        }};
+        auto request = messages_request(R"({"model":"claude-sonnet-5-5","max_tokens":8,"stream":false,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}]})", "/anthropic/v1/messages", "");
+        request.fields.add("x-claude-code-request-class", "compaction");
+
+        (void)d.ask(std::move(request));
+
+        expect(d.first.seen.size() == 1_u && d.second.seen.empty());
+        gateway::config bad;
+        bad.providers["a"] = {.base_url = "http://127.0.0.1:1", .offer = {"claude-x"}};
+        bad.routes_by_signal["banana"] = {"a"};
+        expect(gateway::config_problem(bad).contains("banana"));
+        bad.routes_by_signal.clear();
+        bad.routes_by_signal["image"] = {"nowhere"};
+        expect(gateway::config_problem(bad).contains("nowhere"));
+    };
+
     "limit_a_session_pin_still_outranks_a_class_route"_test = [] {
         duo d{[](gateway::config& built) { built.routes_by_class["compaction"] = {"b"}; }};
         control::overrides book;
@@ -1239,6 +1285,19 @@ const suite gateway_suite = [] {
         expect(!seen.body.contains("max_tokens"));
         expect(seen.headers.at("Authorization") == "Bearer token-b" && seen.headers.at("content-type") == "application/json");
         expect(!seen.headers.contains("anthropic-beta") && !seen.headers.contains("anthropic-version"));
+    };
+
+    "capability_one_provider_speaks_each_models_own_protocol_so_a_seat_can_mix_messages_and_responses_models"_test = [] {
+        duo d{[](gateway::config& built) { built.providers["b"].model_protocols = {{"model-b", gateway::wire_protocol::openai_responses}}; }};
+
+        (void)d.chat_with("claude-model-b@b", true);
+        (void)d.chat_with("claude-model-extra@b", true);
+
+        expect(d.second.seen.size() == 2_u);
+        auto const& responses_call = d.second.seen.at(0);
+        auto const& messages_call = d.second.seen.at(1);
+        expect(responses_call.target == "/responses" && responses_call.body.contains(R"("input":[)") && !responses_call.headers.contains("anthropic-version")) << responses_call.target;
+        expect(messages_call.target == "/v1/messages" && messages_call.body.contains(R"("messages":[)") && messages_call.headers.contains("anthropic-version")) << messages_call.target;
     };
 
     "capability_a_responses_provider_with_an_explicit_path_keeps_it"_test = [] {

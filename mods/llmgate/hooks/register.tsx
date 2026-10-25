@@ -5,9 +5,9 @@ import { checkInvocation, checkTable, checkWarning, meterLines, parseCheck, pars
 import type { CheckRow } from './scorecard'
 import type { Quota } from './scorecard'
 import type { Recipe } from './recipes'
-import { addInvocation, followUp, formFor, kinds, nextStep } from './setup'
-import type { Form, KindId } from './setup'
-import { agentTable, changes, councilPrompt, describeTargets, describeTotals, providerTable, routeTable, spendTable, unpricedNote, gatewayRoot, invocation, parseCommand, parseOverview, printable, printableBlock, resolveTarget, roles, statusText } from './model'
+import { addInvocation, candidateLabel, candidatesInvocation, canTick, followUp, formFor, kinds, loginInvocation, nextStep, offerInvocation, parseCandidates, parseLoginEvent, signInLines } from './setup'
+import type { Candidate, Form, KindId } from './setup'
+import { agentTable, atPrompt, changes, councilPrompt, parsePrefix, describeTargets, describeTotals, providerTable, routeTable, spendTable, unpricedNote, gatewayRoot, invocation, parseCommand, parseOverview, printable, printableBlock, resolveTarget, roles, statusText } from './model'
 import type { Change, Command, Role, Scope, Snapshot } from './model'
 
 const PANE = 'llmgate'
@@ -25,6 +25,11 @@ let hasRead = false
 let form: Form | undefined
 let preview = ''
 let next = ''
+let signIn: { name: string; waiting: boolean; lines: string[] } | undefined
+let signInChecked: CheckRow[] = []
+let pendingTarget: string | undefined
+const atAgent = 'at'
+let choosing: { provider: string; rows: Candidate[]; ticked: Set<string>; note: string } | undefined
 let recipes: Recipe[] = []
 const registered = new Map<string, string>()
 let quotas = new Map<string, Quota>()
@@ -105,8 +110,19 @@ function scoreText(): string[] {
   ]
 }
 
+async function registerAt($: Engine): Promise<void> {
+  if (registered.has(atAgent)) return
+  try {
+    await $.agent.register({ name: atAgent, description: 'Runs one task on the model the user named with an @target: prefix', prompt: 'Do the task you are given and report the result plainly.' })
+    registered.set(atAgent, atAgent)
+  } catch {
+    registered.delete(atAgent)
+  }
+}
+
 async function syncAgents($: Engine): Promise<void> {
   rules = new Map(snapshot.spawnRules.map(rule => [rule.agent, rule.target]))
+  await registerAt($)
   for (const agent of snapshot.agents) {
     const signature = JSON.stringify([agent.target, agent.description, agent.prompt, agent.tools, agent.maxTurns])
     if (registered.get(agent.name) === signature) continue
@@ -119,10 +135,96 @@ async function syncAgents($: Engine): Promise<void> {
   }
 }
 
+async function chooseModels($: Engine, provider: string): Promise<void> {
+  const [bin, config] = await Promise.all([$.env.get('LLMGATE_BIN'), $.env.get('LLMGATE_CONFIG')])
+  const plan = candidatesInvocation(bin, config, provider)
+  if ('refused' in plan) {
+    choosing = { provider, rows: [], ticked: new Set(), note: plan.refused }
+  } else {
+    try {
+      const ran = await $.process.run(plan.argv, { timeoutMs: 60000 })
+      const rows = ran.exitCode === 0 ? parseCandidates(ran.stdout) : []
+      choosing = { provider, rows, ticked: new Set(rows.filter(row => row.offered).map(row => row.id)), note: rows.length === 0 ? printableBlock((ran.stderr || 'the provider listed no models').replace(/^llmgate: /, '').trim()) : '' }
+    } catch (error) {
+      choosing = { provider, rows: [], ticked: new Set(), note: printable(`llmgate did not run: ${String(error)}`) }
+    }
+  }
+  $.ui.invalidate('ui.render')
+}
+
+function tick(item: Candidate): void {
+  if (choosing === undefined || !canTick(item)) return
+  if (choosing.ticked.has(item.id)) choosing.ticked.delete(item.id)
+  else choosing.ticked.add(item.id)
+}
+
+async function applyModels($: Engine): Promise<void> {
+  if (choosing === undefined) return
+  const [bin, config] = await Promise.all([$.env.get('LLMGATE_BIN'), $.env.get('LLMGATE_CONFIG')])
+  const plan = offerInvocation(bin, config, choosing.provider, choosing.rows.filter(row => choosing?.ticked.has(row.id)).map(row => row.id))
+  if ('refused' in plan) {
+    choosing.note = plan.refused
+  } else {
+    try {
+      const ran = await $.process.run(plan.argv)
+      choosing.note = printableBlock((ran.exitCode === 0 ? 'The models are offered; the /model list follows after the next refresh.' : ran.stderr.replace(/^llmgate: /, '') || `exit ${ran.exitCode}`).trim())
+    } catch (error) {
+      choosing.note = printable(`llmgate did not run: ${String(error)}`)
+    }
+  }
+  await refresh($)
+}
+
+async function startSignIn($: Engine): Promise<void> {
+  if (form === undefined) return
+  const [bin, config] = await Promise.all([$.env.get('LLMGATE_BIN'), $.env.get('LLMGATE_CONFIG')])
+  const plan = loginInvocation(bin, config, form.name, 'detach')
+  signInChecked = []
+  if ('refused' in plan) {
+    signIn = { name: form.name, waiting: false, lines: [plan.refused] }
+  } else {
+    try {
+      const ran = await $.process.run(plan.argv, { timeoutMs: 30000 })
+      const item = parseLoginEvent(ran.stdout)
+      signIn = item === undefined ? { name: form.name, waiting: false, lines: [printable(`llmgate: ${ran.stderr.trim() || 'no sign-in link came back'}`)] } : { name: form.name, waiting: item.event === 'link', lines: signInLines(item) }
+    } catch (error) {
+      signIn = { name: form.name, waiting: false, lines: [printable(`llmgate did not run: ${String(error)}`)] }
+    }
+  }
+  $.ui.invalidate('ui.render')
+}
+
+async function followSignIn($: Engine): Promise<void> {
+  if (signIn === undefined) return
+  const [bin, config] = await Promise.all([$.env.get('LLMGATE_BIN'), $.env.get('LLMGATE_CONFIG')])
+  const plan = loginInvocation(bin, config, signIn.name, 'progress')
+  if ('refused' in plan) return
+  try {
+    const item = parseLoginEvent((await $.process.run(plan.argv)).stdout)
+    if (item === undefined || item.event === 'link' || item.event === 'idle') return
+    signIn = { name: signIn.name, waiting: false, lines: signInLines(item) }
+    if (item.event === 'done') await checkSignedIn($, signIn.name)
+  } catch {
+    return
+  }
+}
+
+async function checkSignedIn($: Engine, name: string): Promise<void> {
+  const [bin, config] = await Promise.all([$.env.get('LLMGATE_BIN'), $.env.get('LLMGATE_CONFIG')])
+  const plan = checkInvocation(bin, config, true, name)
+  if ('refused' in plan) return
+  try {
+    signInChecked = parseCheck((await $.process.run(plan.argv, { timeoutMs: 120000 })).stdout)
+  } catch {
+    signInChecked = []
+  }
+}
+
 async function refresh($: Engine): Promise<void> {
   const before = hasRead ? snapshot : undefined
   snapshot = await load($)
   await syncAgents($)
+  if (signIn?.waiting) await followSignIn($)
   hasRead = true
   await $.ui.status(statusText(snapshot))
   for (const note of changes(before, snapshot)) await $.ui.toast(note)
@@ -279,11 +381,25 @@ export const register: Register = on => {
   })
 
   on('agent.spawn', async ($, e, next) => {
+    if (e.subagentType.replace(/^[^:]*:/, '') === atAgent && pendingTarget !== undefined) {
+      const chosen = pendingTarget
+      pendingTarget = undefined
+      return next({ ...e, model: chosen })
+    }
     const target = rules.get(e.subagentType) ?? rules.get(e.subagentType.replace(/^[^:]*:/, ''))
     return target === undefined ? next(e) : next({ ...e, model: target })
   })
 
   on('prompt.submit', async ($, e, next) => {
+    const prefix = e.command === undefined ? parsePrefix(e.text, snapshot.targets) : undefined
+    if (prefix !== undefined && 'refused' in prefix) {
+      await $.ui.toast(`llmgate: ${prefix.refused}`)
+      return next(e)
+    }
+    if (prefix !== undefined) {
+      pendingTarget = prefix.target
+      return next({ ...e, text: atPrompt(prefix.task) })
+    }
     const asked = e.command === undefined ? /^council:\s*([\s\S]+)$/i.exec(e.text.trim()) : null
     const members = snapshot.agents.filter(item => item.name.startsWith('council-')).map(item => item.name)
     if (asked === null || members.length === 0) return next(e)
@@ -451,6 +567,25 @@ export const register: Register = on => {
           <Text bold>Providers</Text>
           {lines(providerTable(snapshot.providers))}
           <Text> </Text>
+          <Text bold>Choose the models of a provider:</Text>
+          <Box flexDirection="row" columnGap={2}>
+            {snapshot.providers.filter(item => item.ready !== false).map(item => (
+              <Button key={`models-${item.name}`} label={item.name} plain dimColor={choosing?.provider !== item.name} onPress={() => void chooseModels($, item.name)} />
+            ))}
+          </Box>
+          {choosing !== undefined && (
+            <Box flexDirection="column">
+              {choosing.rows.map(row => (
+                <Button key={`tick-${row.id}`} label={candidateLabel(row, choosing?.ticked.has(row.id) === true)} plain dimColor={!canTick(row)} onPress={() => {
+                  tick(row)
+                  redraw()
+                }} />
+              ))}
+              {choosing.rows.length > 0 && <Button key="models-apply" label="Apply" onPress={() => void applyModels($)} />}
+              {choosing.note !== '' && <Text>{choosing.note}</Text>}
+            </Box>
+          )}
+          <Text> </Text>
           <Text bold>Add a provider: what kind is it?</Text>
           <Box flexDirection="row" columnGap={2}>
             {kinds.map(item => (
@@ -473,7 +608,10 @@ export const register: Register = on => {
               </Box>
               {form.kind === 'apikey' && <Text dimColor>The key is never typed here: you enter it hidden in the terminal, next.</Text>}
               {preview !== '' && preview.split('\n').map(row => <Text>{row === '' ? ' ' : row}</Text>)}
-              {next !== '' && <Text bold>Next, type this in the prompt:</Text>}
+              {next !== '' && (form.kind === 'copilot' || form.kind === 'chatgpt') && <Button key="sign-in" label="Sign in" onPress={() => void startSignIn($)} />}
+              {signIn !== undefined && signIn.name === form.name && signIn.lines.map(row => <Text>{row}</Text>)}
+              {signIn !== undefined && signIn.name === form.name && checkTable(signInChecked).map(row => <Text>{row}</Text>)}
+              {next !== '' && <Text bold>Or type this in the prompt:</Text>}
               {next !== '' && <Text>{next}</Text>}
             </Box>
           )}
