@@ -268,6 +268,15 @@ const suite commands_suite = [] {
         expect(rows.back().model == "claude-x@work" && rows.back().description == "served by the provider work");
     };
 
+    "capability_a_login_event_is_one_json_line_that_omits_the_fields_it_does_not_have"_test = [] {
+        auto const link = commands::login_event_line({.event = "link", .url = "https://github.com/login/device", .code = "ABCD-1234"});
+        auto const done = commands::login_event_line({.event = "done", .detail = "token stored"});
+
+        expect(link == R"({"event":"link","url":"https://github.com/login/device","code":"ABCD-1234"})") << link;
+        expect(done == R"({"event":"done","detail":"token stored"})") << done;
+        expect(!link.contains('\n') && !done.contains("url"));
+    };
+
     "capability_the_copilot_target_can_be_chosen_by_provider_name_and_defaults_to_the_first_login"_test = [] {
         gateway::config built;
         built.providers["a"] = {.base_url = "http://127.0.0.1:1", .copilot = gateway::copilot_config{.token_file = "/a.json"}};

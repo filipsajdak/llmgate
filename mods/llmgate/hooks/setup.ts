@@ -82,3 +82,39 @@ export function nextStep(bin: string, config: string | undefined, form: Form): s
 export function describeForm(form: Form): string {
   return printable(`${form.kind} ${form.name}`)
 }
+
+export type LoginEvent = { event: 'link' | 'done' | 'failed' | 'idle'; url?: string; code?: string; detail?: string }
+
+const loginEvents: readonly string[] = ['link', 'done', 'failed', 'idle']
+
+export function loginInvocation(bin: string | undefined, config: string | undefined, name: string, mode: 'detach' | 'progress'): Plan {
+  if (bin === undefined || bin === '') return { refused: 'LLMGATE_BIN is not set: start Claude Code with llmgate claude' }
+  return { argv: [bin, ...(config ? ['--config', config] : []), 'login', '--provider', name, '--json', `--${mode}`] }
+}
+
+export function parseLoginEvent(text: string): LoginEvent | undefined {
+  for (const line of text.split('\n').reverse()) {
+    if (!line.startsWith('{')) continue
+    try {
+      const found = JSON.parse(line) as Record<string, unknown>
+      if (typeof found.event !== 'string' || !loginEvents.includes(found.event)) return undefined
+      const text = (key: string) => (typeof found[key] === 'string' ? { [key]: found[key] as string } : {})
+      return { event: found.event as LoginEvent['event'], ...text('url'), ...text('code'), ...text('detail') }
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
+}
+
+export function signInLines(item: LoginEvent): string[] {
+  if (item.event === 'link' && item.code !== undefined) {
+    return [`Open ${printable(item.url ?? '')} and enter the code ${printable(item.code)}`, 'Waiting for you to authorise (this view follows by itself)...']
+  }
+  if (item.event === 'link') {
+    return [`Open ${printable(item.url ?? '')} in your browser`, 'Waiting for the browser to come back (this view follows by itself)...']
+  }
+  if (item.event === 'done') return [`Signed in: ${printable(item.detail ?? '')}`]
+  if (item.event === 'failed') return [`Sign-in failed: ${printable(item.detail ?? 'no reason was given')}`]
+  return ['No sign-in is under way']
+}

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { addInvocation, followUp, formFor, kinds, nextStep, validateForm } from '../hooks/setup'
+import { addInvocation, followUp, formFor, kinds, loginInvocation, nextStep, parseLoginEvent, signInLines, validateForm } from '../hooks/setup'
 
 const bin = '/opt/llmgate'
 const config = '/etc/all.jsonc'
@@ -51,4 +51,31 @@ test('every kind has a plain-words description and a form', () => {
     expect(kind.help.length).toBeGreaterThan(20)
     expect(formFor(kind.id).kind).toBe(kind.id)
   }
+})
+
+test('sign-in runs login by argv, first detached for the link and then for its progress', () => {
+  expect(loginInvocation(bin, config, 'work', 'detach')).toEqual({ argv: [bin, '--config', config, 'login', '--provider', 'work', '--json', '--detach'] })
+  expect(loginInvocation(bin, config, 'work', 'progress')).toEqual({ argv: [bin, '--config', config, 'login', '--provider', 'work', '--json', '--progress'] })
+  expect(loginInvocation(undefined, config, 'work', 'detach')).toEqual({ refused: 'LLMGATE_BIN is not set: start Claude Code with llmgate claude' })
+})
+
+test('a login event is read from the last JSON line, and anything else is not an event', () => {
+  expect(parseLoginEvent('{"event":"link","url":"https://github.com/login/device","code":"ABCD-1234"}\n')).toEqual({
+    event: 'link',
+    url: 'https://github.com/login/device',
+    code: 'ABCD-1234',
+  })
+  expect(parseLoginEvent('noise\n{"event":"link","url":"u"}\n{"event":"done","detail":"stored"}\n')).toEqual({ event: 'done', detail: 'stored' })
+  expect(parseLoginEvent('not json')).toBeUndefined()
+  expect(parseLoginEvent('{"event":"rm -rf"}')).toBeUndefined()
+})
+
+test('the pane lines for a sign-in name the link and the code, the result, or the failure, with control characters removed', () => {
+  expect(signInLines({ event: 'link', url: 'https://github.com/login/device', code: 'ABCD-1234' })).toEqual([
+    'Open https://github.com/login/device and enter the code ABCD-1234',
+    'Waiting for you to authorise (this view follows by itself)...',
+  ])
+  expect(signInLines({ event: 'link', url: 'https://auth.example/x' })).toEqual(['Open https://auth.example/x in your browser', 'Waiting for the browser to come back (this view follows by itself)...'])
+  expect(signInLines({ event: 'done', detail: 'the token is stored in /t.json' })).toEqual(['Signed in: the token is stored in /t.json'])
+  expect(signInLines({ event: 'failed', detail: 'bad\x1b[31m' })).toEqual(['Sign-in failed: bad?[31m'])
 })

@@ -36,6 +36,7 @@ llmgate claude         # starts the gateway if it is down, then runs Claude Code
 | `llmgate models offer PROVIDER MODEL...\|all [--yes]` | Offers models the provider itself lists: writes `offer`, each model's limits and, where its endpoints differ from the provider's protocol, `model_protocols`; refuses a model the account's policy disables or that answers only on `/chat/completions`; `all` takes every recommended model. `llmgate models --provider NAME` lists them |
 | `llmgate statusline` | The status line command: model, folder, git branch, a context bar, gateway health, request and repair counts, and today's tokens against the budget |
 | `llmgate login` | GitHub Copilot device login |
+| `llmgate login [--provider NAME] [--json] [--detach] [--progress]` | With `--json` the sign-in prints one JSON event per line (`link` with `url` and `code`, then `done` or `failed`) and never a token. `--detach` starts the sign-in in the background and returns its `link` event at once; `--progress` prints the last event of that background sign-in (`idle` when none runs). The pane's Sign in button uses these |
 | `llmgate --check-config` | Validates the configuration; unknown keys and wrong types are reported with their path |
 
 The launcher passes the gateway key (or a placeholder) as `ANTHROPIC_AUTH_TOKEN`, not `ANTHROPIC_API_KEY`: with the latter Claude Code asks once whether to use a custom API key, with the former (checked on `claude` 2.1.302) it does not. The gateway accepts it as a bearer token.

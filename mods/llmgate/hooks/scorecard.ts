@@ -88,9 +88,9 @@ export function parseCheck(body: string): CheckRow[] {
 
 export type Plan = { argv: string[] } | { refused: string }
 
-export function checkInvocation(bin: string | undefined, config: string | undefined, quick: boolean): Plan {
+export function checkInvocation(bin: string | undefined, config: string | undefined, quick: boolean, provider?: string): Plan {
   if (bin === undefined || bin === '') return { refused: 'LLMGATE_BIN is not set: start Claude Code with llmgate claude' }
-  return { argv: [bin, ...(config ? ['--config', config] : []), 'check', '--json', ...(quick ? ['--quick'] : [])] }
+  return { argv: [bin, ...(config ? ['--config', config] : []), 'check', '--json', ...(quick ? ['--quick'] : []), ...(provider === undefined ? [] : ['--provider', provider])] }
 }
 
 export function checkWarning(quick: boolean, providers: readonly string[]): string {

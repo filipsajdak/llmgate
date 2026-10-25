@@ -5,7 +5,7 @@ import { checkInvocation, checkTable, checkWarning, meterLines, parseCheck, pars
 import type { CheckRow } from './scorecard'
 import type { Quota } from './scorecard'
 import type { Recipe } from './recipes'
-import { addInvocation, followUp, formFor, kinds, nextStep } from './setup'
+import { addInvocation, followUp, formFor, kinds, loginInvocation, nextStep, parseLoginEvent, signInLines } from './setup'
 import type { Form, KindId } from './setup'
 import { agentTable, changes, councilPrompt, describeTargets, describeTotals, providerTable, routeTable, spendTable, unpricedNote, gatewayRoot, invocation, parseCommand, parseOverview, printable, printableBlock, resolveTarget, roles, statusText } from './model'
 import type { Change, Command, Role, Scope, Snapshot } from './model'
@@ -25,6 +25,8 @@ let hasRead = false
 let form: Form | undefined
 let preview = ''
 let next = ''
+let signIn: { name: string; waiting: boolean; lines: string[] } | undefined
+let signInChecked: CheckRow[] = []
 let recipes: Recipe[] = []
 const registered = new Map<string, string>()
 let quotas = new Map<string, Quota>()
@@ -119,10 +121,56 @@ async function syncAgents($: Engine): Promise<void> {
   }
 }
 
+async function startSignIn($: Engine): Promise<void> {
+  if (form === undefined) return
+  const [bin, config] = await Promise.all([$.env.get('LLMGATE_BIN'), $.env.get('LLMGATE_CONFIG')])
+  const plan = loginInvocation(bin, config, form.name, 'detach')
+  signInChecked = []
+  if ('refused' in plan) {
+    signIn = { name: form.name, waiting: false, lines: [plan.refused] }
+  } else {
+    try {
+      const ran = await $.process.run(plan.argv, { timeoutMs: 30000 })
+      const item = parseLoginEvent(ran.stdout)
+      signIn = item === undefined ? { name: form.name, waiting: false, lines: [printable(`llmgate: ${ran.stderr.trim() || 'no sign-in link came back'}`)] } : { name: form.name, waiting: item.event === 'link', lines: signInLines(item) }
+    } catch (error) {
+      signIn = { name: form.name, waiting: false, lines: [printable(`llmgate did not run: ${String(error)}`)] }
+    }
+  }
+  $.ui.invalidate('ui.render')
+}
+
+async function followSignIn($: Engine): Promise<void> {
+  if (signIn === undefined) return
+  const [bin, config] = await Promise.all([$.env.get('LLMGATE_BIN'), $.env.get('LLMGATE_CONFIG')])
+  const plan = loginInvocation(bin, config, signIn.name, 'progress')
+  if ('refused' in plan) return
+  try {
+    const item = parseLoginEvent((await $.process.run(plan.argv)).stdout)
+    if (item === undefined || item.event === 'link' || item.event === 'idle') return
+    signIn = { name: signIn.name, waiting: false, lines: signInLines(item) }
+    if (item.event === 'done') await checkSignedIn($, signIn.name)
+  } catch {
+    return
+  }
+}
+
+async function checkSignedIn($: Engine, name: string): Promise<void> {
+  const [bin, config] = await Promise.all([$.env.get('LLMGATE_BIN'), $.env.get('LLMGATE_CONFIG')])
+  const plan = checkInvocation(bin, config, true, name)
+  if ('refused' in plan) return
+  try {
+    signInChecked = parseCheck((await $.process.run(plan.argv, { timeoutMs: 120000 })).stdout)
+  } catch {
+    signInChecked = []
+  }
+}
+
 async function refresh($: Engine): Promise<void> {
   const before = hasRead ? snapshot : undefined
   snapshot = await load($)
   await syncAgents($)
+  if (signIn?.waiting) await followSignIn($)
   hasRead = true
   await $.ui.status(statusText(snapshot))
   for (const note of changes(before, snapshot)) await $.ui.toast(note)
@@ -473,7 +521,10 @@ export const register: Register = on => {
               </Box>
               {form.kind === 'apikey' && <Text dimColor>The key is never typed here: you enter it hidden in the terminal, next.</Text>}
               {preview !== '' && preview.split('\n').map(row => <Text>{row === '' ? ' ' : row}</Text>)}
-              {next !== '' && <Text bold>Next, type this in the prompt:</Text>}
+              {next !== '' && (form.kind === 'copilot' || form.kind === 'chatgpt') && <Button key="sign-in" label="Sign in" onPress={() => void startSignIn($)} />}
+              {signIn !== undefined && signIn.name === form.name && signIn.lines.map(row => <Text>{row}</Text>)}
+              {signIn !== undefined && signIn.name === form.name && checkTable(signInChecked).map(row => <Text>{row}</Text>)}
+              {next !== '' && <Text bold>Or type this in the prompt:</Text>}
               {next !== '' && <Text>{next}</Text>}
             </Box>
           )}

@@ -90,7 +90,9 @@ struct options {
     [[= flag{"--print-example"}]] [[= prints{document::example}]] bool print_example = false;
     [[= flag{"--print-schema"}]] [[= prints{document::schema}]] bool print_schema = false;
     [[= flag{"--print-config-table"}]] [[= prints{document::config_table}]] bool print_config_table = false;
-    [[= flag{"--json"}]] [[= applies_to{command::env, command::usage, command::doctor, command::quota, command::models, command::recipe, command::check}]] bool as_json = false;
+    [[= flag{"--json"}]] [[= applies_to{command::env, command::usage, command::doctor, command::quota, command::models, command::recipe, command::check, command::login}]] bool as_json = false;
+    [[= flag{"--detach"}]] [[= applies_to{command::login}]] bool detach = false;
+    [[= flag{"--progress"}]] [[= applies_to{command::login}]] bool progress = false;
     [[= flag{"--vscode"}]] [[= applies_to{command::env, command::setup}]] [[= operand{"FILE"}]] std::optional<std::string> vscode{};
     [[= flag{"--service"}]] [[= applies_to{command::setup}]] bool service = false;
     [[= flag{"--dry-run"}]] [[= applies_to{command::setup}]] bool dry_run = false;

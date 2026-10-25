@@ -183,40 +183,65 @@ int serve(gateway::config settings, std::string const& config_path) {
     return serve_on(loop, settings, address->host, *tls_context, *listening, config_path);
 }
 
-int save_login(gateway::copilot_config const& target, std::string const& token) {
-    if (auto const saved = copilot::save_oauth_token(target.token_file, token); !saved) {
-        return fail(exit_runtime, std::format("cannot save the token: {}", saved.error().message()));
+void emit_event(commands::login_event const& item) {
+    std::println("{}", commands::login_event_line(item));
+    std::fflush(stdout);
+}
+
+int login_failed(bool const json, int const code, std::string const& message) {
+    if (!json) {
+        return fail(code, message);
     }
-    std::println("Logged in. The token is stored in {}", target.token_file);
+    emit_event({.event = "failed", .detail = message});
+    return code;
+}
+
+int save_login(gateway::copilot_config const& target, std::string const& token, bool const json) {
+    if (auto const saved = copilot::save_oauth_token(target.token_file, token); !saved) {
+        return login_failed(json, exit_runtime, std::format("cannot save the token: {}", saved.error().message()));
+    }
+    if (json) {
+        emit_event({.event = "done", .detail = std::format("the token is stored in {}", target.token_file)});
+    } else {
+        std::println("Logged in. The token is stored in {}", target.token_file);
+    }
     return 0;
 }
 
-int await_login(async::reactor& loop, tls::client_context const& tls_context, gateway::copilot_config const& target, copilot::device_code const& code) {
+void announce_code(copilot::device_code const& code, bool const json) {
+    if (json) {
+        emit_event({.event = "link", .url = code.verification_uri, .code = code.user_code});
+        return;
+    }
     std::println("Open {} and enter the code {}", code.verification_uri, code.user_code);
     std::println("Waiting for you to authorise...");
     std::fflush(stdout);
+}
+
+int await_login(async::reactor& loop, tls::client_context const& tls_context, gateway::copilot_config const& target, copilot::device_code const& code, bool const json) {
+    announce_code(code, json);
     auto const token = loop.run(copilot::wait_for_authorisation(loop, tls_context, target, code));
     if (!token) {
-        return fail(exit_runtime, std::format("login failed: {}", token.error().message()));
+        return login_failed(json, exit_runtime, std::format("login failed: {}", token.error().message()));
     }
-    return save_login(target, *token);
+    return save_login(target, *token, json);
 }
 
-int request_login(async::reactor& loop, tls::client_context const& tls_context, gateway::copilot_config const& target) {
+int request_login(async::reactor& loop, tls::client_context const& tls_context, gateway::copilot_config const& target, bool const json) {
     auto const code = loop.run(copilot::request_device_code(loop, tls_context, target));
     if (!code) {
-        return fail(exit_runtime, std::format("cannot reach GitHub: {}", code.error().message()));
+        return login_failed(json, exit_runtime, std::format("cannot reach GitHub: {}", code.error().message()));
     }
-    return await_login(loop, tls_context, target, *code);
+    return await_login(loop, tls_context, target, *code, json);
 }
 
-int login_with(gateway::config const& settings, gateway::copilot_config const& target) {
+int login_with(gateway::config const& settings, gateway::copilot_config const& target, bool const json) {
     async::reactor loop;
     auto tls_context = tls::client_context::make(settings.tls_groups);
     if (!tls_context) {
         return exit_runtime;
     }
-    return request_login(loop, *tls_context, target);
+    return request_login(loop, *tls_context, target, json);
 }
 
 constexpr std::string_view no_browser_variable = "LLMGATE_NO_BROWSER";
@@ -231,38 +256,48 @@ void open_in_browser(std::string const& url) {
 #endif
 }
 
-int chatgpt_sign_in(gateway::config const& settings, gateway::chatgpt_config const& target) {
+void announce_browser(std::string const& url, bool const json) {
+    if (json) {
+        emit_event({.event = "link", .url = url});
+    } else {
+        std::println("Sign in with ChatGPT in your browser (it opens by itself on macOS); if it does not, open this address:\n\n  {}\n", url);
+        std::println("Waiting for the browser to come back...");
+        std::fflush(stdout);
+    }
+    open_in_browser(url);
+}
+
+int chatgpt_sign_in(gateway::config const& settings, gateway::chatgpt_config const& target, bool const json) {
     async::reactor loop;
     auto tls_context = tls::client_context::make(settings.tls_groups);
     if (!tls_context) {
         return exit_runtime;
     }
-    chatgpt::sign_in_options options{.announce = [](std::string const& url) {
-        std::println("Sign in with ChatGPT in your browser (it opens by itself on macOS); if it does not, open this address:\n\n  {}\n", url);
-        std::println("Waiting for the browser to come back...");
-        std::fflush(stdout);
-        open_in_browser(url);
-    }};
+    chatgpt::sign_in_options options{.announce = [json](std::string const& url) { announce_browser(url, json); }};
     auto const done = loop.run(chatgpt::sign_in(loop, *tls_context, target, std::move(options)));
     if (!done) {
-        return fail(exit_runtime, std::format("sign-in failed: {}", chatgpt::advice(done.error())));
+        return login_failed(json, exit_runtime, std::format("sign-in failed: {}", chatgpt::advice(done.error())));
     }
-    std::println("Signed in as {}. Tokens saved to {}.", done->account, target.token_file);
     if (!done->plan_enabled) {
-        return fail(exit_runtime, "ChatGPT plan use is not enabled for this account: enable it in ChatGPT settings or use an OpenAI API key instead");
+        return login_failed(json, exit_runtime, "ChatGPT plan use is not enabled for this account: enable it in ChatGPT settings or use an OpenAI API key instead");
+    }
+    if (json) {
+        emit_event({.event = "done", .detail = std::format("signed in as {}; tokens saved to {}", done->account, target.token_file)});
+    } else {
+        std::println("Signed in as {}. Tokens saved to {}.", done->account, target.token_file);
     }
     return 0;
 }
 
-int login(gateway::config const& settings, std::string_view const provider) {
+int login(gateway::config const& settings, std::string_view const provider, bool const json) {
     auto const target = commands::login_choice(settings, provider);
     if (!target) {
-        return fail(exit_config, target.error());
+        return login_failed(json, exit_config, target.error());
     }
     if (auto const* chatgpt_target = std::get_if<gateway::chatgpt_config>(&*target)) {
-        return chatgpt_sign_in(settings, *chatgpt_target);
+        return chatgpt_sign_in(settings, *chatgpt_target, json);
     }
-    return login_with(settings, std::get<gateway::copilot_config>(*target));
+    return login_with(settings, std::get<gateway::copilot_config>(*target), json);
 }
 
 std::expected<std::string, std::string> fetch_listing(tls::group_policy const tls_groups, gateway::provider_config const& provider) {
@@ -648,7 +683,13 @@ int serve_command(commands::context const& where) {
 }
 
 int login_command(commands::context const& where) {
-    return login(where.settings, where.options.provider);
+    if (where.options.detach) {
+        return commands::run_login_detached(where);
+    }
+    if (where.options.progress) {
+        return commands::run_login_progress(where);
+    }
+    return login(where.settings, where.options.provider, where.options.as_json);
 }
 
 int statusline_command(commands::context const& where) {

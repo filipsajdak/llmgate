@@ -316,6 +316,54 @@ test('the Setup view lists providers with their state, and the wizard previews, 
   await ui.unmount()
 })
 
+test('a Copilot provider is signed in from the pane: the link and code appear, the view follows the sign-in and then checks the provider', async ($, on) => {
+  mock.env(on, env)
+  mock.clock(on)
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: setupOverview() } }))
+  const runs: string[][] = []
+  let polls = 0
+  on('process.run', (_, e) => {
+    runs.push([...e.argv])
+    if (e.argv.includes('--detach')) {
+      return { value: { exitCode: 0, stdout: '{"event":"link","url":"https://github.com/login/device","code":"ABCD-1234"}\n', stderr: '' } }
+    }
+    if (e.argv.includes('--progress')) {
+      polls += 1
+      return { value: { exitCode: 0, stdout: polls < 2 ? '{"event":"link","url":"https://github.com/login/device","code":"ABCD-1234"}\n' : '{"event":"done","detail":"the token is stored in /t.json"}\n', stderr: '' } }
+    }
+    if (e.argv.includes('check')) {
+      return { value: { exitCode: 0, stdout: JSON.stringify([{ provider: 'seat', step: 'ping', result: 'pass', milliseconds: 900, detail: '' }]), stderr: '' } }
+    }
+    return { value: { exitCode: 0, stdout: 'written to /c\nok\n', stderr: '' } }
+  })
+  on('command.register', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc-123' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'llmgate', args: 'setup' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'kind-copilot' })
+  await ui.input({ key: 'field-name', text: 'seat' })
+  await ui.press({ key: 'apply' })
+  await ui.press({ key: 'sign-in' })
+
+  await must(ui, { type: 'Text', text: 'Open https://github.com/login/device and enter the code ABCD-1234' })
+  await $.command.run({ command: 'llmgate', args: 'status' })
+  await must(ui, { type: 'Text', text: 'Waiting for you to authorise (this view follows by itself)...' })
+  await $.command.run({ command: 'llmgate', args: 'status' })
+  await must(ui, { type: 'Text', text: 'Signed in: the token is stored in /t.json' })
+  await must(ui, { type: 'Text', text: /seat +ping +pass/ })
+
+  const base = ['/opt/llmgate', '--config', '/etc/llmgate.jsonc']
+  expect(runs).toContainEqual([...base, 'login', '--provider', 'seat', '--json', '--detach'])
+  expect(runs).toContainEqual([...base, 'check', '--json', '--quick', '--provider', 'seat'])
+  await ui.unmount()
+})
+
 test('an API key provider names the secret command and never asks for the key in the pane', async ($, on) => {
   mock.env(on, env)
   mock.clock(on)
