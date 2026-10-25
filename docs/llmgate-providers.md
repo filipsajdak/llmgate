@@ -54,6 +54,13 @@ Claude Code without knowing its protocol or model names, and chooses which model
 | 6 | `@provider: task` and `@provider/model: task` hand one task to the `llmgate:at` agent on that target. The Now tab's `use` buttons are the Targets picker; command completion is not available in the mod API |
 | 7 | `routes_by_signal` (image, long) with `long_prompt_bytes`; the session view and status line name the signal. Plan mode is not a signal (E4) |
 
+### Live check of the prefix (2026-10-25, owner's ChatGPT plan, headless `claude -p`)
+
+`@codex/gpt-6-luna: Reply with exactly the word pong.` made the main session dispatch `llmgate:at`; Claude Code logged the
+model `claude-gpt-6-luna@codex` for `agent:custom:llmgate:at`, the agent answered `pong`, and the scorecard showed two
+`subagent` requests on provider `codex` beside the main session's Claude requests. Not run: the pane's screens on a
+terminal and the customer's Copilot seat, which need the owner's own sign-in.
+
 ## Slices (each carries `Bet: BET-8`)
 
 | Slice | Content | Gate |
