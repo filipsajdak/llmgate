@@ -313,11 +313,16 @@ export function resolveTarget(targets: readonly Target[], word: string): Resolve
   return { refused: `no target ${word} (see /llmgate targets)` }
 }
 
+function routedBy(source: string): string {
+  if (source.startsWith('signal_')) return ` (${source.slice('signal_'.length)})`
+  return source === 'class_route' ? ' (class route)' : ''
+}
+
 export function statusText(found: Snapshot): string {
   if (found.error) return found.error
   const served = found.served
   if (served === undefined) return 'no reply yet'
-  const marker = served.fallback ? ' (fallback)' : served.switched ? ' (switched)' : ''
+  const marker = served.fallback ? ' (fallback)' : served.switched ? ' (switched)' : routedBy(served.source)
   return `${served.provider} ${served.upstream}${marker}`
 }
 

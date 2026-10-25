@@ -233,19 +233,44 @@ std::set<std::string> target_ids_of(std::map<std::string, provider_config> const
     return ids;
 }
 
-std::string class_route_problem(config const& settings, std::map<std::string, provider_config> const& providers) {
-    auto const ids = target_ids_of(providers);
-    for (auto const& [klass, entries] : settings.routes_by_class) {
-        if (std::ranges::find(request_classes, klass) == request_classes.end()) {
-            return std::format("routes_by_class: '{}' is not a request class (subagent, workflow, compaction, auxiliary)", plain(klass));
-        }
-        for (auto const& entry : entries) {
-            if (!providers.contains(entry) && !ids.contains(entry)) {
-                return std::format("routes_by_class {}: '{}' is neither a provider nor a target id", klass, plain(entry));
-            }
+constexpr auto request_signals = std::to_array<std::string_view>({"image", "long"});
+
+std::string route_entries_problem(std::string_view const table, std::string const& key, std::vector<std::string> const& entries, std::map<std::string, provider_config> const& providers,
+                                  std::set<std::string> const& ids) {
+    for (auto const& entry : entries) {
+        if (!providers.contains(entry) && !ids.contains(entry)) {
+            return std::format("{} {}: '{}' is neither a provider nor a target id", table, key, plain(entry));
         }
     }
     return {};
+}
+
+std::string route_table_problem(std::string_view const table, std::map<std::string, std::vector<std::string>> const& routes, std::span<std::string_view const> const known,
+                                std::map<std::string, provider_config> const& providers, std::set<std::string> const& ids) {
+    for (auto const& [key, entries] : routes) {
+        if (std::ranges::find(known, key) == known.end()) {
+            return std::format("{}: '{}' is not a known key", table, plain(key));
+        }
+        if (auto const problem = route_entries_problem(table, key, entries, providers, ids); !problem.empty()) {
+            return problem;
+        }
+    }
+    return {};
+}
+
+std::string class_route_problem(config const& settings, std::map<std::string, provider_config> const& providers) {
+    auto const ids = target_ids_of(providers);
+    if (auto const problem = route_table_problem("routes_by_class", settings.routes_by_class, request_classes, providers, ids); !problem.empty()) {
+        return problem;
+    }
+    return route_table_problem("routes_by_signal", settings.routes_by_signal, request_signals, providers, ids);
+}
+
+std::string signal_of(std::string_view const body, std::uint64_t const long_bytes) {
+    if (body.contains(R"("type":"image")") || body.contains(R"("type": "image")")) {
+        return "image";
+    }
+    return body.size() > long_bytes ? "long" : std::string{};
 }
 
 bool tools_fit(std::vector<std::string> const& tools) {
@@ -1316,18 +1341,36 @@ private:
         auto const configured = selection::order_for(routes_, role, declared_);
         auto const chosen = control::resolve({.requested = note.requested, .role = role, .session = session_for(incoming, note)}, targets_, overrides_, configured);
         detail::planned_route out{.source = std::string{reflect::enum_name(chosen.source)}};
-        auto const by_class = settings_.routes_by_class.find(note.request_class);
-        if (chosen.source == control::via::config && by_class != settings_.routes_by_class.end()) {
-            out.source = "class_route";
-            for (auto const& entry : by_class->second) {
-                add_class_step(out, entry);
+        if (chosen.source == control::via::config) {
+            if (auto const picked = picked_route(incoming, note)) {
+                out.source = picked->source;
+                for (auto const& entry : *picked->entries) {
+                    add_class_step(out, entry);
+                }
+                return out;
             }
-            return out;
         }
         for (auto const& item : chosen.steps) {
             out.steps.push_back({.index = index_of(item.provider), .upstream = item.upstream});
         }
         return out;
+    }
+
+    struct picked {
+        std::string source{};
+        std::vector<std::string> const* entries = nullptr;
+    };
+
+    std::optional<picked> picked_route(httpio::request const& incoming, detail::request_note const& note) const {
+        if (auto const by_class = settings_.routes_by_class.find(note.request_class); by_class != settings_.routes_by_class.end()) {
+            return picked{.source = "class_route", .entries = &by_class->second};
+        }
+        auto const signal = signal_of(incoming.body, settings_.long_prompt_bytes);
+        auto const by_signal = settings_.routes_by_signal.find(signal);
+        if (signal.empty() || by_signal == settings_.routes_by_signal.end()) {
+            return std::nullopt;
+        }
+        return picked{.source = "signal_" + signal, .entries = &by_signal->second};
     }
 
     void add_class_step(detail::planned_route& out, std::string const& entry) const {

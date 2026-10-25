@@ -140,6 +140,8 @@ test('resolveTarget takes a full id, or an upstream name that names one target',
 test('statusText names the provider and model of the last reply with its markers, or the problem', () => {
   expect(statusText(found)).toBe('work sonnet-9 (fallback)')
   expect(statusText({ ...found, served: { ...found.served!, fallback: false, switched: true } })).toBe('work sonnet-9 (switched)')
+  expect(statusText({ ...found, served: { ...found.served!, fallback: false, switched: false, source: 'signal_image' } })).toBe('work sonnet-9 (image)')
+  expect(statusText({ ...found, served: { ...found.served!, fallback: false, switched: false, source: 'class_route' } })).toBe('work sonnet-9 (class route)')
   expect(statusText({ ...found, served: undefined })).toBe('no reply yet')
   expect(statusText({ ...found, error: 'the gateway answered 404' })).toBe('the gateway answered 404')
 })
