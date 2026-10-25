@@ -11,7 +11,7 @@ import llmgate.text;
 export namespace llmgate::doctor {
 
 enum class status { pass, warn, fail };
-enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, models, ledger, budget, quota, subagents, agent_targets };
+enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, models, ledger, budget, quota, subagents, agent_targets, model_limits };
 static_assert(reflect::unique_values<check>());
 
 enum class port_state { free, ours, foreign };
@@ -85,6 +85,7 @@ struct facts {
     std::string models_error{};
     bool subagent_model_forced = false;
     std::vector<std::string> dangling_targets{};
+    std::vector<std::string> unknown_limits{};
 };
 
 }  // namespace llmgate::doctor
@@ -265,6 +266,21 @@ constexpr std::optional<finding> agent_targets_finding(facts const& seen) {
     return make(check::agent_targets, status::warn, detail, "llmgate agents set NAME TARGET (or agents remove NAME, rules set AGENT TARGET); llmgate targets lists the targets");
 }
 
+constexpr std::uint64_t assumed_window_tokens = 200000;
+
+constexpr std::optional<finding> model_limits_finding(facts const& seen) {
+    if (seen.unknown_limits.empty()) {
+        return std::nullopt;
+    }
+    std::string detail;
+    text::append_all(detail, "no context window is recorded for:");
+    for (auto const& item : seen.unknown_limits) {
+        text::append_all(detail, " ", item, ";");
+    }
+    text::append_all(detail, " Claude Code assumes ", text::decimal(assumed_window_tokens), " tokens for a model it does not know and compacts by that");
+    return make(check::model_limits, status::warn, detail, "llmgate models offer PROVIDER MODEL... records the limits the provider reports");
+}
+
 constexpr finding static_credential_finding(facts const& seen) {
     if (seen.static_token_variable.empty()) {
         return make(check::credential, status::warn, "no upstream credential is configured", "set copilot.token_file, or static_token_env for another upstream");
@@ -407,6 +423,7 @@ constexpr std::vector<finding> diagnose(facts const& seen) {
     detail::add(out, detail::quota_finding(seen));
     detail::add(out, detail::subagent_finding(seen));
     detail::add(out, detail::agent_targets_finding(seen));
+    detail::add(out, detail::model_limits_finding(seen));
     return out;
 }
 

@@ -39,7 +39,7 @@ label="doctor warns for the disabled and the unlisted mapped model, not for the 
 run doctor > "$work/doctor.out" 2>&1 || true
 check sh -c "grep -q 'maps claude-off to up-off, which is disabled' '$work/doctor.out' && grep -q 'maps claude-gone to up-gone, which is not listed' '$work/doctor.out' && ! grep -q 'maps claude-on' '$work/doctor.out'"
 label="doctor --offline does not list models"
-check sh -c "! '$binary' --config '$work/config.jsonc' doctor --offline 2>&1 | grep -q 'models'"
+check sh -c "! '$binary' --config '$work/config.jsonc' doctor --offline 2>&1 | grep -q 'maps claude'"
 
 label="models offer previews the offer, the limits and the protocol the model's endpoints need"
 run models offer p up-on > "$work/offer.out" 2>&1 || true

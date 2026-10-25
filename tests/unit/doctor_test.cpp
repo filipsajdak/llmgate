@@ -71,6 +71,19 @@ const suite doctor_suite = [] {
         expect(exit_code(diagnose(seen)) == 0);
     };
 
+    "capability_an_offered_non_claude_model_without_a_known_window_is_a_warning_naming_it_and_the_fix"_test = [] {
+        auto seen = healthy();
+        seen.unknown_limits = {"copilot/gpt-6-luna", "local/qwen-4"};
+
+        auto const findings = diagnose(seen);
+        auto const found = std::ranges::find(findings, std::string{"model-limits"}, &finding::check);
+
+        expect(found != findings.end() && found->status == status::warn);
+        expect(found->detail.contains("copilot/gpt-6-luna") && found->detail.contains("200000") && found->remedy.contains("models offer"));
+        expect(!std::ranges::any_of(diagnose(healthy()), [](finding const& item) { return item.check == "model-limits"; }));
+        expect(exit_code(findings) == 0);
+    };
+
     "capability_a_healthy_setup_passes_every_check_and_exits_zero"_test = [] {
         auto const found = diagnose(healthy());
 

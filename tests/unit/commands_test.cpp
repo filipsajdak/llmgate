@@ -254,13 +254,18 @@ const suite commands_suite = [] {
 
     "capability_the_profile_picker_rows_are_the_catalogue_targets_with_their_labels"_test = [] {
         gateway::config built;
-        built.providers["work"] = {.base_url = "http://127.0.0.1:1", .offer = {"claude-x"}, .labels = {"customer"}, .models = {{"claude-sonnet-5-5", "gpt-6-sol"}}};
+        built.providers["work"] = {.base_url = "http://127.0.0.1:1",
+                                   .limits = {{"gpt-6-sol", {.context_tokens = 272000}}},
+                                   .offer = {"claude-x"},
+                                   .labels = {"customer"},
+                                   .models = {{"claude-sonnet-5-5", "gpt-6-sol"}}};
 
         auto const rows = commands::picker_rows_of(built);
 
         expect(rows.size() == 2_u);
-        expect(rows.front().model == "claude-gpt-6-sol@work" && rows.front().label == "gpt-6-sol (work) [customer]" && rows.front().description == "served by the provider work");
-        expect(rows.back().model == "claude-x@work");
+        expect(rows.front().model == "claude-gpt-6-sol@work" && rows.front().label == "gpt-6-sol (work) [customer]" &&
+               rows.front().description == "served by the provider work, 272k tokens of context");
+        expect(rows.back().model == "claude-x@work" && rows.back().description == "served by the provider work");
     };
 
     "capability_the_copilot_target_can_be_chosen_by_provider_name_and_defaults_to_the_first_login"_test = [] {
