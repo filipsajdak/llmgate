@@ -17,6 +17,7 @@ import llmgate.copilot;
 import llmgate.discovery;
 import llmgate.model_list;
 import llmgate.offer;
+import llmgate.text;
 import llmgate.gateway;
 import llmgate.httpio;
 import llmgate.json;
@@ -666,9 +667,45 @@ int print_listing(commands::context const& where, std::string const& body) {
     return 0;
 }
 
+constexpr std::string_view list_usage = "usage: llmgate models list PROVIDER [--json]";
+
+std::string candidates_text(std::vector<offer::candidate> const& rows) {
+    std::string out;
+    for (auto const& row : rows) {
+        text::append_all(out, row.offered ? "[x] " : "[ ] ", model_list::printable(row.id, model_list::longest_text), "  ", row.protocol, "  context ", text::decimal(row.context), "  ", row.policy, row.recommended ? "  recommended" : "", "\n");
+    }
+    return out;
+}
+
+int list_command(commands::context const& where) {
+    auto const& words = where.options.passthrough;
+    if (words.size() != 2) {
+        return fail(exit_usage, list_usage);
+    }
+    auto const chosen = commands::models_choice(where.settings, words[1]);
+    if (!chosen) {
+        return fail(exit_config, chosen.error());
+    }
+    auto const listed = listed_models(where, chosen->second);
+    if (!listed) {
+        return fail(exit_runtime, listed.error());
+    }
+    auto const rows = offer::candidates(chosen->second, *listed);
+    std::print("{}", where.options.as_json ? offer::candidates_json(rows) + "\n" : candidates_text(rows));
+    return 0;
+}
+
+int models_subcommand(commands::context const& where) {
+    auto const& first = where.options.passthrough.front();
+    if (first == "offer") {
+        return offer_command(where);
+    }
+    return first == "list" ? list_command(where) : edit_command(where);
+}
+
 int models_command(commands::context const& where) {
     if (!where.options.passthrough.empty()) {
-        return where.options.passthrough.front() == "offer" ? offer_command(where) : edit_command(where);
+        return models_subcommand(where);
     }
     auto const chosen = commands::models_choice(where.settings, where.options.provider);
     if (!chosen) {

@@ -5,8 +5,8 @@ import { checkInvocation, checkTable, checkWarning, meterLines, parseCheck, pars
 import type { CheckRow } from './scorecard'
 import type { Quota } from './scorecard'
 import type { Recipe } from './recipes'
-import { addInvocation, followUp, formFor, kinds, loginInvocation, nextStep, parseLoginEvent, signInLines } from './setup'
-import type { Form, KindId } from './setup'
+import { addInvocation, candidateLabel, candidatesInvocation, canTick, followUp, formFor, kinds, loginInvocation, nextStep, offerInvocation, parseCandidates, parseLoginEvent, signInLines } from './setup'
+import type { Candidate, Form, KindId } from './setup'
 import { agentTable, changes, councilPrompt, describeTargets, describeTotals, providerTable, routeTable, spendTable, unpricedNote, gatewayRoot, invocation, parseCommand, parseOverview, printable, printableBlock, resolveTarget, roles, statusText } from './model'
 import type { Change, Command, Role, Scope, Snapshot } from './model'
 
@@ -27,6 +27,7 @@ let preview = ''
 let next = ''
 let signIn: { name: string; waiting: boolean; lines: string[] } | undefined
 let signInChecked: CheckRow[] = []
+let choosing: { provider: string; rows: Candidate[]; ticked: Set<string>; note: string } | undefined
 let recipes: Recipe[] = []
 const registered = new Map<string, string>()
 let quotas = new Map<string, Quota>()
@@ -119,6 +120,46 @@ async function syncAgents($: Engine): Promise<void> {
       registered.delete(agent.name)
     }
   }
+}
+
+async function chooseModels($: Engine, provider: string): Promise<void> {
+  const [bin, config] = await Promise.all([$.env.get('LLMGATE_BIN'), $.env.get('LLMGATE_CONFIG')])
+  const plan = candidatesInvocation(bin, config, provider)
+  if ('refused' in plan) {
+    choosing = { provider, rows: [], ticked: new Set(), note: plan.refused }
+  } else {
+    try {
+      const ran = await $.process.run(plan.argv, { timeoutMs: 60000 })
+      const rows = ran.exitCode === 0 ? parseCandidates(ran.stdout) : []
+      choosing = { provider, rows, ticked: new Set(rows.filter(row => row.offered).map(row => row.id)), note: rows.length === 0 ? printableBlock((ran.stderr || 'the provider listed no models').replace(/^llmgate: /, '').trim()) : '' }
+    } catch (error) {
+      choosing = { provider, rows: [], ticked: new Set(), note: printable(`llmgate did not run: ${String(error)}`) }
+    }
+  }
+  $.ui.invalidate('ui.render')
+}
+
+function tick(item: Candidate): void {
+  if (choosing === undefined || !canTick(item)) return
+  if (choosing.ticked.has(item.id)) choosing.ticked.delete(item.id)
+  else choosing.ticked.add(item.id)
+}
+
+async function applyModels($: Engine): Promise<void> {
+  if (choosing === undefined) return
+  const [bin, config] = await Promise.all([$.env.get('LLMGATE_BIN'), $.env.get('LLMGATE_CONFIG')])
+  const plan = offerInvocation(bin, config, choosing.provider, choosing.rows.filter(row => choosing?.ticked.has(row.id)).map(row => row.id))
+  if ('refused' in plan) {
+    choosing.note = plan.refused
+  } else {
+    try {
+      const ran = await $.process.run(plan.argv)
+      choosing.note = printableBlock((ran.exitCode === 0 ? 'The models are offered; the /model list follows after the next refresh.' : ran.stderr.replace(/^llmgate: /, '') || `exit ${ran.exitCode}`).trim())
+    } catch (error) {
+      choosing.note = printable(`llmgate did not run: ${String(error)}`)
+    }
+  }
+  await refresh($)
 }
 
 async function startSignIn($: Engine): Promise<void> {
@@ -498,6 +539,25 @@ export const register: Register = on => {
           {header}
           <Text bold>Providers</Text>
           {lines(providerTable(snapshot.providers))}
+          <Text> </Text>
+          <Text bold>Choose the models of a provider:</Text>
+          <Box flexDirection="row" columnGap={2}>
+            {snapshot.providers.filter(item => item.ready !== false).map(item => (
+              <Button key={`models-${item.name}`} label={item.name} plain dimColor={choosing?.provider !== item.name} onPress={() => void chooseModels($, item.name)} />
+            ))}
+          </Box>
+          {choosing !== undefined && (
+            <Box flexDirection="column">
+              {choosing.rows.map(row => (
+                <Button key={`tick-${row.id}`} label={candidateLabel(row, choosing?.ticked.has(row.id) === true)} plain dimColor={!canTick(row)} onPress={() => {
+                  tick(row)
+                  redraw()
+                }} />
+              ))}
+              {choosing.rows.length > 0 && <Button key="models-apply" label="Apply" onPress={() => void applyModels($)} />}
+              {choosing.note !== '' && <Text>{choosing.note}</Text>}
+            </Box>
+          )}
           <Text> </Text>
           <Text bold>Add a provider: what kind is it?</Text>
           <Box flexDirection="row" columnGap={2}>

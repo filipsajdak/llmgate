@@ -71,6 +71,38 @@ suite<"offer"> tests = [] {
         expect(!of::recommended(hidden, gw::wire_protocol::anthropic));
     };
 
+    "capability_the_candidates_list_every_model_with_its_wire_policy_and_whether_it_is_already_offered"_test = [] {
+        auto provider = copilot_seat();
+        provider.offer = {"gpt-6-luna"};
+        provider.models = {{"claude-sonnet-5-5", "claude-sonnet-5.5"}};
+
+        auto const rows = of::candidates(provider, seat());
+
+        expect(rows.size() == 5_u);
+        expect(rows.at(0).id == "claude-sonnet-5.5" && rows.at(0).protocol == "anthropic" && rows.at(0).recommended && rows.at(0).offered);
+        expect(rows.at(1).id == "gpt-6-luna" && rows.at(1).protocol == "openai_responses" && rows.at(1).recommended && rows.at(1).offered);
+        expect(rows.at(2).policy == "disabled" && !rows.at(2).recommended && !rows.at(2).offered);
+        expect(rows.at(3).protocol == "unsupported" && !rows.at(3).recommended);
+        expect(rows.at(4).policy == "unknown" && rows.at(4).context == 0_u && rows.at(4).recommended);
+        auto const text = of::candidates_json(rows);
+        expect(text.starts_with("[{") && text.contains(R"("id":"gpt-6-luna")") && text.contains(R"("recommended":true)") && text.contains(R"("context":400000)")) << text;
+    };
+
+    "limit_a_model_id_that_could_be_read_as_an_option_or_holds_odd_characters_is_never_listed_or_offered"_test = [] {
+        auto bad = seat();
+        bad.push_back({.id = "--config=/tmp/x", .context = window});
+        bad.push_back({.id = "has space"});
+        bad.push_back({.id = "esc\x1b[31m"});
+
+        auto const rows = of::candidates(copilot_seat(), bad);
+        auto const planned = of::plan("work", copilot_seat(), bad, {"--config=/tmp/x"});
+
+        expect(rows.size() == 5_u);
+        expect(std::ranges::none_of(rows, [](of::candidate const& row) { return row.id.starts_with('-') || row.id.contains(' ') || row.id.contains('\x1b'); }));
+        expect(!planned.has_value() && planned.error().contains("not a plain model name"));
+        expect(of::valid_id("claude-sonnet-5.5") && of::valid_id("gpt-6-luna@v2:free/x") && !of::valid_id("-x") && !of::valid_id("") && !of::valid_id("a b"));
+    };
+
     "capability_offering_a_claude_and_a_gpt_model_writes_the_offer_the_limits_and_only_the_differing_protocol"_test = [] {
         auto const planned = of::plan("work", copilot_seat(), seat(), {"claude-sonnet-5.5", "gpt-6-luna"});
 

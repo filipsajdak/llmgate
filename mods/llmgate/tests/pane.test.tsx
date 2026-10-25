@@ -364,6 +364,46 @@ test('a Copilot provider is signed in from the pane: the link and code appear, t
   await ui.unmount()
 })
 
+test('the model list of a provider is ticked in the pane and applied as one models offer', async ($, on) => {
+  mock.env(on, env)
+  mock.clock(on)
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: setupOverview() } }))
+  const runs: string[][] = []
+  const listing = JSON.stringify([
+    { id: 'claude-sonnet-5.5', context: 328000, prompt: 200000, output: 128000, policy: 'disabled', protocol: 'anthropic', recommended: false, offered: false },
+    { id: 'gpt-6-luna', context: 400000, prompt: 272000, output: 128000, policy: 'enabled', protocol: 'openai_responses', recommended: true, offered: false },
+    { id: 'gpt-5.4-nano', context: 400000, prompt: 272000, output: 128000, policy: 'enabled', protocol: 'openai_responses', recommended: true, offered: true },
+  ])
+  on('process.run', (_, e) => {
+    runs.push([...e.argv])
+    return { value: { exitCode: 0, stdout: e.argv.includes('list') ? listing : 'written to /c\nok\n', stderr: '' } }
+  })
+  on('command.register', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc-123' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'llmgate', args: 'setup' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'models-work' })
+  await must(ui, { type: 'Button', key: 'tick-gpt-6-luna', label: '[ ] gpt-6-luna  openai_responses  400k tokens  recommended' })
+  await must(ui, { type: 'Button', key: 'tick-gpt-5.4-nano', label: '[x] gpt-5.4-nano  openai_responses  400k tokens  recommended' })
+  await must(ui, { type: 'Button', key: 'tick-claude-sonnet-5.5', label: '[ ] claude-sonnet-5.5  anthropic  328k tokens  disabled by the account' })
+
+  await ui.press({ key: 'tick-gpt-6-luna' })
+  await ui.press({ key: 'tick-claude-sonnet-5.5' })
+  await must(ui, { type: 'Button', key: 'tick-gpt-6-luna', label: '[x] gpt-6-luna  openai_responses  400k tokens  recommended' })
+  await must(ui, { type: 'Button', key: 'tick-claude-sonnet-5.5', label: '[ ] claude-sonnet-5.5  anthropic  328k tokens  disabled by the account' })
+  await ui.press({ key: 'models-apply' })
+
+  expect(runs).toContainEqual(['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'models', 'list', 'work', '--json'])
+  expect(runs).toContainEqual(['/opt/llmgate', '--config', '/etc/llmgate.jsonc', 'models', 'offer', 'work', 'gpt-6-luna', 'gpt-5.4-nano', '--yes'])
+  await ui.unmount()
+})
+
 test('an API key provider names the secret command and never asks for the key in the pane', async ($, on) => {
   mock.env(on, env)
   mock.clock(on)

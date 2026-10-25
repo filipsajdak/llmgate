@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { addInvocation, followUp, formFor, kinds, loginInvocation, nextStep, parseLoginEvent, signInLines, validateForm } from '../hooks/setup'
+import { addInvocation, candidateLabel, candidatesInvocation, followUp, formFor, kinds, loginInvocation, nextStep, offerInvocation, parseCandidates, parseLoginEvent, signInLines, validateForm } from '../hooks/setup'
 
 const bin = '/opt/llmgate'
 const config = '/etc/all.jsonc'
@@ -78,4 +78,41 @@ test('the pane lines for a sign-in name the link and the code, the result, or th
   expect(signInLines({ event: 'link', url: 'https://auth.example/x' })).toEqual(['Open https://auth.example/x in your browser', 'Waiting for the browser to come back (this view follows by itself)...'])
   expect(signInLines({ event: 'done', detail: 'the token is stored in /t.json' })).toEqual(['Signed in: the token is stored in /t.json'])
   expect(signInLines({ event: 'failed', detail: 'bad\x1b[31m' })).toEqual(['Sign-in failed: bad?[31m'])
+})
+
+const listing = JSON.stringify([
+  { id: 'claude-sonnet-5.5', context: 328000, prompt: 200000, output: 128000, policy: 'disabled', protocol: 'anthropic', recommended: false, offered: false },
+  { id: 'gpt-6-luna', context: 400000, prompt: 272000, output: 128000, policy: 'enabled', protocol: 'openai_responses', recommended: true, offered: true },
+  { id: 'old-chat', context: 0, prompt: 0, output: 0, policy: 'unknown', protocol: 'unsupported', recommended: false, offered: false },
+])
+
+test('the model list is read from llmgate models list, and a reply that is not a list is empty', () => {
+  expect(candidatesInvocation(bin, config, 'work')).toEqual({ argv: [bin, '--config', config, 'models', 'list', 'work', '--json'] })
+  expect(parseCandidates(listing).map(c => c.id)).toEqual(['claude-sonnet-5.5', 'gpt-6-luna', 'old-chat'])
+  expect(parseCandidates('nope')).toEqual([])
+  expect(parseCandidates('{"id":"x"}')).toEqual([])
+})
+
+test('each row says whether it is ticked, its protocol, its window and why it cannot be', () => {
+  const rows = parseCandidates(listing)
+  expect(candidateLabel(rows[1], true)).toBe('[x] gpt-6-luna  openai_responses  400k tokens  recommended')
+  expect(candidateLabel(rows[0], false)).toBe('[ ] claude-sonnet-5.5  anthropic  328k tokens  disabled by the account')
+  expect(candidateLabel(rows[2], false)).toBe('[ ] old-chat  not translated yet  window unknown')
+})
+
+test('offering the ticked models is one llmgate models offer argv, and nothing ticked is refused', () => {
+  expect(offerInvocation(bin, config, 'work', ['gpt-6-luna', 'claude-sonnet-5.5'])).toEqual({
+    argv: [bin, '--config', config, 'models', 'offer', 'work', 'gpt-6-luna', 'claude-sonnet-5.5', '--yes'],
+  })
+  expect(offerInvocation(bin, config, 'work', [])).toEqual({ refused: 'tick at least one model' })
+})
+
+test('a model id that could be read as an option or holds odd characters is dropped from the list and refused for an offer', () => {
+  const odd = JSON.stringify([
+    { id: '--config=/tmp/x', context: 0, policy: 'enabled', protocol: 'anthropic', recommended: true, offered: false },
+    { id: 'has space', context: 0, policy: 'enabled', protocol: 'anthropic', recommended: true, offered: false },
+    { id: 'fine-1.5', context: 0, policy: 'enabled', protocol: 'anthropic', recommended: true, offered: false },
+  ])
+  expect(parseCandidates(odd).map(c => c.id)).toEqual(['fine-1.5'])
+  expect(offerInvocation(bin, config, 'work', ['--config=/tmp/x'])).toEqual({ refused: 'a model name may hold letters, digits and . _ : / @ + - only, and must not start with -' })
 })
