@@ -529,7 +529,7 @@ test('the mod registers the configured agent types once and a spawn rule sets th
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.command.run({ command: 'llmgate', args: 'status' })
   await $.command.run({ command: 'llmgate', args: 'status' })
-  expect(registered).toEqual([{ name: 'reviewer', model: 'claude-gpt-6-sol@codex', description: 'A second opinion', prompt: 'Review it.', tools: ['Read', 'Grep'] }])
+  expect(registered.filter(item => item.name !== 'at')).toEqual([{ name: 'reviewer', model: 'claude-gpt-6-sol@codex', description: 'A second opinion', prompt: 'Review it.', tools: ['Read', 'Grep'] }])
 
   await $.agent.spawn({ prompt: 'look around', subagentType: 'Explore' })
   await $.agent.spawn({ prompt: 'plan it', subagentType: 'Plan' })
@@ -629,6 +629,42 @@ test('the quick check asks first, then runs llmgate check and shows the table', 
   await ui.unmount()
 })
 
+test('an @target: prefix hands the task to the at agent, whose one spawn runs on that target and then falls back to the session model', async ($, on) => {
+  mock.env(on, env)
+  mock.clock(on)
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: overview('work') } }))
+  const registered: { name: string; model?: string }[] = []
+  on('agent.register', (_, e) => {
+    registered.push({ name: e.name, model: e.model })
+    return { value: { agent: `llmgate:${e.name}` } }
+  })
+  const models: (string | undefined)[] = []
+  on('agent.spawn', (_, e) => {
+    models.push(e.model)
+    return { model: e.model ?? 'main', agentId: 'a1' }
+  })
+  on('command.register', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc-123' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('prompt.submit', (_, e) => ({ text: e.text }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'llmgate', args: 'status' })
+  const handed = await $.prompt.submit({ text: '@work: check the parser' })
+  const refused = await $.prompt.submit({ text: '@nowhere: x' })
+  await $.agent.spawn({ prompt: 'check the parser', subagentType: 'llmgate:at' })
+  await $.agent.spawn({ prompt: 'again', subagentType: 'llmgate:at' })
+
+  expect(registered).toContainEqual({ name: 'at', model: undefined })
+  expect(handed.text).toContain('llmgate:at')
+  expect(handed.text.endsWith('check the parser')).toBe(true)
+  expect(refused.text).toBe('@nowhere: x')
+  expect(models).toEqual(['claude-sonnet-9@work', undefined])
+})
+
 test('a prompt that starts with council: is rewritten to dispatch the registered council members, and other prompts pass untouched', async ($, on) => {
   mock.env(on, env)
   mock.clock(on)
@@ -656,7 +692,7 @@ test('a prompt that starts with council: is rewritten to dispatch the registered
   const rewritten = await $.prompt.submit({ text: 'council: should we split the service?' })
   const plain = await $.prompt.submit({ text: 'just a normal question' })
 
-  expect(registered).toEqual([{ name: 'council-chatgpt', maxTurns: 8 }, { name: 'reviewer', maxTurns: undefined }])
+  expect(registered.filter(item => item.name !== 'at')).toEqual([{ name: 'council-chatgpt', maxTurns: 8 }, { name: 'reviewer', maxTurns: undefined }])
   expect(rewritten.text).toContain('llmgate:council-chatgpt')
   expect(rewritten.text).not.toContain('reviewer')
   expect(rewritten.text.endsWith('should we split the service?')).toBe(true)

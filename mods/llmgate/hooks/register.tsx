@@ -7,7 +7,7 @@ import type { Quota } from './scorecard'
 import type { Recipe } from './recipes'
 import { addInvocation, candidateLabel, candidatesInvocation, canTick, followUp, formFor, kinds, loginInvocation, nextStep, offerInvocation, parseCandidates, parseLoginEvent, signInLines } from './setup'
 import type { Candidate, Form, KindId } from './setup'
-import { agentTable, changes, councilPrompt, describeTargets, describeTotals, providerTable, routeTable, spendTable, unpricedNote, gatewayRoot, invocation, parseCommand, parseOverview, printable, printableBlock, resolveTarget, roles, statusText } from './model'
+import { agentTable, atPrompt, changes, councilPrompt, parsePrefix, describeTargets, describeTotals, providerTable, routeTable, spendTable, unpricedNote, gatewayRoot, invocation, parseCommand, parseOverview, printable, printableBlock, resolveTarget, roles, statusText } from './model'
 import type { Change, Command, Role, Scope, Snapshot } from './model'
 
 const PANE = 'llmgate'
@@ -27,6 +27,8 @@ let preview = ''
 let next = ''
 let signIn: { name: string; waiting: boolean; lines: string[] } | undefined
 let signInChecked: CheckRow[] = []
+let pendingTarget: string | undefined
+const atAgent = 'at'
 let choosing: { provider: string; rows: Candidate[]; ticked: Set<string>; note: string } | undefined
 let recipes: Recipe[] = []
 const registered = new Map<string, string>()
@@ -108,8 +110,19 @@ function scoreText(): string[] {
   ]
 }
 
+async function registerAt($: Engine): Promise<void> {
+  if (registered.has(atAgent)) return
+  try {
+    await $.agent.register({ name: atAgent, description: 'Runs one task on the model the user named with an @target: prefix', prompt: 'Do the task you are given and report the result plainly.' })
+    registered.set(atAgent, atAgent)
+  } catch {
+    registered.delete(atAgent)
+  }
+}
+
 async function syncAgents($: Engine): Promise<void> {
   rules = new Map(snapshot.spawnRules.map(rule => [rule.agent, rule.target]))
+  await registerAt($)
   for (const agent of snapshot.agents) {
     const signature = JSON.stringify([agent.target, agent.description, agent.prompt, agent.tools, agent.maxTurns])
     if (registered.get(agent.name) === signature) continue
@@ -368,11 +381,25 @@ export const register: Register = on => {
   })
 
   on('agent.spawn', async ($, e, next) => {
+    if (e.subagentType.replace(/^[^:]*:/, '') === atAgent && pendingTarget !== undefined) {
+      const chosen = pendingTarget
+      pendingTarget = undefined
+      return next({ ...e, model: chosen })
+    }
     const target = rules.get(e.subagentType) ?? rules.get(e.subagentType.replace(/^[^:]*:/, ''))
     return target === undefined ? next(e) : next({ ...e, model: target })
   })
 
   on('prompt.submit', async ($, e, next) => {
+    const prefix = e.command === undefined ? parsePrefix(e.text, snapshot.targets) : undefined
+    if (prefix !== undefined && 'refused' in prefix) {
+      await $.ui.toast(`llmgate: ${prefix.refused}`)
+      return next(e)
+    }
+    if (prefix !== undefined) {
+      pendingTarget = prefix.target
+      return next({ ...e, text: atPrompt(prefix.task) })
+    }
     const asked = e.command === undefined ? /^council:\s*([\s\S]+)$/i.exec(e.text.trim()) : null
     const members = snapshot.agents.filter(item => item.name.startsWith('council-')).map(item => item.name)
     if (asked === null || members.length === 0) return next(e)

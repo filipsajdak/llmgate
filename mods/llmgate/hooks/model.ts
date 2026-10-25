@@ -1,7 +1,7 @@
 export const roles = ['opus', 'sonnet', 'haiku'] as const
 export type Role = (typeof roles)[number]
 
-export type Target = { id: string; label: string; provider: string }
+export type Target = { id: string; label: string; provider: string; upstream: string }
 export type RoleRoute = { role: Role; via: string; providers: string[]; upstream?: string }
 export type Served = { provider: string; upstream: string; source: string; fallback: boolean; switched: boolean }
 export type ProviderHealth = { name: string; circuit: string; attempts: number; answered: number; failures: number; limits: Record<string, string>; labels: string[]; auth: string; ready: boolean }
@@ -118,7 +118,7 @@ function parseTarget(value: unknown): Target[] {
   const entry = object(value)
   const id = text(entry.id)
   if (id === '' || !id.includes('@')) return []
-  return [{ id, label: printable(text(entry.label) || id), provider: printable(text(entry.provider)) }]
+  return [{ id, label: printable(text(entry.label) || id), provider: printable(text(entry.provider)), upstream: printable(text(entry.upstream)) }]
 }
 
 function parseProvider(value: unknown): ProviderHealth[] {
@@ -425,5 +425,32 @@ export function councilPrompt(question: string, members: readonly string[]): str
     'Then merge their answers: where they agree, where they differ and why, and your recommendation; keep your own opinion separate from theirs.',
     '',
     question,
+  ].join('\n')
+}
+
+export type Prefix = { target: string; task: string } | { refused: string }
+
+const prefixPattern = /^@([A-Za-z0-9_-]+)(?:\/([^\s:]+))?:([\s\S]*)$/
+
+export function parsePrefix(text: string, targets: readonly Target[]): Prefix | undefined {
+  const asked = prefixPattern.exec(text.trim())
+  if (asked === null) return undefined
+  const [, provider, model, rest] = asked
+  const task = rest.trim()
+  const named = `@${provider}${model === undefined ? '' : `/${model}`}`
+  const own = targets.filter(item => item.provider === provider)
+  const matching = model === undefined ? own : own.filter(item => item.upstream === model)
+  if (matching.length === 0) return { refused: `no target matches ${printable(named)}: use a provider name such as @${printable(targets[0]?.provider ?? 'work')}` }
+  if (matching.length > 1) return { refused: `${provider} has several models: write ${matching.map(item => `@${provider}/${item.upstream}`).join(' or ')}` }
+  if (task === '') return { refused: `write the task after ${printable(named)}:` }
+  return { target: matching[0].id, task }
+}
+
+export function atPrompt(task: string): string {
+  return [
+    'Use the Agent tool exactly once with subagent_type "llmgate:at" and pass the task below word for word and nothing else from this conversation.',
+    'Ask it once, do not ask again, and then relay its answer to me, saying which agent answered.',
+    '',
+    task,
   ].join('\n')
 }
