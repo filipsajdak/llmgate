@@ -5,6 +5,7 @@ import llmgate.control;
 import llmgate.gateway;
 import llmgate.json;
 import llmgate.reflect;
+import llmgate.text;
 
 export namespace llmgate::check {
 
@@ -183,11 +184,31 @@ std::string judge(step const which, int const status, std::string_view const bod
 
 std::string step_name(step const which) { return std::string{reflect::enum_name(which)}; }
 
+constexpr std::size_t provider_width = 18;
+constexpr std::size_t step_width = 8;
+constexpr std::size_t result_width = 6;
+constexpr std::size_t time_width = 8;
+
+void put_cell(std::string& out, std::string_view const cell, std::size_t const width, bool const right) {
+    auto const gap = std::string(cell.size() < width ? width - cell.size() : 0, ' ');
+    text::append_all(out, right ? gap : std::string{}, cell, right ? std::string{} : gap, " ");
+}
+
+void put_row(std::string& out, std::array<std::string_view, 5> const& cells) {
+    put_cell(out, cells[0], provider_width, false);
+    put_cell(out, cells[1], step_width, false);
+    put_cell(out, cells[2], result_width, false);
+    put_cell(out, cells[3], time_width, true);
+    text::append_all(out, " ", cells[4], "\n");
+}
+
 std::string render(std::vector<outcome> const& rows) {
-    std::string out = std::format("{:<18} {:<8} {:<6} {:>8}  {}\n", "provider", "step", "result", "time", "detail");
+    std::string out;
+    put_row(out, {"provider", "step", "result", "time", "detail"});
     for (auto const& row : rows) {
-        auto const result = row.skipped ? "skip" : row.detail.empty() ? "pass" : "FAIL";
-        std::format_to(std::back_inserter(out), "{:<18} {:<8} {:<6} {:>8}  {}\n", row.provider, row.step, result, row.skipped ? std::string{"-"} : detail::seconds_text(row.milliseconds), row.detail);
+        std::string_view const result = row.skipped ? "skip" : row.detail.empty() ? "pass" : "FAIL";
+        auto const seconds = row.skipped ? std::string{"-"} : detail::seconds_text(row.milliseconds);
+        put_row(out, {row.provider, row.step, result, seconds, row.detail});
     }
     return out;
 }

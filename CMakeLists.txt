@@ -84,7 +84,7 @@ llmgate_module(llmgate_httpio INTERFACE src/http/io.cppm LIBS llmgate_async llmg
 llmgate_module(llmgate_routing INTERFACE src/gateway/routing.cppm LIBS llmgate_http llmgate_json llmgate_jsonscan llmgate_members llmgate_text)
 llmgate_module(llmgate_selection INTERFACE src/gateway/selection.cppm LIBS llmgate_reflect llmgate_role)
 llmgate_module(llmgate_jsonedit INTERFACE src/json/edit.cppm SOURCES src/json/edit.cpp)
-llmgate_module(llmgate_check INTERFACE src/app/check.cppm LIBS llmgate_control llmgate_gateway llmgate_json llmgate_reflect)
+llmgate_module(llmgate_check INTERFACE src/app/check.cppm LIBS llmgate_control llmgate_gateway llmgate_json llmgate_reflect llmgate_text)
 llmgate_module(llmgate_recipes INTERFACE src/app/recipes.cppm LIBS llmgate_control llmgate_gateway llmgate_json llmgate_reflect)
 llmgate_module(llmgate_config_edit INTERFACE src/app/config_edit.cppm LIBS llmgate_control llmgate_gateway llmgate_json llmgate_jsonedit llmgate_reflect)
 llmgate_module(llmgate_offer INTERFACE src/app/offer.cppm LIBS llmgate_config_edit llmgate_gateway llmgate_json llmgate_model_list llmgate_reflect)
