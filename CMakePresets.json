@@ -11,6 +11,16 @@
       }
     },
     {
+      "name": "release-macos",
+      "inherits": "host",
+      "binaryDir": "${sourceDir}/build/release-macos",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "OPENSSL_USE_STATIC_LIBS": "ON",
+        "LLMGATE_STATIC_RUNTIME": "ON"
+      }
+    },
+    {
       "name": "linux",
       "inherits": "host",
       "binaryDir": "${sourceDir}/build/linux",
@@ -72,6 +82,11 @@
     {
       "name": "host",
       "configurePreset": "host"
+    },
+    {
+      "name": "release-macos",
+      "configurePreset": "release-macos",
+      "targets": ["llmgate"]
     },
     {
       "name": "linux",
