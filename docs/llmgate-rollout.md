@@ -68,7 +68,7 @@ builds anything, and nobody needs a particular compiler.
 
 | # | Question | Answer |
 |---|---|---|
-| X1 | Can GCC 16.2 with modules, reflection and `import std` produce a relocatable binary: on macOS with static libstdc++, libgcc, OpenSSL 3.5 and llhttp so `otool -L` lists only `/usr/lib`; on Linux a static or old-glibc build? | Open (due 2026-10-30) |
+| X1 | Can GCC 16.2 with modules, reflection and `import std` produce a relocatable binary: on macOS with static libstdc++, libgcc, OpenSSL 3.5 and llhttp so `otool -L` lists only `/usr/lib`; on Linux a static or old-glibc build? | **macOS: Yes** (2026-10-26, arm64, GCC 16.2.0, OpenSSL 3.6.4 archives from Homebrew). `cmake --preset release-macos` links OpenSSL and llhttp statically and libstdc++ from its archive (`-nostdlib++`: GCC's `-static-libstdc++` has no effect on Darwin); `otool -L` lists only `/usr/lib/libSystem.B.dylib`, the binary is 8 MB and `doctor --offline` runs. It was found that `CMakeLists.txt` set llhttp's static option under the wrong name, so the shared library was always built. Not yet run on a machine without Homebrew; Linux and x86-64 macOS open (due 2026-10-30) |
 | X2 | Does GCC 16.2 (MSYS2 UCRT64, or a mingw-w64 cross build) compile `llmgate_reflect`, `llmgate_json` and an `import std` module with `-freflection`? | Open (go or no-go 2026-11-02) |
 | X3 | What do Azure OpenAI and Bedrock accept: tools, images, stream usage, SigV4 against a Bedrock API key; and what does each reject? One announced request each, invented prompts, the owner's or Siili's own accounts. | Open (due 2026-11-02) |
 | X4 | Do CONNECT through `HTTPS_PROXY`, `NO_PROXY` and a TLS-intercepting proxy with a custom certificate authority work as designed? | Open (due 2026-11-02) |
