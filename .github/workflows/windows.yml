@@ -1,0 +1,41 @@
+name: windows
+
+on:
+  push:
+    branches: ["feat/rollout-*"]
+    paths:
+      - ".github/workflows/windows.yml"
+      - "src/reflect/**"
+      - "src/json/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  foundations:
+    timeout-minutes: 60
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-openssl
+      - run: g++ --version && cmake --version && openssl version
+      - run: cmake -S . -B build/windows -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_COMPILER=g++
+      - run: cmake --build build/windows --target reflect_enum_test json_test json_writer_test lenient_test jsonscan_test
+      - run: ctest --test-dir build/windows --output-on-failure -R "reflect_enum_test|json_test|json_writer_test|lenient_test|jsonscan_test"
