@@ -88,6 +88,25 @@ builds anything, and nobody needs a particular compiler.
 | 8 | Windows (if X2 passed): IOCP reactor, process, ACLs, directories, Task Scheduler entry, PowerShell launcher, CI job | ctest on `windows-latest`; installer smoke test |
 | 9 | `docs/cpp26-tour.md`, the colleague runs, the decision | two colleague runs recorded |
 
+## Installer (phase 1 slice 2)
+
+`install/install.sh` is POSIX sh and runs the same under `curl | sh` and from a clone. `install.ps1` follows with the Windows binary (slice 8); until then Windows uses WSL.
+
+| # | Behaviour |
+|---|---|
+| I1 | It detects the system and architecture, resolves the latest release (or `--version`), downloads the archive and `SHA256SUMS.txt`, and refuses to install anything whose digest does not match. |
+| I2 | It installs to `~/.local/bin` (or `--prefix`) by writing a new file beside the old one and renaming it, keeps the previous binary as `llmgate.previous`, and runs the new binary's `--version` before replacing anything. |
+| I3 | A re-run with the same version changes nothing; `--force` reinstalls. |
+| I4 | `--dry-run` prints every step and writes nothing, not even a log. |
+| I5 | It never edits a shell profile; when the prefix is not on `PATH` it prints the line to add. |
+| I6 | If `claude` is missing it says so and offers Claude Code's official installer; it runs it only after a yes at the terminal or with `--with-claude`, never with `--yes` alone. |
+| I7 | It then runs `llmgate init` when the binary has it, else `llmgate setup`, reading answers from the terminal even under `curl | sh`; with no terminal it prints the command instead. `--no-init` skips this. |
+| I8 | A log of every step goes to `~/.local/state/llmgate/install-TIMESTAMP.log`. |
+| I9 | `--uninstall` stops the gateway and removes the binary and `llmgate.previous`. `--purge` also lists, then removes after a yes (or `--yes`), `~/.config/llmgate`, `~/.local/state/llmgate` and `~/.claude-llmgate*`. It never touches `~/.claude`. |
+| I10 | Versions and prefixes are checked before use: a version must be `MAJOR.MINOR.PATCH`, and nothing from the network is run except the archive's binary after its digest matched. |
+
+The shell test `tests/e2e/install_flow.sh` serves a fake release from a local server and checks I1 to I5, I8 to I10.
+
 ## Seams a Windows port touches
 
 | Seam | Today | Windows |

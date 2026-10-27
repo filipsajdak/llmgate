@@ -323,6 +323,8 @@ add_test(NAME llmgate_shutdown_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests
 set_tests_properties(llmgate_shutdown_flow PROPERTIES LABELS e2e TIMEOUT 120)
 add_test(NAME llmgate_login_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/login_flow.sh $<TARGET_FILE:llmgate>)
 set_tests_properties(llmgate_login_flow PROPERTIES LABELS e2e TIMEOUT 120)
+add_test(NAME llmgate_install_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/install_flow.sh)
+set_tests_properties(llmgate_install_flow PROPERTIES LABELS e2e TIMEOUT 120)
 add_test(NAME llmgate_doctor_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/doctor_flow.sh $<TARGET_FILE:llmgate>)
 set_tests_properties(llmgate_doctor_flow PROPERTIES LABELS e2e TIMEOUT 120)
 add_test(NAME llmgate_tool_turn_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/tool_turn_flow.sh $<TARGET_FILE:llmgate>)
