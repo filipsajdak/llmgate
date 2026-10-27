@@ -31,7 +31,7 @@ a Claude Code profile and process that the owner signed in; the orchestrator bel
 | H7 | The pane's Sessions view lists each worker (account, state, task, tokens, quota) with buttons to open its transcript or resume it in its profile. |
 | H8 | Partner through the local gateway now (as an Anthropic-protocol provider with its aliases); native Bedrock Converse and chat-completions providers and an import of its `config.yaml` later. |
 | H9 | Auth kinds: Claude login (profile), device or PKCE sign-in, API key (any header, from env, a 0600 file or the Keychain), none, forward. The user picks the store; the mod recommends the most secure; it never shows or stores a value in config. |
-| H10 | Order: provider kinds and auth, then contexts and the guard, then the orchestrator. BET-6 stays (2026-11-27); this bet decides 2026-12-18. |
+| H10 | Order: provider kinds and auth, then contexts and the guard, then the orchestrator. BET-6 stays (2026-11-27); this bet decides 2027-01-18, after the rollout phases ([docs/llmgate-rollout.md](llmgate-rollout.md)). |
 
 ## Experiments before building (slice X0; each answered Yes or No with the Claude Code version)
 
