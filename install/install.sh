@@ -251,7 +251,7 @@ if [ "$run_init" -eq 1 ]; then
   if [ "$dry_run" -eq 1 ]; then
     say "would: run llmgate init (or llmgate setup)"
   elif have_tty; then
-    if "$bin" init --help >/dev/null 2>&1; then
+    if "$bin" --no-such-flag 2>&1 < /dev/null | grep -q '| init '; then
       say "running llmgate init"
       "$bin" init < "$tty" || say "llmgate init did not finish; run it again when you are ready"
     else

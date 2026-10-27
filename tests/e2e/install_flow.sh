@@ -22,6 +22,8 @@ export PATH
 
 release() {
   v=$1
+  usage_line="usage: llmgate [setup]"
+  if [ "${2:-}" = init ]; then usage_line="usage: llmgate [setup | init [--yes]]"; fi
   dir=$site/v$v
   stage=$work/stage-$v/llmgate-$v-$os-$arch
   mkdir -p "$dir" "$stage"
@@ -31,7 +33,8 @@ case "\$1" in
   --version) echo "llmgate $v" ;;
   stop) echo stopped >> "$work/stop.marker" ;;
   setup) echo "setup $v" >> "$work/setup.marker" ;;
-  *) exit 2 ;;
+  init) echo "init $v" >> "$work/init.marker" ;;
+  *) echo "$usage_line" >&2; exit 2 ;;
 esac
 BIN
   chmod +x "$stage/llmgate"
@@ -43,7 +46,7 @@ BIN
   fi
 }
 release 1.0.0
-release 1.1.0
+release 1.1.0 init
 
 port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
 python3 -I -m http.server "$port" --bind 127.0.0.1 --directory "$site" >/dev/null 2>&1 &
@@ -76,10 +79,10 @@ version=1.0.0
 out=$(run 2>&1)
 check sh -c "echo '$out' | grep -q 'already installed' && [ ! -e '$prefix/llmgate.previous' ]"
 
-label="an upgrade keeps the old binary as llmgate.previous"
+label="an upgrade keeps the old binary as llmgate.previous and runs init when the new binary has it"
 version=1.1.0
 run >/dev/null 2>&1
-check sh -c "[ \"\$('$prefix/llmgate' --version)\" = 'llmgate 1.1.0' ] && [ \"\$('$prefix/llmgate.previous' --version)\" = 'llmgate 1.0.0' ]"
+check sh -c "[ \"\$('$prefix/llmgate' --version)\" = 'llmgate 1.1.0' ] && [ \"\$('$prefix/llmgate.previous' --version)\" = 'llmgate 1.0.0' ] && grep -q 'init 1.1.0' '$work/init.marker'"
 
 label="a checksum mismatch installs nothing and says so"
 release 1.2.0
