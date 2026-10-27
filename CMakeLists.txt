@@ -290,7 +290,8 @@ llmgate_fuzz(json_writer llmgate_properties)
 llmgate_fuzz(config_docs llmgate_properties)
 
 add_executable(llmgate app/llmgate.cpp)
-target_compile_definitions(llmgate PRIVATE LLMGATE_VERSION="${PROJECT_VERSION}")
+set(LLMGATE_VERSION "${PROJECT_VERSION}" CACHE STRING "Version printed by llmgate --version")
+target_compile_definitions(llmgate PRIVATE LLMGATE_VERSION="${LLMGATE_VERSION}")
 target_link_libraries(llmgate PRIVATE llmgate_offer llmgate_check llmgate_recipes llmgate_jsonedit llmgate_config_edit llmgate_model_list llmgate_discovery llmgate_chatgpt llmgate_claude llmgate_config_docs llmgate_reflect llmgate_usage llmgate_arguments llmgate_commands llmgate_process llmgate_routing llmgate_copilot llmgate_gateway llmgate_httpio llmgate_json llmgate_net llmgate_shutdown llmgate_tls llmgate_contracts)
 
 option(LLMGATE_STATIC_RUNTIME "Link libstdc++ and libgcc into the llmgate executable" OFF)

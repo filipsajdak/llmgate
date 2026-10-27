@@ -29,6 +29,17 @@
       }
     },
     {
+      "name": "release-linux",
+      "inherits": "linux",
+      "binaryDir": "${sourceDir}/build/release-linux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "OPENSSL_USE_STATIC_LIBS": "ON",
+        "LLMGATE_STATIC_RUNTIME": "ON",
+        "CMAKE_EXE_LINKER_FLAGS": "-static"
+      }
+    },
+    {
       "name": "fuzz",
       "inherits": "linux",
       "binaryDir": "${sourceDir}/build/fuzz",
@@ -86,6 +97,11 @@
     {
       "name": "release-macos",
       "configurePreset": "release-macos",
+      "targets": ["llmgate"]
+    },
+    {
+      "name": "release-linux",
+      "configurePreset": "release-linux",
       "targets": ["llmgate"]
     },
     {
