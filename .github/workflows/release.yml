@@ -3,8 +3,6 @@ name: release
 on:
   push:
     tags: ["v*"]
-    branches: ["feat/rollout-*"]
-    paths: [".github/workflows/release.yml"]
   workflow_dispatch:
     inputs:
       version:
