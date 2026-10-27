@@ -1,8 +1,8 @@
 # llmgate
 
-A gateway that lets Claude Code talk to GitHub Copilot and Anthropic backends without losing anything silently; a ChatGPT plan backend (Codex models) has passed the compatibility scenarios on a real Plus account; other providers (local OpenAI-compatible models, Gemini, Grok) are planned and are not built yet. C++26 with static reflection, Apache-2.0.
+A gateway that lets Claude Code use any provider, account and model: GitHub Copilot (github.com or an enterprise host), a ChatGPT plan (Codex models), an Anthropic account or key held by Claude Code itself, and any service that speaks the Anthropic Messages API with a key or none. It routes by role, class and signal with fallback, keeps a usage ledger and a scorecard, and nothing is dropped silently. OpenAI chat-completions servers (Azure OpenAI, vLLM, Grok) and AWS Bedrock are planned and not built yet. C++26 with static reflection, Apache-2.0.
 
-Status: walking-skeleton phase (BET-1, decision on 2026-11-06). The Anthropic passthrough works end to end with the real Claude Code CLI against a scripted upstream (`tests/e2e/claude_through_gateway.sh`); the first run against GitHub Copilot needs your device login.
+Status: the first release is `v0.1.0`. Verified with the real Claude Code CLI against a scripted upstream (`tests/e2e/claude_through_gateway.sh`) and through the compatibility scenarios on real GitHub Copilot and ChatGPT Plus accounts; the macOS and Linux binaries are built in CI for arm64 and x86-64, native Windows is not built yet (use WSL). Your first run needs your own sign-in: `llmgate init` walks through it.
 
 ## Install from a release
 
@@ -354,8 +354,7 @@ built.
 ## The llmgate mod: the route inside Claude Code
 
 `mods/llmgate/` is a Claude Code [mod](https://code.claude.com/docs/en/plugins/mods/overview) that shows the route
-of the session and switches it without a second terminal ([docs/llmgate-mod.md](docs/llmgate-mod.md); BET-5, first
-slice). `/llmgate` opens a pane (beside the transcript where the app has room, above the prompt otherwise; under
+of the session and switches it without a second terminal ([docs/llmgate-mod.md](docs/llmgate-mod.md)). `/llmgate` opens a pane (beside the transcript where the app has room, above the prompt otherwise; under
 `claude -p` it prints the routes as text):
 
 - **Now:** for opus, sonnet and haiku the providers and upstream model in force and why (`via`), and the provider
