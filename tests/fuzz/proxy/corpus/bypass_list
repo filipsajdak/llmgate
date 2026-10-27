@@ -1,0 +1,2 @@
+example.com, .corp.test,10.0.0.0/8,fd00::/8,host:8443,*
+API.example.com
