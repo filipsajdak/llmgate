@@ -417,6 +417,33 @@ inline int run_and_wait(std::filesystem::path const& program, std::vector<std::s
     return wait_status(child);
 }
 
+inline std::expected<std::string, std::error_code> run_capturing(std::filesystem::path const& program, std::vector<std::string> const& arguments) {
+    std::array<int, 2> ends{};
+    if (::pipe(ends.data()) != 0) {
+        return std::unexpected{errno_error()};
+    }
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    posix_spawn_file_actions_adddup2(&actions, ends[1], STDOUT_FILENO);
+    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    posix_spawn_file_actions_addclose(&actions, ends[0]);
+    posix_spawn_file_actions_addclose(&actions, ends[1]);
+    auto argv = make_argv(program, arguments);
+    pid_t child = 0;
+    auto const result = ::posix_spawn(&child, program.c_str(), &actions, nullptr, argv.pointers.data(), environ);
+    posix_spawn_file_actions_destroy(&actions);
+    ::close(ends[1]);
+    if (result != 0) {
+        ::close(ends[0]);
+        return std::unexpected{std::error_code{result, std::system_category()}};
+    }
+    auto text = read_all(ends[0]);
+    ::close(ends[0]);
+    wait_status(child);
+    return text;
+}
+
 inline bool process_running(pid_t const pid) noexcept {
     return ::kill(pid, 0) == 0 || errno == EPERM;
 }
