@@ -44,6 +44,7 @@ struct context {
     std::string config_error{};
     program_runner run_program = &process::run_and_wait;
     model_lister list_models{};
+    bool reload_after_edit = true;
 };
 
 struct model_findings {

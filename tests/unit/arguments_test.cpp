@@ -194,6 +194,13 @@ const suite arguments_suite = [] {
         expect(parse(words({"env", "--vscode", "--json"}))->vscode == "" && parse(words({"env", "--vscode", "--json"}))->as_json);
     };
 
+    "capability_init_takes_yes_and_a_recipe_and_no_words"_test = [] {
+        auto const parsed = parse(words({"init", "--yes", "--recipe", "second-opinion"}));
+
+        expect(parsed.has_value() && parsed->which == command::init && parsed->yes && parsed->recipe == "second-opinion");
+        expect(!parse(words({"init", "extra"})).has_value());
+    };
+
     "capability_the_usage_text_names_every_command_and_every_flag"_test = [] {
         for (auto const which : llmgate::reflect::enum_values<command>) {
             expect(usage_text.contains(llmgate::reflect::enum_name(which))) << llmgate::reflect::enum_name(which);
@@ -209,13 +216,13 @@ const suite arguments_suite = [] {
     "capability_the_usage_text_is_pinned"_test = [] {
         expect(usage_text ==
                "usage: llmgate [--config PATH] [--profile NAME] [serve | login [--json] [--detach] [--progress] [--provider NAME] | claude ARGS... | env [--json] [--vscode [FILE]] | setup [--vscode [FILE]] [--service] [--dry-run] | "
-               "statusline | status | stop | usage [--json] [--days N] | doctor [--json] [--offline] | quota [--json] [--provider NAME] | use [--session ID] ARGS... | targets | route [--session ID] ARGS... | models [--json] [--provider NAME] [--yes] ARGS... | reload | provider [--yes] [--preset NAME] [--labels A,B] [--base-url URL] [--token-env VAR] [--auth KIND] [--secret SRC] [--ghe-host HOST] [--offer A,B] [--offer-from FILE] [--offer-filter TEXT] ARGS... | routes [--yes] ARGS... | config [--yes] ARGS... | secret ARGS... | recipe [--json] [--yes] ARGS... | agents [--yes] [--description TEXT] [--prompt TEXT] ARGS... | rules [--yes] ARGS... | check [--json] [--provider NAME] [--quick]] | --check-config | --version | --print-example | --print-schema | --print-config-table")
+               "statusline | status | stop | usage [--json] [--days N] | doctor [--json] [--offline] | quota [--json] [--provider NAME] | use [--session ID] ARGS... | targets | route [--session ID] ARGS... | models [--json] [--provider NAME] [--yes] ARGS... | reload | provider [--yes] [--preset NAME] [--labels A,B] [--base-url URL] [--token-env VAR] [--auth KIND] [--secret SRC] [--ghe-host HOST] [--offer A,B] [--offer-from FILE] [--offer-filter TEXT] ARGS... | routes [--yes] ARGS... | config [--yes] ARGS... | secret ARGS... | recipe [--json] [--yes] ARGS... | agents [--yes] [--description TEXT] [--prompt TEXT] ARGS... | rules [--yes] ARGS... | check [--json] [--provider NAME] [--quick] | init [--yes] [--recipe ID]] | --check-config | --version | --print-example | --print-schema | --print-config-table")
             << usage_text;
     };
 
-    "capability_only_statusline_stop_doctor_and_secret_tolerate_a_missing_config"_test = [] {
+    "capability_only_statusline_stop_doctor_secret_and_init_tolerate_a_missing_config"_test = [] {
         for (auto const which : llmgate::reflect::enum_values<command>) {
-            auto const expected = which == command::statusline || which == command::stop || which == command::doctor || which == command::secret;
+            auto const expected = which == command::statusline || which == command::stop || which == command::doctor || which == command::secret || which == command::init;
             expect(command_marked<tolerant>(which) == expected) << llmgate::reflect::enum_name(which);
         }
     };

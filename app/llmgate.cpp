@@ -29,6 +29,7 @@ import llmgate.reflect;
 import llmgate.routing;
 import llmgate.shutdown;
 import llmgate.tls;
+import llmgate.wizard;
 
 namespace {
 
@@ -413,7 +414,7 @@ int edit_command(commands::context const& where) {
     }
     std::println("written to {}", path.string());
     refresh_picker(where, path);
-    if (commands::run_reload(where) != 0) {
+    if (where.reload_after_edit && commands::run_reload(where) != 0) {
         std::println("the gateway did not reload (is it running?); it picks the change up when it starts");
     }
     return 0;
@@ -443,21 +444,29 @@ std::string read_secret_line(std::string_view const name) {
     return line;
 }
 
+std::expected<std::string, std::string> store_secret(std::string_view const name, std::string_view const value) {
+    auto const location = config_edit::secret_file(name);
+    if (!location) {
+        return std::unexpected{location.error()};
+    }
+    if (auto const stored = process::write_file_atomic(process::expand_home(*location), std::string{value} + "\n", 0600, true); !stored) {
+        return std::unexpected{std::format("cannot store the secret: {}", stored.error().message())};
+    }
+    return *location;
+}
+
 int secret_command(commands::context const& where) {
     auto const& words = where.options.passthrough;
     if (words.size() != 2 || words.front() != "set") {
         return fail(exit_usage, "usage: llmgate secret set NAME (the value is read from the keyboard, hidden, or from a pipe)");
     }
-    auto const location = config_edit::secret_file(words.back());
-    if (!location) {
-        return fail(exit_usage, location.error());
-    }
     auto const value = read_secret_line(words.back());
     if (value.empty()) {
         return fail(exit_usage, "no value was given; nothing was stored");
     }
-    if (auto const stored = process::write_file_atomic(process::expand_home(*location), value + "\n", 0600, true); !stored) {
-        return fail(exit_runtime, std::format("cannot store the secret: {}", stored.error().message()));
+    auto const location = store_secret(words.back(), value);
+    if (!location) {
+        return fail(exit_usage, location.error());
     }
     std::println("stored as {} (mode 0600); use it with --secret file:{}", *location, *location);
     return 0;
@@ -518,7 +527,7 @@ int commit_edits(commands::context const& where, std::vector<config_edit::change
     }
     std::println("written to {}", path.string());
     refresh_picker(where, path);
-    if (commands::run_reload(where) != 0) {
+    if (where.reload_after_edit && commands::run_reload(where) != 0) {
         std::println("the gateway did not reload (is it running?); it picks the change up when it starts");
     }
     return 0;
@@ -715,6 +724,316 @@ int models_command(commands::context const& where) {
     return body ? print_listing(where, *body) : fail(exit_runtime, body.error());
 }
 
+constexpr std::string_view init_interrupted = "the input ended before init finished; what was written stays, run llmgate init again to continue";
+constexpr std::string_view init_greeting = "llmgate init: connect Claude Code to the providers you have.\nWhich of these do you have? Type numbers separated by commas.\n";
+constexpr std::size_t question_attempts = 3;
+
+std::optional<std::string> read_line_from_input() {
+    std::string line;
+    char c = 0;
+    bool any = false;
+    while (::read(STDIN_FILENO, &c, 1) == 1) {
+        any = true;
+        if (c == '\n') {
+            break;
+        }
+        line.push_back(c);
+    }
+    if (!any) {
+        return std::nullopt;
+    }
+    line.erase(std::ranges::find(line, '\r'), line.end());
+    return line;
+}
+
+std::optional<std::string> ask_text(std::string_view const question, std::string_view const fallback) {
+    std::print("{}{} ", question, fallback.empty() ? std::string{} : std::format(" [{}]", fallback));
+    std::fflush(stdout);
+    auto line = read_line_from_input();
+    if (!line) {
+        return std::nullopt;
+    }
+    return line->empty() ? std::string{fallback} : std::move(*line);
+}
+
+std::optional<bool> ask_yes_no(std::string_view const question, bool const fallback) {
+    for (std::size_t attempt = 0; attempt < question_attempts; ++attempt) {
+        auto const line = ask_text(std::format("{} (y/n)", question), fallback ? "y" : "n");
+        if (!line) {
+            return std::nullopt;
+        }
+        if (auto const answer = wizard::yes_no(*line, fallback)) {
+            return answer;
+        }
+        std::println("please answer y or n");
+    }
+    return fallback;
+}
+
+std::optional<std::vector<wizard::kind>> ask_kinds() {
+    std::print("{}{}", init_greeting, wizard::menu());
+    for (std::size_t attempt = 0; attempt < question_attempts; ++attempt) {
+        auto const line = ask_text("Your choice", "");
+        if (!line) {
+            return std::nullopt;
+        }
+        auto chosen = wizard::choose(*line);
+        if (chosen) {
+            return std::move(*chosen);
+        }
+        std::println("{}", chosen.error());
+    }
+    return std::nullopt;
+}
+
+std::string auth_for_choice(std::string_view const choice) {
+    if (choice == "2") {
+        return "header:api-key";
+    }
+    return choice == "3" ? std::string{reflect::enum_name(gateway::auth_kind::none)} : std::string{reflect::enum_name(gateway::auth_kind::bearer)};
+}
+
+std::optional<std::string> ask_key_into_file(std::string_view const name) {
+    auto const value = read_secret_line(name);
+    if (value.empty()) {
+        std::println("no key was given");
+        return std::nullopt;
+    }
+    auto const location = store_secret(name, value);
+    if (!location) {
+        std::println("{}", location.error());
+        return std::nullopt;
+    }
+    return "file:" + *location;
+}
+
+std::optional<wizard::answers> ask_host(wizard::answers given) {
+    if (given.which != wizard::kind::copilot) {
+        return given;
+    }
+    auto host = ask_text("GitHub host for an enterprise account (blank for github.com)", "");
+    if (!host) {
+        return std::nullopt;
+    }
+    given.host = std::move(*host);
+    return given;
+}
+
+std::optional<wizard::answers> ask_url(wizard::answers given) {
+    if (!wizard::asks_for_url(given.which)) {
+        return given;
+    }
+    auto url = ask_text("Address of the server", given.which == wizard::kind::local ? wizard::default_local_url : "");
+    if (!url) {
+        return std::nullopt;
+    }
+    given.base_url = std::move(*url);
+    if (given.which == wizard::kind::local) {
+        given.auth = std::string{reflect::enum_name(gateway::auth_kind::none)};
+    }
+    return given;
+}
+
+std::optional<wizard::answers> ask_auth(wizard::answers given) {
+    if (given.which != wizard::kind::gateway) {
+        return given;
+    }
+    auto const choice = ask_text("How does it expect the key? 1) Authorization: Bearer  2) api-key header  3) no key", "1");
+    if (!choice) {
+        return std::nullopt;
+    }
+    given.auth = auth_for_choice(*choice);
+    if (wizard::takes_a_key(given)) {
+        given.secret = ask_key_into_file(given.name).value_or("");
+        if (given.secret.empty()) {
+            return std::nullopt;
+        }
+    }
+    return given;
+}
+
+std::optional<wizard::answers> ask_answers(wizard::kind const which, std::string name) {
+    auto host = ask_host({.which = which, .name = std::move(name)});
+    auto url = host ? ask_url(std::move(*host)) : std::nullopt;
+    return url ? ask_auth(std::move(*url)) : std::nullopt;
+}
+
+std::filesystem::path config_path_of(commands::context const& where) {
+    return std::filesystem::path{process::expand_home(where.options.config_path)};
+}
+
+bool ensure_config_file(commands::context const& where) {
+    auto const path = config_path_of(where);
+    std::error_code failed;
+    if (std::filesystem::exists(path, failed)) {
+        return true;
+    }
+    return process::write_file_atomic(path, std::string{wizard::minimal_config}, 0600, true).has_value();
+}
+
+commands::context reloaded(commands::context where) {
+    if (auto fresh = load_config(where.options.config_path)) {
+        where.settings = std::move(*fresh);
+        where.config_error.clear();
+    }
+    return where;
+}
+
+bool provider_exists(commands::context const& where, std::string const& name) {
+    return where.settings.providers.contains(name);
+}
+
+int add_provider(commands::context& where, wizard::answers const& given) {
+    auto edits = std::vector<config_edit::change>{};
+    auto planned = config_edit::plan(wizard::provider_request(given));
+    if (!planned) {
+        return fail(exit_config, planned.error());
+    }
+    edits.push_back(std::move(*planned));
+    if (auto const credential = wizard::credential_edit(given.which)) {
+        edits.push_back(*credential);
+    }
+    if (auto const done = commit_edits(where, edits); done != 0) {
+        return done;
+    }
+    where = reloaded(std::move(where));
+    return 0;
+}
+
+void sign_in_after_add(commands::context const& where, wizard::answers const& given) {
+    if (given.which == wizard::kind::claude) {
+        std::println("Start Claude Code with: llmgate claude, then type /login once and pick your Claude account.");
+        return;
+    }
+    if (wizard::signs_in(given.which) && login(where.settings, given.name, false) != 0) {
+        std::println("Sign-in did not finish; run: llmgate login --provider {}", given.name);
+    }
+}
+
+void offer_after_add(commands::context where, wizard::answers const& given) {
+    if (!wizard::can_list_models(given.which)) {
+        return;
+    }
+    auto const wanted = ask_yes_no(std::format("Offer the recommended models of {} in Claude Code's /model list?", given.name), true);
+    if (!wanted.value_or(false)) {
+        return;
+    }
+    where.options.passthrough = {"offer", given.name, "all"};
+    if (offer_command(where) != 0) {
+        std::println("The models could not be listed now; later run: llmgate models offer {} all", given.name);
+    }
+}
+
+std::optional<int> add_one(commands::context& where, wizard::kind const which) {
+    auto name = ask_text(std::format("Name for this {} provider", wizard::default_name(which)), wizard::default_name(which));
+    if (!name) {
+        return std::nullopt;
+    }
+    if (provider_exists(where, *name)) {
+        std::println("A provider named {} already exists; skipping it.", *name);
+        return 0;
+    }
+    auto given = ask_answers(which, std::move(*name));
+    if (!given) {
+        return std::nullopt;
+    }
+    if (add_provider(where, *given) != 0) {
+        return 0;
+    }
+    sign_in_after_add(where, *given);
+    offer_after_add(where, *given);
+    return 0;
+}
+
+std::vector<recipes::recipe> applicable_recipes(gateway::config const& settings) {
+    return recipes::all() | std::views::filter([&settings](recipes::recipe const& item) { return recipes::plan(item, settings).missing.empty(); }) | std::ranges::to<std::vector>();
+}
+
+std::optional<std::size_t> ask_recipe(std::vector<recipes::recipe> const& choices) {
+    std::println("Pick a setup for how the models are used (0 to keep things as they are):");
+    for (std::size_t index = 0; index < choices.size(); ++index) {
+        std::println("  {}) {}  {}", index + 1, choices[index].id, choices[index].summary);
+    }
+    auto const line = ask_text("Your choice", "1");
+    if (!line) {
+        return std::nullopt;
+    }
+    std::size_t number = 0;
+    auto const parsed = std::from_chars(line->data(), line->data() + line->size(), number);
+    if (parsed.ec != std::errc{} || number > choices.size()) {
+        std::println("not a choice; keeping things as they are");
+        return 0;
+    }
+    return number;
+}
+
+std::optional<int> recipe_step(commands::context& where) {
+    auto const choices = applicable_recipes(where.settings);
+    if (choices.empty()) {
+        return 0;
+    }
+    auto const picked = ask_recipe(choices);
+    if (!picked) {
+        return std::nullopt;
+    }
+    if (*picked != 0 && apply_recipe(where, choices[*picked - 1]) == 0) {
+        where = reloaded(std::move(where));
+    }
+    return 0;
+}
+
+int finish_init(commands::context const& where) {
+    if (commands::run_setup(where) != 0) {
+        return exit_runtime;
+    }
+    std::println("Check everything with: llmgate doctor    Add more later with: llmgate init");
+    return 0;
+}
+
+int init_interactive(commands::context where) {
+    auto const kinds = ask_kinds();
+    if (!kinds) {
+        return fail(exit_runtime, init_interrupted);
+    }
+    for (auto const which : *kinds) {
+        if (!add_one(where, which)) {
+            return fail(exit_runtime, init_interrupted);
+        }
+    }
+    if (!recipe_step(where)) {
+        return fail(exit_runtime, init_interrupted);
+    }
+    return finish_init(where);
+}
+
+int init_unattended(commands::context where) {
+    if (!where.options.recipe.empty()) {
+        auto const item = recipes::find(where.options.recipe);
+        if (!item) {
+            return fail(exit_usage, std::format("no recipe named {} (llmgate recipe list)", where.options.recipe));
+        }
+        if (apply_recipe(where, *item) != 0) {
+            return exit_config;
+        }
+        where = reloaded(std::move(where));
+    }
+    if (where.settings.providers.empty()) {
+        std::println("No providers yet: run llmgate init on a terminal, or llmgate provider add.");
+    }
+    return finish_init(where);
+}
+
+int init_command(commands::context const& given) {
+    auto where = given;
+    where.options.yes = true;
+    where.reload_after_edit = false;
+    if (!ensure_config_file(where)) {
+        return fail(exit_runtime, std::format("cannot create {}", config_path_of(where).string()));
+    }
+    where = reloaded(std::move(where));
+    return given.options.yes ? init_unattended(std::move(where)) : init_interactive(std::move(where));
+}
+
 int serve_command(commands::context const& where) {
     return serve(where.settings, where.options.config_path);
 }
@@ -759,6 +1078,7 @@ constexpr auto handlers = std::to_array<std::pair<arguments::command, command_ha
     {arguments::command::agents, &edit_command},
     {arguments::command::rules, &edit_command},
     {arguments::command::check, &check_command},
+    {arguments::command::init, &init_command},
     {arguments::command::statusline, &statusline_command},
 });
 

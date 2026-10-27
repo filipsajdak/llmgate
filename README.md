@@ -12,7 +12,7 @@ Needs a published release (see the repository's Releases page). The binaries dep
 curl -fsSL https://raw.githubusercontent.com/filipsajdak/llmgate/main/install/install.sh | sh
 ```
 
-The script downloads the archive for your system, checks it against the release's `SHA256SUMS.txt`, installs `llmgate` into `~/.local/bin` (the old binary stays as `llmgate.previous`), offers Claude Code's official installer if `claude` is missing, and runs `llmgate setup`. It never edits a shell profile. `--dry-run` prints every step and changes nothing; `--version X.Y.Z`, `--prefix DIR`, `--no-init`, `--with-claude`, `--force` adjust it; `--uninstall` removes the binary and `--uninstall --purge` also removes llmgate's configuration, state and profiles (never `~/.claude`). `sh install/install.sh --help` lists everything. The steps are specified in [docs/llmgate-rollout.md](docs/llmgate-rollout.md).
+The script downloads the archive for your system, checks it against the release's `SHA256SUMS.txt`, installs `llmgate` into `~/.local/bin` (the old binary stays as `llmgate.previous`), offers Claude Code's official installer if `claude` is missing, and runs `llmgate init`. It never edits a shell profile. `--dry-run` prints every step and changes nothing; `--version X.Y.Z`, `--prefix DIR`, `--no-init`, `--with-claude`, `--force` adjust it; `--uninstall` removes the binary and `--uninstall --purge` also removes llmgate's configuration, state and profiles (never `~/.claude`). `sh install/install.sh --help` lists everything. The steps are specified in [docs/llmgate-rollout.md](docs/llmgate-rollout.md).
 
 ## Quick start
 
@@ -27,6 +27,7 @@ llmgate claude         # starts the gateway if it is down, then runs Claude Code
 
 | Command | What it does |
 |---|---|
+| `llmgate init [--yes] [--recipe ID]` | First run on a terminal: asks which providers you have (Claude login, Copilot, ChatGPT plan, a gateway with a key, a local server), adds each with the same edit as `provider add`, signs in, offers the recommended models, offers a recipe and writes the profile. It creates the configuration if missing and never overwrites one. With `--yes` it asks nothing: it creates the configuration and the profile and applies `--recipe` if the providers already meet its needs |
 | `llmgate claude [args]` | Sets the environment Claude Code needs, starts the gateway on demand (detached, logging to `~/.local/state/llmgate/gateway.log`, never killing anything) and runs `claude` |
 | `llmgate setup [--dry-run]` | Creates or updates the profile: private deny rules for `.env` files, secrets, the gateway config directory and `~/.claude`, `effortLevel` if unset, and the status line. Existing settings are merged, never overwritten; a `settings.json` that is not plain JSON is refused untouched |
 | `llmgate setup --service` | Also installs a launchd agent (macOS) or systemd user unit (Linux) that keeps the gateway running |
