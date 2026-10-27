@@ -126,6 +126,19 @@ The shell test `tests/e2e/install_flow.sh` serves a fake release from a local se
 
 The unit tests drive the menu and answer parsing; `tests/e2e/init_flow.sh` feeds a scripted terminal to the real binary against fake providers.
 
+## The mod inside the binary (phase 1 slice 4)
+
+| # | Behaviour |
+|---|---|
+| B1 | The binary contains the mod's runtime files (`.claude-plugin/plugin.json`, `hooks/hooks.json` and the hook sources), embedded at build time with `#embed`. A test fails when a runtime file under `mods/llmgate` is not bundled. Its tests and type files are not. |
+| B2 | `llmgate claude` writes them to `$XDG_DATA_HOME/llmgate/mod/DIGEST` (default `~/.local/share/llmgate/mod/DIGEST`), where DIGEST is 16 hex digits over the file names and bytes. Only files that differ are written, with mode 0600 in 0700 directories. Nothing under `~/.claude` is touched. |
+| B3 | It starts Claude Code with `--plugin-dir DIR` before the person's own arguments and exports `LLMGATE_BIN` and `LLMGATE_CONFIG` (absolute paths), which the mod needs to find the binary and the configuration. |
+| B4 | With `claude.mod` set to `false` nothing is written, no flag is added and the two variables are not exported. |
+| B5 | `LLMGATE_MOD_DIR` names a mod directory to load instead, for developing the mod; nothing is written then. |
+| B6 | If the files cannot be written, `llmgate claude` warns and starts Claude Code without the mod. |
+| B7 | Directories of older digests stay, because a running session may be reading one; each is about 70 KB. |
+| B8 | `setup` and the VS Code settings do not load the mod: it is a launch argument of the terminal launcher. VS Code and the desktop app are checked later. |
+
 ## Seams a Windows port touches
 
 | Seam | Today | Windows |
