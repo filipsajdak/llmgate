@@ -118,8 +118,8 @@ The shell test `tests/e2e/install_flow.sh` serves a fake release from a local se
 | W5 | Copilot and ChatGPT sign in during `init` with the same device-code or browser flow as `llmgate login`. A sign-in that fails leaves the provider in place and says how to retry. |
 | W6 | A Claude login sets `claude.credential` to `login` and tells the person to type `/login` once in Claude Code. |
 | W7 | After a provider answers, `init` offers its recommended models (the same filter as `models offer all`) and applies them on a yes. A provider that cannot list models is not an error; `init` says how to offer models later. |
-| W8 | Recipes whose needs the providers meet are listed with a one-line summary; the first applicable one is the default and a blank answer skips. |
-| W9 | `init` then writes the profile as `setup` does. When `claude.credential` is `gateway` it also marks onboarding as done in the profile's `.claude.json` (only the one missing key, never overwriting anything), so there is no login screen; with `login` it leaves onboarding alone. |
+| W8 | Recipes whose needs the providers meet are listed with a one-line summary; a blank answer takes the first and 0 keeps things as they are. |
+| W9 | `init` then writes the profile as `setup` does. Whenever the profile is written (`setup` and `init` alike) and `claude.credential` is `gateway`, it also marks onboarding as done in the profile's `.claude.json` (only the one missing key, never overwriting anything), so there is no login screen; with `login` it leaves onboarding alone. |
 | W10 | `init --yes` never prompts and never signs in: it creates the configuration if missing, writes the profile, applies `--recipe ID` when the providers already meet its needs, and prints what is still to do. |
 | W11 | Input that ends early stops `init` with the steps already written intact and a message; nothing is half-written because each step is one atomic edit. |
 | W12 | The mod is not installed by this slice. Shipping it inside the binary and loading it from `llmgate claude` is the next slice. |
