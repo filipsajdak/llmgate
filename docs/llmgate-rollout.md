@@ -107,6 +107,38 @@ builds anything, and nobody needs a particular compiler.
 
 The shell test `tests/e2e/install_flow.sh` serves a fake release from a local server and checks I1 to I5, I8 to I10.
 
+## First run: `llmgate init` (phase 1 slice 3)
+
+| # | Behaviour |
+|---|---|
+| W1 | `init` creates the configuration file when it is missing (only `listen`), never overwrites one that exists, and works when the configuration does not validate yet. Running it again is safe: a provider name that already exists is skipped with a message. |
+| W2 | Interactively it shows a numbered menu of the kinds of provider a person may have and takes a list such as `1,3`. The kinds are: a Claude login, a GitHub Copilot seat (github.com or an enterprise host), a ChatGPT plan, another gateway reached with a key, and a local server. The menu text comes from annotations on the kind enum. |
+| W3 | For each kind it asks only what is needed (a name, a host or URL, how the key is sent), then makes the same edit as `provider add` and prints the diff, so the person sees what changed. |
+| W4 | A key is read hidden from the terminal, stored under `~/.config/llmgate/secrets/NAME.key` with mode 0600, and never printed or put in the configuration. |
+| W5 | Copilot and ChatGPT sign in during `init` with the same device-code or browser flow as `llmgate login`. A sign-in that fails leaves the provider in place and says how to retry. |
+| W6 | A Claude login sets `claude.credential` to `login` and tells the person to type `/login` once in Claude Code. |
+| W7 | After a provider answers, `init` offers its recommended models (the same filter as `models offer all`) and applies them on a yes. A provider that cannot list models is not an error; `init` says how to offer models later. |
+| W8 | Recipes whose needs the providers meet are listed with a one-line summary; a blank answer takes the first and 0 keeps things as they are. |
+| W9 | `init` then writes the profile as `setup` does. Whenever the profile is written (`setup` and `init` alike) and `claude.credential` is `gateway`, it also marks onboarding as done in the profile's `.claude.json` (only the one missing key, never overwriting anything), so there is no login screen; with `login` it leaves onboarding alone. |
+| W10 | `init --yes` never prompts and never signs in: it creates the configuration if missing, writes the profile, applies `--recipe ID` when the providers already meet its needs, and prints what is still to do. |
+| W11 | Input that ends early stops `init` with the steps already written intact and a message; nothing is half-written because each step is one atomic edit. |
+| W12 | The mod is not installed by this slice. Shipping it inside the binary and loading it from `llmgate claude` is the next slice. |
+
+The unit tests drive the menu and answer parsing; `tests/e2e/init_flow.sh` feeds a scripted terminal to the real binary against fake providers.
+
+## The mod inside the binary (phase 1 slice 4)
+
+| # | Behaviour |
+|---|---|
+| B1 | The binary contains the mod's runtime files (`.claude-plugin/plugin.json`, `hooks/hooks.json` and the hook sources), embedded at build time with `#embed`. A test fails when a runtime file under `mods/llmgate` is not bundled. Its tests and type files are not. |
+| B2 | `llmgate claude` writes them to `$XDG_DATA_HOME/llmgate/mod/DIGEST` (default `~/.local/share/llmgate/mod/DIGEST`), where DIGEST is 16 hex digits over the file names and bytes. Only files that differ are written, with mode 0600 in 0700 directories. Nothing under `~/.claude` is touched. |
+| B3 | It starts Claude Code with `--plugin-dir DIR` before the person's own arguments and exports `LLMGATE_BIN` and `LLMGATE_CONFIG` (absolute paths), which the mod needs to find the binary and the configuration. |
+| B4 | With `claude.mod` set to `false` nothing is written, no flag is added and the two variables are not exported. |
+| B5 | `LLMGATE_MOD_DIR` names a mod directory to load instead, for developing the mod; nothing is written then. |
+| B6 | If the files cannot be written, `llmgate claude` warns and starts Claude Code without the mod. |
+| B7 | Directories of older digests stay, because a running session may be reading one; each is about 70 KB. |
+| B8 | `setup` and the VS Code settings do not load the mod: it is a launch argument of the terminal launcher. VS Code and the desktop app are checked later. |
+
 ## Seams a Windows port touches
 
 | Seam | Today | Windows |

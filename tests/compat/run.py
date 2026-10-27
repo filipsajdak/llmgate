@@ -58,7 +58,7 @@ def write_scripted_config(work, upstream_port):
     config.write_text(json.dumps({
         "listen": f"127.0.0.1:{free_port()}",
         "providers": {"a": provider("m-a"), "b": provider("m-b"), "dead": dict(provider("m-dead"), base_url="http://127.0.0.1:1")},
-        "claude": {"profile_dir": str(work / "profile")}}))
+        "claude": {"mod": False, "profile_dir": str(work / "profile")}}))
     return config
 
 

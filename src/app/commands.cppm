@@ -20,6 +20,7 @@ import llmgate.copilot;
 import llmgate.doctor;
 import llmgate.gateway;
 import llmgate.json;
+import llmgate.mod_bundle;
 import llmgate.model_list;
 import llmgate.process;
 import llmgate.proof;
@@ -44,6 +45,7 @@ struct context {
     std::string config_error{};
     program_runner run_program = &process::run_and_wait;
     model_lister list_models{};
+    bool reload_after_edit = true;
 };
 
 struct model_findings {
@@ -105,6 +107,13 @@ std::filesystem::path state_directory() {
     return std::filesystem::path{process::expand_home("~/.local/state")} / "llmgate";
 }
 
+std::filesystem::path data_directory() {
+    if (auto const base = variable("XDG_DATA_HOME")) {
+        return std::filesystem::path{*base} / "llmgate";
+    }
+    return std::filesystem::path{process::expand_home("~/.local/share")} / "llmgate";
+}
+
 std::filesystem::path config_directory() {
     if (auto const base = variable("XDG_CONFIG_HOME")) {
         return std::filesystem::path{*base};
@@ -118,6 +127,49 @@ std::expected<std::string, std::string> read_file(std::filesystem::path const& p
         return std::unexpected{"cannot read " + path.string()};
     }
     return std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+}
+
+constexpr mode_t mod_file_mode = 0600;
+
+std::expected<std::filesystem::path, std::string> install_mod() {
+    auto const root = data_directory() / "mod" / claude::mod_digest();
+    for (auto const& file : claude::mod_files) {
+        auto const target = root / file.path;
+        std::string const wanted(file.bytes.begin(), file.bytes.end());
+        if (auto const current = read_file(target); current && *current == wanted) {
+            continue;
+        }
+        if (auto const written = process::write_file_atomic(target, wanted, mod_file_mode, true); !written) {
+            return std::unexpected{target.string() + ": " + written.error().message()};
+        }
+    }
+    return root;
+}
+
+struct mod_launch {
+    std::vector<std::string> arguments{};
+    claude::environment_list variables{};
+
+    std::vector<std::string> arguments_with(std::vector<std::string> const& rest) const { return std::ranges::to<std::vector>(std::views::join(std::array{arguments, rest})); }
+
+    claude::environment_list variables_with(claude::environment_list const& base) const { return std::ranges::to<claude::environment_list>(std::views::join(std::array{base, variables})); }
+};
+
+mod_launch mod_for(context const& where) {
+    if (!where.settings.claude.mod) {
+        return {};
+    }
+    std::filesystem::path directory;
+    if (auto const chosen = variable("LLMGATE_MOD_DIR")) {
+        directory = *chosen;
+    } else if (auto installed = install_mod()) {
+        directory = std::move(*installed);
+    } else {
+        std::println(stderr, "llmgate: warning: the llmgate mod could not be written ({}); starting Claude Code without it", installed.error());
+        return {};
+    }
+    return {.arguments = {"--plugin-dir", directory.string()},
+            .variables = {{"LLMGATE_BIN", where.binary.string()}, {"LLMGATE_CONFIG", std::filesystem::absolute(process::expand_home(where.options.config_path)).string()}}};
 }
 
 std::expected<arguments::gateway_address, std::string> address_of(gateway::config const& settings) {
@@ -398,6 +450,18 @@ inline outcome ensure_profile(context const& where, bool const dry_run) {
     if (auto written = detail::write_json(settings_path, merged, dry_run, true); !written) {
         return written;
     }
+    if (where.settings.claude.credential == claude::credential_mode::gateway) {
+        auto const state_path = directory / ".claude.json";
+        auto state = detail::existing_json(state_path);
+        if (!state) {
+            return std::unexpected{state.error()};
+        }
+        if (!claude::onboarding_marked(*state)) {
+            if (auto written = detail::write_json(state_path, claude::with_onboarding_done(std::move(*state)), dry_run, true); !written) {
+                return written;
+            }
+        }
+    }
     return detail::write_text(directory / "commands" / "gateway.md",
                               claude::gateway_command_file(where.binary.string(), process::expand_home(where.options.config_path)), dry_run);
 }
@@ -591,7 +655,18 @@ inline int run_claude(context const& where) {
         std::println(stderr, "llmgate: the claude command was not found on PATH");
         return exit_missing;
     }
-    process::exec_program(*program, where.options.passthrough, *list);
+    auto const mod = detail::mod_for(where);
+    process::exec_program(*program, mod.arguments_with(where.options.passthrough), mod.variables_with(*list));
+}
+
+inline int run_mod(context const& where) {
+    auto const mod = detail::mod_for(where);
+    if (mod.arguments.empty()) {
+        std::println(stderr, "llmgate: the mod is not available (claude.mod is false, or it could not be written)");
+        return exit_failure;
+    }
+    std::println("{}", mod.arguments.back());
+    return 0;
 }
 
 }  // namespace llmgate::commands

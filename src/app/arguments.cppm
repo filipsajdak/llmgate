@@ -39,7 +39,9 @@ enum class command {
     recipe,
     agents,
     rules,
-    check
+    check,
+    init [[= tolerant{}]],
+    mod
 };
 static_assert(reflect::unique_values<command>());
 
@@ -99,7 +101,7 @@ struct options {
     [[= flag{"--offline"}]] [[= applies_to{command::doctor}]] bool offline = false;
     [[= flag{"--days"}]] [[= operand{"N"}]] [[= applies_to{command::usage}]] [[= limits{1, longest_report_days}]] unsigned days = default_days;
     [[= flag{"--provider"}]] [[= applies_to{command::login, command::models, command::quota, command::check}]] [[= operand{"NAME"}]] std::string provider{};
-    [[= flag{"--yes"}]] [[= applies_to{command::provider, command::routes, command::config, command::models, command::recipe, command::agents, command::rules}]] bool yes = false;
+    [[= flag{"--yes"}]] [[= applies_to{command::provider, command::routes, command::config, command::models, command::recipe, command::agents, command::rules, command::init}]] bool yes = false;
     [[= flag{"--preset"}]] [[= applies_to{command::provider}]] [[= operand{"NAME"}]] std::string preset{};
     [[= flag{"--labels"}]] [[= applies_to{command::provider}]] [[= operand{"A,B"}]] std::string labels{};
     [[= flag{"--base-url"}]] [[= applies_to{command::provider}]] [[= operand{"URL"}]] std::string base_url{};
@@ -110,6 +112,7 @@ struct options {
     [[= flag{"--offer"}]] [[= applies_to{command::provider}]] [[= operand{"A,B"}]] std::string offer{};
     [[= flag{"--description"}]] [[= applies_to{command::agents}]] [[= operand{"TEXT"}]] std::string description{};
     [[= flag{"--prompt"}]] [[= applies_to{command::agents}]] [[= operand{"TEXT"}]] std::string prompt{};
+    [[= flag{"--recipe"}]] [[= applies_to{command::init}]] [[= operand{"ID"}]] std::string recipe{};
     [[= flag{"--quick"}]] [[= applies_to{command::check}]] bool quick = false;
     [[= flag{"--offer-from"}]] [[= applies_to{command::provider}]] [[= operand{"FILE"}]] std::string offer_from{};
     [[= flag{"--offer-filter"}]] [[= applies_to{command::provider}]] [[= operand{"TEXT"}]] std::string offer_filter{};

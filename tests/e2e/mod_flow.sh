@@ -39,7 +39,7 @@ cat > "$work/config.jsonc" <<JSON
     "beta": { "base_url": "$up", "static_token_env": "E2E_TOKEN", "offer": ["m-beta"] }
   },
   "routes": { "sonnet": ["alpha"] },
-  "claude": { "profile_dir": "$work/profile" }
+  "claude": { "mod": false, "profile_dir": "$work/profile" }
 }
 JSON
 export E2E_TOKEN=e2e-token
