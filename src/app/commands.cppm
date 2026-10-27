@@ -398,6 +398,18 @@ inline outcome ensure_profile(context const& where, bool const dry_run) {
     if (auto written = detail::write_json(settings_path, merged, dry_run, true); !written) {
         return written;
     }
+    if (where.settings.claude.credential == claude::credential_mode::gateway) {
+        auto const state_path = directory / ".claude.json";
+        auto state = detail::existing_json(state_path);
+        if (!state) {
+            return std::unexpected{state.error()};
+        }
+        if (!claude::onboarding_marked(*state)) {
+            if (auto written = detail::write_json(state_path, claude::with_onboarding_done(std::move(*state)), dry_run, true); !written) {
+                return written;
+            }
+        }
+    }
     return detail::write_text(directory / "commands" / "gateway.md",
                               claude::gateway_command_file(where.binary.string(), process::expand_home(where.options.config_path)), dry_run);
 }

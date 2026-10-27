@@ -271,6 +271,24 @@ constexpr json::value merge_settings(json::value existing, std::string_view cons
     return existing;
 }
 
+constexpr std::string_view onboarding_key = "hasCompletedOnboarding";
+
+constexpr bool onboarding_marked(json::value const& existing) {
+    auto const* root = std::get_if<json::object>(&existing.data);
+    return root != nullptr && std::ranges::any_of(*root, [](auto const& member) { return member.first == onboarding_key; });
+}
+
+constexpr json::value with_onboarding_done(json::value existing) {
+    if (!std::holds_alternative<json::object>(existing.data)) {
+        existing = json::value{json::object{}};
+    }
+    auto& root = std::get<json::object>(existing.data);
+    if (detail::find_member(root, onboarding_key) == nullptr) {
+        root.emplace_back(std::string{onboarding_key}, json::value{true});
+    }
+    return existing;
+}
+
 struct picker_row {
     std::string model{};
     std::string label{};

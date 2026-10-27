@@ -35,6 +35,17 @@ const suite claude_suite = [] {
         expect(value_of(list, "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY") == "1" && value_of(list, "CLAUDE_CODE_GATEWAY_HINT_HEADERS") == "1");
     };
 
+    "capability_onboarding_is_marked_done_once_and_nothing_else_in_the_state_file_changes"_test = [] {
+        auto const fresh = json::write(claude::with_onboarding_done(json::value{}));
+        auto const kept = json::write(claude::with_onboarding_done(parse_value(R"({"theme":"dark","hasCompletedOnboarding":false})")));
+        auto const added = json::write(claude::with_onboarding_done(parse_value(R"({"theme":"dark"})")));
+
+        expect(fresh == R"({"hasCompletedOnboarding":true})") << fresh;
+        expect(kept == R"({"theme":"dark","hasCompletedOnboarding":false})") << kept;
+        expect(added == R"({"theme":"dark","hasCompletedOnboarding":true})") << added;
+        expect(claude::onboarding_marked(parse_value(R"({"hasCompletedOnboarding":false})")) && !claude::onboarding_marked(json::value{}));
+    };
+
     "capability_the_context_window_feeds_both_limits"_test = [] {
         auto const list = claude::environment({.context_tokens = 123456}, "u", "", "/p");
 
