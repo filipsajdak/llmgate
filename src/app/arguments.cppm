@@ -40,7 +40,8 @@ enum class command {
     agents,
     rules,
     check,
-    init [[= tolerant{}]]
+    init [[= tolerant{}]],
+    mod
 };
 static_assert(reflect::unique_values<command>());
 

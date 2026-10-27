@@ -1079,6 +1079,7 @@ constexpr auto handlers = std::to_array<std::pair<arguments::command, command_ha
     {arguments::command::rules, &edit_command},
     {arguments::command::check, &check_command},
     {arguments::command::init, &init_command},
+    {arguments::command::mod, &commands::run_mod},
     {arguments::command::statusline, &statusline_command},
 });
 

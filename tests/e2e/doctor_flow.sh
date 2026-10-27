@@ -94,7 +94,7 @@ cat > "$config" <<JSON
 {
   "listen": "127.0.0.1:$port",
   "upstream": { "base_url": "http://127.0.0.1:1" },
-  "claude": { "profile_dir": "$work/profile" },
+  "claude": { "mod": false, "profile_dir": "$work/profile" },
   "usage": { "ledger_file": "$work/usage.jsonl", "budget": { "daily_tokens": 1000000, "monthly_tokens": 20000000 } },
   "copilot": { "token_file": "$work/config/llmgate/token.json", "github_url": "http://127.0.0.1:$github_port", "api_url": "http://127.0.0.1:$github_port" }
 }
@@ -135,7 +135,7 @@ config="$work/providers.jsonc"
 cat > "$config" <<JSON
 {
   "listen": "127.0.0.1:$port",
-  "claude": { "profile_dir": "$work/profile" },
+  "claude": { "mod": false, "profile_dir": "$work/profile" },
   "usage": { "ledger_file": "$work/usage.jsonl" },
   "providers": { "default": { "base_url": "http://127.0.0.1:1",
     "copilot": { "token_file": "$work/config/llmgate/token.json", "github_url": "http://127.0.0.1:$github_port", "api_url": "http://127.0.0.1:$github_port" } } }

@@ -72,7 +72,7 @@ write_config() {
   "upstream": { "base_url": "http://127.0.0.1:$upstream_port" },
   "static_token_env": "E2E_UPSTREAM_TOKEN",
   "time": { "drain": "$1" },
-  "claude": { "profile_dir": "$work/profile" },
+  "claude": { "mod": false, "profile_dir": "$work/profile" },
   "usage": { "ledger_file": "$work/usage.jsonl" }
 }
 JSON

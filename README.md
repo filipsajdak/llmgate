@@ -28,6 +28,7 @@ llmgate claude         # starts the gateway if it is down, then runs Claude Code
 | Command | What it does |
 |---|---|
 | `llmgate init [--yes] [--recipe ID]` | First run on a terminal: asks which providers you have (Claude login, Copilot, ChatGPT plan, a gateway with a key, a local server), adds each with the same edit as `provider add`, signs in, offers the recommended models, offers a recipe and writes the profile. It creates the configuration if missing and never overwrites one. With `--yes` it asks nothing: it creates the configuration and the profile and applies `--recipe` if the providers already meet its needs |
+| `llmgate mod` | Writes the mod that ships inside the binary to `~/.local/share/llmgate/mod/DIGEST` (only what differs) and prints that directory, the one `llmgate claude` passes as `--plugin-dir`; use it to load the mod elsewhere: `claude --plugin-dir "$(llmgate mod)"`. Fails when `claude.mod` is `false` |
 | `llmgate claude [args]` | Sets the environment Claude Code needs, starts the gateway on demand (detached, logging to `~/.local/state/llmgate/gateway.log`, never killing anything) and runs `claude` |
 | `llmgate setup [--dry-run]` | Creates or updates the profile: private deny rules for `.env` files, secrets, the gateway config directory and `~/.claude`, `effortLevel` if unset, and the status line. Existing settings are merged, never overwritten; a `settings.json` that is not plain JSON is refused untouched |
 | `llmgate setup --service` | Also installs a launchd agent (macOS) or systemd user unit (Linux) that keeps the gateway running |
@@ -184,6 +185,7 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `claude.effort` | string | `"medium"` | Effort level written to the profile when it has none. |
 | `claude.telemetry` | boolean | `false` | Whether Claude Code keeps its telemetry on; off by default. |
 | `claude.credential` | one of `gateway`, `login` | `"gateway"` | Credential Claude Code presents to the gateway: gateway sends the gateway key (or a placeholder) as ANTHROPIC_AUTH_TOKEN; login sends none, so Claude Code keeps using its own saved login or API key, which a provider with forward_credentials passes on. |
+| `claude.mod` | boolean | `true` | Whether llmgate claude loads the llmgate mod (the /llmgate pane and status entry) into Claude Code; the mod ships inside the binary. |
 | `usage` | object | - | Usage ledger and token budgets. |
 | `usage.ledger_file` | string | `"~/.local/state/llmgate/usage.jsonl"` | File that receives one line per request; the gateway reads it back at start-up. |
 | `usage.budget` | object | - | Token budgets; 0 means no limit, and counted tokens are input + output + cache writes. |
@@ -377,12 +379,7 @@ slice). `/llmgate` opens a pane (beside the transcript where the app has room, a
 - **Targets:** every model your providers offer (`offer` in the provider), with `use for ROLE` (this session) and
   `make default` (every session) buttons, and `clear session override`.
 
-Start Claude Code with the mod loaded and tell it where llmgate is (the launcher will do both in a later slice):
-
-```
-LLMGATE_BIN="$(command -v llmgate)" LLMGATE_CONFIG=~/.config/llmgate/config.jsonc \
-  llmgate claude --plugin-dir /path/to/llmgate/mods/llmgate
-```
+`llmgate claude` loads the mod by itself: the binary carries the mod's runtime files, writes them to `~/.local/share/llmgate/mod/DIGEST` (only what differs, mode 0600), starts Claude Code with `--plugin-dir` for that directory ahead of your own arguments, and exports `LLMGATE_BIN` and `LLMGATE_CONFIG` for it. `claude.mod: false` turns this off; `LLMGATE_MOD_DIR=/path/to/llmgate/mods/llmgate` loads a mod directory of your choice instead (for working on the mod); if the files cannot be written, Claude Code starts without the mod and says so. Plain `claude` and the VS Code extension do not get the mod.
 
 A mod is code that runs with your permissions, so check what this one does first:
 `claude plugin validate mods/llmgate`. It reads `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `LLMGATE_BIN` and

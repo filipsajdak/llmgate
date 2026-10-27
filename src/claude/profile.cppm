@@ -30,6 +30,7 @@ struct launch_config {
     [[= reflect::doc{"Whether Claude Code keeps its telemetry on; off by default."}]] bool telemetry = false;
     [[= reflect::doc{"Credential Claude Code presents to the gateway: gateway sends the gateway key (or a placeholder) as ANTHROPIC_AUTH_TOKEN; login sends none, so Claude Code keeps using its own saved login or API key, which a provider with forward_credentials passes on."}]]
     credential_mode credential = credential_mode::gateway;
+    [[= reflect::doc{"Whether llmgate claude loads the llmgate mod (the /llmgate pane and status entry) into Claude Code; the mod ships inside the binary."}]] bool mod = true;
 };
 
 consteval bool one_model_slot_per_role() {

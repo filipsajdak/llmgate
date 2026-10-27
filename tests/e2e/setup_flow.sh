@@ -17,7 +17,7 @@ cat > "$work/llmgate.jsonc" <<JSON
   "listen": "127.0.0.1:$port",
   "upstream": { "base_url": "http://127.0.0.1:1" },
   "static_token_env": "E2E_UPSTREAM_TOKEN",
-  "claude": { "profile_dir": "$work/profile", "context_tokens": 150000, "sonnet": "claude-sonnet-5-5" },
+  "claude": { "mod": false, "profile_dir": "$work/profile", "context_tokens": 150000, "sonnet": "claude-sonnet-5-5" },
   "usage": { "ledger_file": "$work/usage.jsonl", "budget": { "daily_tokens": 1000 } }
 }
 JSON

@@ -207,7 +207,10 @@
     // Credential Claude Code presents to the gateway: gateway sends the gateway key (or a placeholder) as
     // ANTHROPIC_AUTH_TOKEN; login sends none, so Claude Code keeps using its own saved login or API key,
     // which a provider with forward_credentials passes on. One of: gateway, login.
-    "credential": "gateway"
+    "credential": "gateway",
+    // Whether llmgate claude loads the llmgate mod (the /llmgate pane and status entry) into Claude Code;
+    // the mod ships inside the binary.
+    "mod": true
   },
 
   // Usage ledger and token budgets.
