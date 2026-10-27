@@ -4,6 +4,16 @@ A gateway that lets Claude Code talk to GitHub Copilot and Anthropic backends wi
 
 Status: walking-skeleton phase (BET-1, decision on 2026-11-06). The Anthropic passthrough works end to end with the real Claude Code CLI against a scripted upstream (`tests/e2e/claude_through_gateway.sh`); the first run against GitHub Copilot needs your device login.
 
+## Install from a release
+
+Needs a published release (see the repository's Releases page). The binaries depend on nothing outside the system: macOS arm64 and x86-64, Linux x86-64 and arm64 (Windows through WSL for now).
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/filipsajdak/llmgate/main/install/install.sh | sh
+```
+
+The script downloads the archive for your system, checks it against the release's `SHA256SUMS.txt`, installs `llmgate` into `~/.local/bin` (the old binary stays as `llmgate.previous`), offers Claude Code's official installer if `claude` is missing, and runs `llmgate setup`. It never edits a shell profile. `--dry-run` prints every step and changes nothing; `--version X.Y.Z`, `--prefix DIR`, `--no-init`, `--with-claude`, `--force` adjust it; `--uninstall` removes the binary and `--uninstall --purge` also removes llmgate's configuration, state and profiles (never `~/.claude`). `sh install/install.sh --help` lists everything. The steps are specified in [docs/llmgate-rollout.md](docs/llmgate-rollout.md).
+
 ## Quick start
 
 ```bash
