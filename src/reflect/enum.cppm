@@ -8,18 +8,34 @@ import std;
 
 export namespace llmgate::reflect {
 
+constexpr std::size_t meaning_capacity = 200;
+
+struct meaning {
+    char text[meaning_capacity]{};
+
+    consteval meaning(std::string_view const words) {
+        if (words.size() >= meaning_capacity) {
+            throw "reflect::meaning: the text does not fit in its capacity";
+        }
+        std::ranges::copy(words, text);
+    }
+};
+
 template <class E>
 struct enumerator_entry {
     E value;
     char const* name;
+    char const* meaning_text;
 };
 
 template <class E>
     requires std::is_enum_v<E>
 consteval std::span<enumerator_entry<E> const> enumerator_table() {
     return std::define_static_array(std::meta::enumerators_of(^^E) | std::views::transform([](std::meta::info const item) {
+                                        auto const notes = std::meta::annotations_of_with_type(item, ^^meaning);
                                         return enumerator_entry<E>{.value = std::meta::extract<E>(item),
-                                                                   .name = std::define_static_string(std::meta::identifier_of(item))};
+                                                                   .name = std::define_static_string(std::meta::identifier_of(item)),
+                                                                   .meaning_text = std::define_static_string(notes.empty() ? std::string_view{} : std::string_view{std::meta::extract<meaning>(notes.front()).text})};
                                     }));
 }
 
@@ -97,6 +113,11 @@ public:
         return qualified;
     }
     std::string message(int const value) const override {
+        static constexpr auto table = enumerator_table<E>();
+        auto const match = std::ranges::find(table, static_cast<E>(value), &enumerator_entry<E>::value);
+        if (match != table.end() && *match->meaning_text != '\0') {
+            return std::string{match->meaning_text};
+        }
         return std::string{enum_name(static_cast<E>(value))};
     }
 };
