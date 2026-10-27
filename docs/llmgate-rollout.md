@@ -139,6 +139,21 @@ The unit tests drive the menu and answer parsing; `tests/e2e/init_flow.sh` feeds
 | B7 | Directories of older digests stay, because a running session may be reading one; each is about 70 KB. |
 | B8 | `setup` and the VS Code settings do not load the mod: it is a launch argument of the terminal launcher. VS Code and the desktop app are checked later. |
 
+## Proxy and certificate authority (phase 1 slice 4 of the slice table)
+
+| # | Behaviour |
+|---|---|
+| P1 | The configuration gains a `network` section: `proxy` (a URL; when empty it comes from `HTTPS_PROXY`, `https_proxy` or `ALL_PROXY`, in that order), `no_proxy` (a list; when empty it comes from `NO_PROXY` or `no_proxy`), `ca_file` (a PEM bundle added to the trusted roots) and `system_roots` (default true). |
+| P2 | Every HTTPS connection to an upstream (providers, model discovery, Copilot and ChatGPT sign-in, quota) goes through the proxy with `CONNECT host:port HTTP/1.1` unless `no_proxy` matches. The listener is unaffected. A loopback upstream is never proxied, and an upstream reached over plain HTTP is not proxied either. |
+| P3 | `no_proxy` entries are comma-separated, case-blind and trimmed: `*` matches everything; a domain with or without a leading dot matches itself and its subdomains; an IPv4 or IPv6 literal matches itself; a CIDR matches addresses in it; `host:port` matches only that port. |
+| P4 | Proxy credentials come only from the proxy URL, are percent-decoded and sent as `Proxy-Authorization: Basic`. They are never logged, printed, or put in the ledger or the overview. A 407 is reported as "the proxy asks for credentials" and is not retried. |
+| P5 | The CONNECT answer is read to the blank line under a size cap. Any 2xx opens the tunnel and the bytes after the blank line belong to TLS. Any other status is reported as the proxy having refused to open a tunnel. |
+| P6 | Trusted roots are the OpenSSL defaults with `SSL_CERT_FILE` and `SSL_CERT_DIR`, then `ca_file`, then, when `system_roots` is true, the system's roots: on macOS from the system and system-root keychains (`security find-certificate -a -p`), on Linux from the usual bundle paths. |
+| P7 | A handshake that fails verification says why (for example "unable to get local issuer certificate") and names the remedies, `network.ca_file` and `SSL_CERT_FILE`, instead of `handshake_failed`. |
+| P8 | `llmgate doctor` has a `network` check: the proxy parses (credentials masked), `ca_file` is readable PEM, at least one trusted root is found, and, when a proxy is set, it answers CONNECT. |
+
+The proxy URL parsing, the `no_proxy` matcher and the CONNECT answer parser are pure and checked at compile time with corpora; `tests/e2e/proxy_flow.sh` runs plain, authenticated and TLS-intercepting proxies.
+
 ## Seams a Windows port touches
 
 | Seam | Today | Windows |
