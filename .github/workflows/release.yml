@@ -1,0 +1,124 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp into the binaries when not releasing a tag"
+        default: "0.0.0"
+
+permissions:
+  contents: read
+
+env:
+  REF_TYPE: ${{ github.ref_type }}
+  REF_NAME: ${{ github.ref_name }}
+  INPUT_VERSION: ${{ inputs.version }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - id: version
+        run: |
+          if [ "$REF_TYPE" = tag ]; then version=${REF_NAME#v}; else version=${INPUT_VERSION:-0.0.0}; fi
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "version $version is not MAJOR.MINOR.PATCH" >&2; exit 1 ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  macos:
+    needs: prepare
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: macos-15, arch: arm64}
+          - {runner: macos-15-intel, arch: x86_64}
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install gcc ninja cmake openssl@3
+      - run: cmake --preset release-macos -DCMAKE_CXX_COMPILER="$(brew --prefix)/bin/g++-16" -DLLMGATE_VERSION="$VERSION"
+      - run: cmake --build --preset release-macos
+      - run: tools/check_relocatable.sh build/release-macos/llmgate
+      - run: test "$(build/release-macos/llmgate --version)" = "llmgate $VERSION"
+      - run: tools/package_release.sh build/release-macos/llmgate darwin ${{ matrix.arch }} "$VERSION" dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: llmgate-darwin-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  linux:
+    needs: prepare
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, arch: x86_64}
+          - {runner: ubuntu-24.04-arm, arch: arm64}
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: ops/ci/release-linux.sh
+      - name: Run on a bare image with no libraries installed
+        run: |
+          for image in debian:bookworm-slim ubuntu:20.04; do
+            test "$(docker run --rm -v "$PWD/build/release-linux:/o:ro" "$image" /o/llmgate --version)" = "llmgate $VERSION"
+          done
+      - run: tools/package_release.sh build/release-linux/llmgate linux ${{ matrix.arch }} "$VERSION" dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: llmgate-linux-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, macos, linux]
+    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: llmgate-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums and Homebrew formula
+        run: |
+          cd dist
+          sha256sum llmgate-*.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          cd ..
+          python3 tools/render_formula.py dist/SHA256SUMS.txt "v$VERSION" > dist/llmgate.rb
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*
+      - name: Create the release
+        if: github.ref_type == 'tag'
+        run: gh release create "$REF_NAME" dist/* --generate-notes --verify-tag --title "llmgate $VERSION"
+      - name: Keep the files of a trial run
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: trial-release
+          path: dist/*
