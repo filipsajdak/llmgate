@@ -44,15 +44,15 @@ check sh -c "! '$binary' --config '$work/config.jsonc' doctor --offline 2>&1 | g
 label="models offer previews the offer, the limits and the protocol the model's endpoints need"
 run models offer p up-on > "$work/offer.out" 2>&1 || true
 check sh -c "grep -q '\"offer\": \[\"up-on\"\]' '$work/offer.out' && grep -q 'context_tokens\":300000' '$work/offer.out' && grep -q 'model_protocols' '$work/offer.out' && grep -q 'openai_responses' '$work/offer.out' && grep -q 'not written' '$work/offer.out'"
-label="models offer refuses a disabled model and a chat-only model by name"
-check sh -c "! '$binary' --config '$work/config.jsonc' models offer p up-off 2>&1 | grep -qv 'policy' && ! '$binary' --config '$work/config.jsonc' models offer p up-chat 2>&1 | grep -qv '/chat/completions'"
-label="models offer all --yes writes only the recommended models"
+label="models offer refuses a disabled model and a model that answers only on an endpoint llmgate does not translate, by name"
+check sh -c "! '$binary' --config '$work/config.jsonc' models offer p up-off 2>&1 | grep -qv 'policy' && ! '$binary' --config '$work/config.jsonc' models offer p up-embed 2>&1 | grep -qv '/embeddings'"
+label="models offer all --yes writes the recommended models, a chat-only one with the chat protocol, and no disabled or untranslatable one"
 run models offer p all --yes > "$work/offer-all.out" 2>&1 || true
-check sh -c "grep -q 'up-on' '$work/config.jsonc' && ! grep -q 'up-chat\\|\"offer\": \[[^]]*up-off' '$work/config.jsonc'"
+check sh -c "grep -q 'up-on' '$work/config.jsonc' && grep -q '\"up-chat\": \"openai_chat\"' '$work/config.jsonc' && ! grep -q 'up-embed\|\"offer\": \[[^]]*up-off' '$work/config.jsonc'"
 
 label="models list shows every model with its protocol, its window and a recommendation, as text and as JSON"
 run models list p > "$work/list.out" 2>&1 || true
 run models list p --json > "$work/list.json" 2>&1 || true
-check sh -c "grep -q 'up-on  openai_responses  context 300000  enabled  recommended' '$work/list.out' && grep -q 'up-off  anthropic' '$work/list.out' && grep -q 'up-chat  unsupported' '$work/list.out' && python3 -c \"import json,sys; d=json.load(open('$work/list.json')); assert [r['id'] for r in d]==['up-on','up-off','up-chat'] and d[0]['recommended'] and not d[1]['recommended'] and d[2]['protocol']=='unsupported'\""
+check sh -c "grep -q 'up-on  openai_responses  context 300000  enabled  recommended' '$work/list.out' && grep -q 'up-off  anthropic' '$work/list.out' && grep -q 'up-chat  openai_chat  context 0  enabled  recommended' '$work/list.out' && grep -q 'up-embed  unsupported' '$work/list.out' && python3 -c \"import json,sys; d=json.load(open('$work/list.json')); assert [r['id'] for r in d]==['up-on','up-off','up-chat','up-embed'] and d[0]['recommended'] and not d[1]['recommended'] and d[2]['protocol']=='openai_chat' and d[2]['recommended'] and d[3]['protocol']=='unsupported'\""
 
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }

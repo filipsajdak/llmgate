@@ -24,7 +24,7 @@ label="the key is stored private and never printed or put in the configuration"
 check sh -c "[ \"\$(cat '$HOME/.config/llmgate/secrets/partner.key')\" = e2e-token ] && [ \"\$(ls -l '$HOME/.config/llmgate/secrets/partner.key' | cut -c1-10)\" = '-rw-------' ] && ! grep -q e2e-token '$config' '$work/one.out'"
 
 label="the recommended models of the provider that answered are offered, and a provider that cannot list them is reported without failing init"
-check sh -c "grep -q 'up-on' '$config' && ! grep -q 'up-chat' '$config' && grep -q 'models could not be listed now; later run: llmgate models offer local all' '$work/one.out'"
+check sh -c "grep -q 'up-on' '$config' && grep -q 'openai_chat' '$config' && ! grep -q 'up-embed' '$config' && grep -q 'models could not be listed now; later run: llmgate models offer local all' '$work/one.out'"
 
 label="the profile is written and onboarding is marked done because the credential mode is gateway"
 check sh -c "[ -e '$HOME/.claude-llmgate/settings.json' ] && grep -q hasCompletedOnboarding '$HOME/.claude-llmgate/.claude.json' && grep -q 'Ready. Start Claude Code with: llmgate claude' '$work/one.out'"

@@ -9,7 +9,7 @@ import llmgate.reflect;
 
 export namespace llmgate::offer {
 
-enum class wire { messages, responses, unsupported };
+enum class wire { messages, responses, chat, unsupported };
 
 constexpr std::size_t longest_id = 128;
 
@@ -21,6 +21,7 @@ inline bool valid_id(std::string_view const id) {
 
 constexpr std::string_view messages_endpoint = "/v1/messages";
 constexpr std::string_view responses_endpoint = "/responses";
+constexpr std::string_view chat_endpoint = "/chat/completions";
 
 constexpr bool lists(model_list::entry const& model, std::string_view const endpoint) {
     return std::ranges::contains(model.endpoints, endpoint);
@@ -28,12 +29,15 @@ constexpr bool lists(model_list::entry const& model, std::string_view const endp
 
 constexpr wire wire_of(model_list::entry const& model, gateway::wire_protocol const provider) {
     if (model.endpoints.empty()) {
-        return provider == gateway::wire_protocol::openai_responses ? wire::responses : wire::messages;
+        return provider == gateway::wire_protocol::openai_responses ? wire::responses : provider == gateway::wire_protocol::openai_chat ? wire::chat : wire::messages;
     }
     if (lists(model, messages_endpoint)) {
         return wire::messages;
     }
-    return lists(model, responses_endpoint) ? wire::responses : wire::unsupported;
+    if (lists(model, responses_endpoint)) {
+        return wire::responses;
+    }
+    return lists(model, chat_endpoint) ? wire::chat : wire::unsupported;
 }
 
 inline bool recommended(model_list::entry const& model, gateway::wire_protocol const provider) {
@@ -45,7 +49,13 @@ inline bool recommended(model_list::entry const& model, gateway::wire_protocol c
 namespace llmgate::offer::detail {
 
 constexpr gateway::wire_protocol protocol_of(wire const found) {
-    return found == wire::responses ? gateway::wire_protocol::openai_responses : gateway::wire_protocol::anthropic;
+    switch (found) {
+        case wire::responses: return gateway::wire_protocol::openai_responses;
+        case wire::chat: return gateway::wire_protocol::openai_chat;
+        case wire::messages:
+        case wire::unsupported: break;
+    }
+    return gateway::wire_protocol::anthropic;
 }
 
 std::string limits_json(model_list::entry const& model) {

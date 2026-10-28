@@ -25,7 +25,7 @@ ml::entry listed(std::string id, std::vector<std::string> endpoints, ml::access 
 
 std::vector<ml::entry> seat() {
     return {listed("claude-sonnet-5.5", {"/chat/completions", "/v1/messages"}), listed("gpt-6-luna", {"/responses", "ws:/responses"}), listed("gpt-5.6-sol", {"/responses"}, ml::access::disabled),
-            listed("old-chat", {"/chat/completions"}), {.id = "bare"}};
+            listed("old-chat", {"/chat/completions"}), listed("embedder", {"/embeddings"}), {.id = "bare"}};
 }
 
 gw::provider_config copilot_seat() {
@@ -49,7 +49,9 @@ suite<"offer"> tests = [] {
         expect(of::wire_of(listed("m", {"/responses"}), gw::wire_protocol::anthropic) == of::wire::responses);
         expect(of::wire_of(listed("m", {"/chat/completions", "/v1/messages"}), gw::wire_protocol::openai_responses) == of::wire::messages);
         expect(of::wire_of(listed("m", {"/chat/completions", "/responses"}), gw::wire_protocol::anthropic) == of::wire::responses);
-        expect(of::wire_of(listed("m", {"/chat/completions"}), gw::wire_protocol::anthropic) == of::wire::unsupported);
+        expect(of::wire_of(listed("m", {"/chat/completions"}), gw::wire_protocol::anthropic) == of::wire::chat);
+        expect(of::wire_of(listed("m", {"/embeddings"}), gw::wire_protocol::anthropic) == of::wire::unsupported);
+        expect(of::wire_of(listed("m", {}), gw::wire_protocol::openai_chat) == of::wire::chat);
         expect(of::wire_of(listed("m", {}), gw::wire_protocol::openai_responses) == of::wire::responses);
         expect(of::wire_of(listed("m", {}), gw::wire_protocol::anthropic) == of::wire::messages);
     };
@@ -65,7 +67,7 @@ suite<"offer"> tests = [] {
         auto const all = seat();
 
         expect(of::recommended(all.at(0), gw::wire_protocol::anthropic) && of::recommended(all.at(1), gw::wire_protocol::anthropic));
-        expect(!of::recommended(all.at(2), gw::wire_protocol::anthropic) && !of::recommended(all.at(3), gw::wire_protocol::anthropic));
+        expect(!of::recommended(all.at(2), gw::wire_protocol::anthropic) && of::recommended(all.at(3), gw::wire_protocol::anthropic) && !of::recommended(all.at(4), gw::wire_protocol::anthropic));
         auto hidden = listed("h", {"/responses"});
         hidden.hidden = true;
         expect(!of::recommended(hidden, gw::wire_protocol::anthropic));
@@ -78,12 +80,12 @@ suite<"offer"> tests = [] {
 
         auto const rows = of::candidates(provider, seat());
 
-        expect(rows.size() == 5_u);
+        expect(rows.size() == 6_u);
         expect(rows.at(0).id == "claude-sonnet-5.5" && rows.at(0).protocol == "anthropic" && rows.at(0).recommended && rows.at(0).offered);
         expect(rows.at(1).id == "gpt-6-luna" && rows.at(1).protocol == "openai_responses" && rows.at(1).recommended && rows.at(1).offered);
         expect(rows.at(2).policy == "disabled" && !rows.at(2).recommended && !rows.at(2).offered);
-        expect(rows.at(3).protocol == "unsupported" && !rows.at(3).recommended);
-        expect(rows.at(4).policy == "unknown" && rows.at(4).context == 0_u && rows.at(4).recommended);
+        expect(rows.at(3).protocol == "openai_chat" && rows.at(3).recommended && rows.at(4).protocol == "unsupported" && !rows.at(4).recommended);
+        expect(rows.at(5).policy == "unknown" && rows.at(5).context == 0_u && rows.at(5).recommended);
         auto const text = of::candidates_json(rows);
         expect(text.starts_with("[{") && text.contains(R"("id":"gpt-6-luna")") && text.contains(R"("recommended":true)") && text.contains(R"("context":400000)")) << text;
     };
@@ -97,7 +99,7 @@ suite<"offer"> tests = [] {
         auto const rows = of::candidates(copilot_seat(), bad);
         auto const planned = of::plan("work", copilot_seat(), bad, {"--config=/tmp/x"});
 
-        expect(rows.size() == 5_u);
+        expect(rows.size() == 6_u);
         expect(std::ranges::none_of(rows, [](of::candidate const& row) { return row.id.starts_with('-') || row.id.contains(' ') || row.id.contains('\x1b'); }));
         expect(!planned.has_value() && planned.error().contains("not a plain model name"));
         expect(of::valid_id("claude-sonnet-5.5") && of::valid_id("gpt-6-luna@v2:free/x") && !of::valid_id("-x") && !of::valid_id("") && !of::valid_id("a b"));
@@ -116,11 +118,11 @@ suite<"offer"> tests = [] {
 
     "limit_a_disabled_a_chat_only_or_an_unlisted_model_is_refused_by_name_and_nothing_is_planned"_test = [] {
         auto const disabled = of::plan("work", copilot_seat(), seat(), {"gpt-5.6-sol"});
-        auto const chat_only = of::plan("work", copilot_seat(), seat(), {"old-chat"});
+        auto const chat_only = of::plan("work", copilot_seat(), seat(), {"embedder"});
         auto const unlisted = of::plan("work", copilot_seat(), seat(), {"nope"});
 
         expect(!disabled.has_value() && disabled.error().contains("gpt-5.6-sol") && disabled.error().contains("policy"));
-        expect(!chat_only.has_value() && chat_only.error().contains("old-chat") && chat_only.error().contains("/chat/completions"));
+        expect(!chat_only.has_value() && chat_only.error().contains("embedder") && chat_only.error().contains("/embeddings"));
         expect(!unlisted.has_value() && unlisted.error().contains("nope"));
     };
 
