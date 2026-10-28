@@ -87,6 +87,21 @@ builds anything, and nobody needs a particular compiler.
 | C8 | A non-2xx answer becomes an Anthropic error body with the upstream's message and the matching type. A request with `stream` false is refused, as for the Responses protocol. |
 | C9 | `models offer` treats a model that lists only `/chat/completions` as offerable with `openai_chat`. |
 
+## Bedrock (phase 1 slice 6)
+
+Slice 6 is built in three parts: 6a Claude models with an API key, 6b SigV4 credentials, 6c Converse for models that are not Claude. 6a is specified here; 6b and 6c are added to this section before they are built.
+
+| # | Behaviour (6a) |
+|---|---|
+| V1 | `protocol: bedrock_messages` sends a Claude request to Bedrock's invoke-with-response-stream operation with the Messages body (L14). Its default `messages_path` is `/model/{model}/invoke-with-response-stream`; in a path the model is percent-encoded, so an inference profile id with `:` or `.` works. |
+| V2 | `preset: bedrock` with `region: "eu-central-1"` fills `base_url` as `https://bedrock-runtime.REGION.amazonaws.com` and the protocol, and reads the Bedrock API key from `AWS_BEARER_TOKEN_BEDROCK` unless `auth` or `static_token_env` says otherwise. A gateway in front of Bedrock sets `base_url` instead. |
+| V3 | The request body is the client's, with `model` and `stream` removed, `anthropic_version` set to `bedrock-2023-05-31` when absent, and the `anthropic-beta` header tokens moved into an `anthropic_beta` array. Only tokens in the provider's `bedrock.betas` list are kept; an empty list means the built-in list of tokens Bedrock documents. Dropped tokens are counted by name in the stats. |
+| V4 | The answer is the AWS event stream. Each frame is read with its two CRCs checked; a `chunk` event carries `{"bytes": BASE64}` whose content is one Messages event, which is passed on under its own type. A corrupt frame ends the stream with an error event. |
+| V5 | An exception frame becomes an Anthropic error event: throttling is `rate_limit_error`, validation is `invalid_request_error`, anything else `api_error`, with the frame's message. |
+| V6 | A non-2xx answer (a JSON `message`) becomes an Anthropic error with the upstream's message and the type of its status. |
+| V7 | Usage comes from the Messages events; Bedrock's own `amazon-bedrock-invocationMetrics` key is ignored. |
+| V8 | The AWS credential is a bearer API key in 6a; SigV4 follows in 6b. |
+
 ## Phase 1 slices
 
 | Slice | Content | Gate (fails today) |
