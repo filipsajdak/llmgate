@@ -3,6 +3,7 @@ module;
 export module llmgate.config;
 
 import std;
+import llmgate.chat_quirks;
 import llmgate.claude;
 import llmgate.doc;
 import llmgate.json;
@@ -37,7 +38,9 @@ struct chatgpt_config {
     [[= reflect::doc{"Name OpenAI shows the user when this tool is registered at the first sign-in."}]] std::string agent_name = "llmgate";
 };
 
-enum class wire_protocol { anthropic, openai_responses };
+using chat_quirks = chat::quirks;
+
+enum class wire_protocol { anthropic, openai_responses, openai_chat };
 static_assert(reflect::unique_values<wire_protocol>());
 
 constexpr std::size_t preset_url_capacity = 40;
@@ -59,12 +62,13 @@ enum class preset_kind {
     copilot [[= preset_defaults{"https://api.githubcopilot.com", wire_protocol::anthropic}]],
     anthropic [[= preset_defaults{"https://api.anthropic.com", wire_protocol::anthropic}]],
     chatgpt [[= preset_defaults{"https://api.openai.com/v1", wire_protocol::openai_responses}]],
-    openai_chat
+    openai_chat [[= preset_defaults{"", wire_protocol::openai_chat}]]
 };
 static_assert(reflect::unique_values<preset_kind>());
 
 constexpr std::string_view default_messages_path = "/v1/messages";
 constexpr std::string_view default_responses_path = "/responses";
+constexpr std::string_view default_chat_path = "/chat/completions";
 
 enum class auth_kind { bearer, header, none };
 static_assert(reflect::unique_values<auth_kind>());
@@ -90,9 +94,9 @@ struct upstream_config {
     [[= json::required]] [[= reflect::doc{"Base URL of the single upstream; together with the other top-level keys it acts as one provider named default."}]]
     [[= reflect::example{R"("https://api.githubcopilot.com")"}]] std::string base_url{};
     [[= reflect::doc{"Path of the Messages endpoint on the upstream."}]] std::string messages_path = "/v1/messages";
-    [[= reflect::doc{"A working default for this kind of provider: copilot, anthropic, chatgpt (openai_chat is not built yet). It fills base_url when that is empty and the protocol when it is left at anthropic; whatever you set yourself wins."}]]
+    [[= reflect::doc{"A working default for this kind of provider: copilot, anthropic, chatgpt, openai_chat (a chat-completions server: it sets the protocol and leaves base_url to you). It fills base_url when that is empty and the protocol when it is left at anthropic; whatever you set yourself wins."}]]
     [[= reflect::example{R"("chatgpt")"}]] [[= reflect::commented]] preset_kind preset = preset_kind::none;
-    [[= reflect::doc{"Wire protocol of the provider: anthropic (the Messages API, the default) or openai_responses (the OpenAI Responses API; Claude Code requests are translated, see docs/translation-responses.md). With openai_responses the messages_path default becomes /responses."}]]
+    [[= reflect::doc{"Wire protocol: anthropic (the Messages API, the default), openai_responses (OpenAI Responses, translated: docs/translation-responses.md) or openai_chat (a chat-completions server such as Azure OpenAI or vLLM, translated: docs/llmgate-rollout.md). The messages_path default becomes /responses or /chat/completions; a {model} in messages_path is replaced by the upstream model name."}]]
     wire_protocol protocol = wire_protocol::anthropic;
     [[= reflect::doc{"Extra headers sent to the upstream on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here."}]]
     [[= reflect::example{R"({ "Editor-Version": "vscode/1.99.0", "Copilot-Integration-Id": "vscode-chat" })"}]]
@@ -101,6 +105,7 @@ struct upstream_config {
     [[= reflect::example{R"({ "claude-sonnet-5.5": { "context_tokens": 328000, "prompt_tokens": 200000, "output_tokens": 128000 } })"}]] [[= reflect::commented]] std::map<std::string, model_limits> limits{};
     [[= reflect::doc{"Wire protocol of single models, keyed by upstream model id; a model not listed uses the provider's protocol. A provider whose list gives supported_endpoints (a Copilot seat serves Claude models on /v1/messages and GPT models on /responses) needs one entry per model that differs."}]]
     [[= reflect::example{R"({ "gpt-6-luna": "openai_responses" })"}]] [[= reflect::commented]] std::map<std::string, wire_protocol> model_protocols{};
+    [[= reflect::doc{"Quirks of a chat-completions server (protocol openai_chat), as true or false flags: use_max_completion_tokens, drop_stop_sequences, drop_sampling, drop_reasoning_effort, drop_reasoning_effort_with_tools. Azure OpenAI reasoning models need the first three and the last."}]] [[= reflect::example{R"({ "use_max_completion_tokens": true, "drop_stop_sequences": true, "drop_sampling": true, "drop_reasoning_effort": false, "drop_reasoning_effort_with_tools": true })"}]] [[= reflect::commented]] chat_quirks chat{};
     [[= reflect::doc{"Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen."}]] [[= reflect::commented]] bool forward_credentials = false;
     [[= reflect::doc{"Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER."}]] [[= reflect::example{R"(["claude-sonnet-5-5"])"}]] [[= reflect::commented]] std::vector<std::string> offer{};
     [[= reflect::doc{"Labels of this provider, shown beside every model it serves in the pane, the /model picker and the CLI, and used to group usage and filter targets. Each is 1 to 24 letters, digits, - or _."}]] [[= reflect::example{R"(["work", "acme"])"}]] [[= reflect::commented]] std::vector<std::string> labels{};
@@ -126,15 +131,16 @@ struct copilot_config {
 struct provider_config {
     [[= reflect::doc{"Base URL of the provider; a preset supplies it when this is empty."}]] [[= reflect::example{R"("https://api.anthropic.com")"}]] std::string base_url{};
     [[= reflect::doc{"Path of the Messages endpoint on the provider."}]] std::string messages_path = "/v1/messages";
-    [[= reflect::doc{"A working default for this kind of provider: copilot, anthropic, chatgpt (openai_chat is not built yet). It fills base_url when that is empty and the protocol when it is left at anthropic; whatever you set yourself wins."}]]
+    [[= reflect::doc{"A working default for this kind of provider: copilot, anthropic, chatgpt, openai_chat (a chat-completions server: it sets the protocol and leaves base_url to you). It fills base_url when that is empty and the protocol when it is left at anthropic; whatever you set yourself wins."}]]
     [[= reflect::example{R"("chatgpt")"}]] [[= reflect::commented]] preset_kind preset = preset_kind::none;
-    [[= reflect::doc{"Wire protocol of the provider: anthropic (the Messages API, the default) or openai_responses (the OpenAI Responses API; Claude Code requests are translated, see docs/translation-responses.md). With openai_responses the messages_path default becomes /responses."}]]
+    [[= reflect::doc{"Wire protocol: anthropic (the Messages API, the default), openai_responses (OpenAI Responses, translated: docs/translation-responses.md) or openai_chat (a chat-completions server such as Azure OpenAI or vLLM, translated: docs/llmgate-rollout.md). The messages_path default becomes /responses or /chat/completions; a {model} in messages_path is replaced by the upstream model name."}]]
     wire_protocol protocol = wire_protocol::anthropic;
     [[= reflect::doc{"Extra headers sent to the provider on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here."}]] std::map<std::string, std::string> headers{};
     [[= reflect::doc{"Limits per upstream model id, as the provider reports them (llmgate models lists them). max_tokens above output_tokens is clamped; the model list carries prompt_tokens and output_tokens."}]]
     [[= reflect::example{R"({ "claude-sonnet-5.5": { "context_tokens": 328000, "prompt_tokens": 200000, "output_tokens": 128000 } })"}]] [[= reflect::commented]] std::map<std::string, model_limits> limits{};
     [[= reflect::doc{"Wire protocol of single models, keyed by upstream model id; a model not listed uses the provider's protocol. A provider whose list gives supported_endpoints (a Copilot seat serves Claude models on /v1/messages and GPT models on /responses) needs one entry per model that differs."}]]
     [[= reflect::example{R"({ "gpt-6-luna": "openai_responses" })"}]] [[= reflect::commented]] std::map<std::string, wire_protocol> model_protocols{};
+    [[= reflect::doc{"Quirks of a chat-completions server (protocol openai_chat), as true or false flags: use_max_completion_tokens, drop_stop_sequences, drop_sampling, drop_reasoning_effort, drop_reasoning_effort_with_tools. Azure OpenAI reasoning models need the first three and the last."}]] [[= reflect::example{R"({ "use_max_completion_tokens": true, "drop_stop_sequences": true, "drop_sampling": true, "drop_reasoning_effort": false, "drop_reasoning_effort_with_tools": true })"}]] [[= reflect::commented]] chat_quirks chat{};
     [[= reflect::doc{"Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen."}]] [[= reflect::commented]] bool forward_credentials = false;
     [[= reflect::doc{"Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER."}]] [[= reflect::example{R"(["claude-sonnet-5-5"])"}]] [[= reflect::commented]] std::vector<std::string> offer{};
     [[= reflect::doc{"Labels of this provider, shown beside every model it serves in the pane, the /model picker and the CLI, and used to group usage and filter targets. Each is 1 to 24 letters, digits, - or _."}]] [[= reflect::example{R"(["work", "acme"])"}]] [[= reflect::commented]] std::vector<std::string> labels{};

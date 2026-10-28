@@ -2332,11 +2332,35 @@ const suite gateway_suite = [] {
         expect(gateway::config_problem(settings).contains("provider plain") && gateway::config_problem(settings).contains("base_url"));
     };
 
-    "limit_the_openai_chat_preset_is_refused_until_its_translator_exists"_test = [] {
+    "capability_the_openai_chat_preset_sets_the_chat_protocol_and_leaves_the_base_url_to_the_provider"_test = [] {
         gateway::config settings;
         settings.providers["local"] = {.base_url = "http://127.0.0.1:30800", .preset = gateway::preset_kind::openai_chat};
+        gateway::config bare;
+        bare.providers["local"] = {.preset = gateway::preset_kind::openai_chat};
 
-        expect(gateway::config_problem(settings).contains("openai_chat") && gateway::config_problem(settings).contains("not built"));
+        expect(gateway::effective_providers(settings).at("local").protocol == gateway::wire_protocol::openai_chat);
+        expect(gateway::config_problem(settings).empty());
+        expect(gateway::config_problem(bare).contains("provider local") && gateway::config_problem(bare).contains("base_url"));
+    };
+
+    "capability_the_messages_path_defaults_by_protocol_and_a_model_placeholder_is_filled"_test = [] {
+        using gateway::wire_protocol;
+        constexpr std::string_view azure = "/openai/deployments/{model}/chat/completions?api-version=2024-10-21";
+
+        expect(gateway::effective_messages_path(wire_protocol::anthropic, "/v1/messages", "m") == "/v1/messages");
+        expect(gateway::effective_messages_path(wire_protocol::openai_responses, "/v1/messages", "m") == "/responses");
+        expect(gateway::effective_messages_path(wire_protocol::openai_chat, "/v1/messages", "m") == "/chat/completions");
+        expect(gateway::effective_messages_path(wire_protocol::openai_chat, azure, "gpt-5.6-luna") == "/openai/deployments/gpt-5.6-luna/chat/completions?api-version=2024-10-21");
+        expect(gateway::effective_messages_path(wire_protocol::anthropic, "/a/{model}/b/{model}", "x") == "/a/x/b/x");
+        expect(gateway::effective_messages_path(wire_protocol::openai_chat, "/custom", "m") == "/custom");
+    };
+
+    "capability_a_model_listed_for_the_chat_protocol_uses_it_whatever_the_provider_says"_test = [] {
+        gateway::provider_config provider;
+        provider.model_protocols["old-chat"] = gateway::wire_protocol::openai_chat;
+
+        expect(gateway::wire_for(provider, "old-chat") == gateway::wire_protocol::openai_chat);
+        expect(gateway::wire_for(provider, "other") == gateway::wire_protocol::anthropic);
     };
 
     "capability_a_preset_is_read_by_name_and_an_unknown_name_is_refused"_test = [] {
