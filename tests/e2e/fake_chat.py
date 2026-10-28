@@ -59,6 +59,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.fail(404, "unknown path " + self.path)
         if EXPECTED_KEY and self.headers.get("api-key") != EXPECTED_KEY:
             return self.fail(401, "bad key")
+        if "FAKE_400" in json.dumps(request.get("messages")):
+            return self.fail(400, "bad field xyz")
         if MODE == "rate_limited":
             return self.fail(429, "Rate limit reached")
         refused = [name for name in REFUSED if name in request]

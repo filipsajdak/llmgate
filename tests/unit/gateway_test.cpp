@@ -2355,6 +2355,27 @@ const suite gateway_suite = [] {
         expect(gateway::effective_messages_path(wire_protocol::openai_chat, "/custom", "m") == "/custom");
     };
 
+    "capability_the_bedrock_preset_builds_the_runtime_address_from_the_region_and_reads_the_key_from_the_standard_variable"_test = [] {
+        gateway::config settings;
+        settings.providers["aws"] = {.preset = gateway::preset_kind::bedrock, .region = "eu-central-1"};
+        settings.providers["own"] = {.base_url = "https://gw.example", .preset = gateway::preset_kind::bedrock, .auth = {.env = "MY_KEY"}};
+        settings.providers["bare"] = {.preset = gateway::preset_kind::bedrock};
+        auto const providers = gateway::effective_providers(settings);
+
+        expect(providers.at("aws").base_url == "https://bedrock-runtime.eu-central-1.amazonaws.com" && providers.at("aws").protocol == gateway::wire_protocol::bedrock_messages);
+        expect(providers.at("aws").auth.env == "AWS_BEARER_TOKEN_BEDROCK");
+        expect(providers.at("own").base_url == "https://gw.example" && providers.at("own").auth.env == "MY_KEY");
+        expect(gateway::config_problem(settings).contains("provider bare") && gateway::config_problem(settings).contains("base_url"));
+    };
+
+    "capability_the_invoke_path_encodes_the_model_id_so_a_profile_id_or_an_arn_stays_one_segment"_test = [] {
+        using gateway::wire_protocol;
+
+        expect(gateway::effective_messages_path(wire_protocol::bedrock_messages, "/v1/messages", "anthropic.claude-sonnet-4-6-v1:0") == "/model/anthropic.claude-sonnet-4-6-v1%3A0/invoke-with-response-stream");
+        expect(gateway::effective_messages_path(wire_protocol::bedrock_messages, "/v1/messages", "arn:aws:bedrock:eu:1:inference-profile/eu.x") == "/model/arn%3Aaws%3Abedrock%3Aeu%3A1%3Ainference-profile%2Feu.x/invoke-with-response-stream");
+        expect(gateway::effective_messages_path(wire_protocol::bedrock_messages, "/custom/{model}/go", "a b") == "/custom/a%20b/go");
+    };
+
     "capability_a_model_listed_for_the_chat_protocol_uses_it_whatever_the_provider_says"_test = [] {
         gateway::provider_config provider;
         provider.model_protocols["old-chat"] = gateway::wire_protocol::openai_chat;

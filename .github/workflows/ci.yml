@@ -92,7 +92,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [http_parser, sse_parser, jsonscan, guard, json, routing, settings, launcher, usage, schedule, proxy]
+        target: [http_parser, sse_parser, jsonscan, guard, json, routing, settings, launcher, usage, schedule, proxy, eventstream]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

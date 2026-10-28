@@ -122,7 +122,8 @@
         "fuzz_launcher",
         "fuzz_usage",
         "fuzz_schedule",
-        "fuzz_proxy"
+        "fuzz_proxy",
+        "fuzz_eventstream"
       ]
     },
     {
