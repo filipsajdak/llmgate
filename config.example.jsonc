@@ -12,13 +12,16 @@
     "base_url": "https://api.githubcopilot.com",
     // Path of the Messages endpoint on the upstream.
     "messages_path": "/v1/messages",
-    // A working default for this kind of provider: copilot, anthropic, chatgpt (openai_chat is not built
-    // yet). It fills base_url when that is empty and the protocol when it is left at anthropic; whatever
-    // you set yourself wins. One of: none, copilot, anthropic, chatgpt, openai_chat.
+    // A working default for this kind of provider: copilot, anthropic, chatgpt, openai_chat (a
+    // chat-completions server: it sets the protocol and leaves base_url to you). It fills base_url when
+    // that is empty and the protocol when it is left at anthropic; whatever you set yourself wins. One of:
+    // none, copilot, anthropic, chatgpt, openai_chat.
     // "preset": "chatgpt",
-    // Wire protocol of the provider: anthropic (the Messages API, the default) or openai_responses (the
-    // OpenAI Responses API; Claude Code requests are translated, see docs/translation-responses.md). With
-    // openai_responses the messages_path default becomes /responses. One of: anthropic, openai_responses.
+    // Wire protocol: anthropic (the Messages API, the default), openai_responses (OpenAI Responses,
+    // translated: docs/translation-responses.md) or openai_chat (a chat-completions server such as Azure
+    // OpenAI or vLLM, translated: docs/llmgate-rollout.md). The messages_path default becomes /responses
+    // or /chat/completions; a {model} in messages_path is replaced by the upstream model name. One of:
+    // anthropic, openai_responses, openai_chat.
     "protocol": "anthropic",
     // Extra headers sent to the upstream on every request. With a copilot login the gateway also sends
     // Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here.
@@ -30,6 +33,10 @@
     // protocol. A provider whose list gives supported_endpoints (a Copilot seat serves Claude models on
     // /v1/messages and GPT models on /responses) needs one entry per model that differs.
     // "model_protocols": { "gpt-6-luna": "openai_responses" },
+    // Quirks of a chat-completions server (protocol openai_chat), as true or false flags:
+    // use_max_completion_tokens, drop_stop_sequences, drop_sampling, drop_reasoning_effort,
+    // drop_reasoning_effort_with_tools. Azure OpenAI reasoning models need the first three and the last.
+    // "chat": { "use_max_completion_tokens": true, "drop_stop_sequences": true, "drop_sampling": true, "drop_reasoning_effort": false, "drop_reasoning_effort_with_tools": true },
     // Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to
     // this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a
     // gateway credential. For an Anthropic provider only; refused together with client_key_env or a

@@ -1,6 +1,6 @@
 # llmgate
 
-A gateway that lets Claude Code use any provider, account and model: GitHub Copilot (github.com or an enterprise host), a ChatGPT plan (Codex models), an Anthropic account or key held by Claude Code itself, and any service that speaks the Anthropic Messages API with a key or none. It routes by role, class and signal with fallback, keeps a usage ledger and a scorecard, and nothing is dropped silently. OpenAI chat-completions servers (Azure OpenAI, vLLM, Grok) and AWS Bedrock are planned and not built yet. C++26 with static reflection, Apache-2.0.
+A gateway that lets Claude Code use any provider, account and model: GitHub Copilot (github.com or an enterprise host), a ChatGPT plan (Codex models), an Anthropic account or key held by Claude Code itself, any service that speaks the Anthropic Messages API with a key or none, and OpenAI chat-completions servers (Azure OpenAI, vLLM, Grok). It routes by role, class and signal with fallback, keeps a usage ledger and a scorecard, and nothing is dropped silently. AWS Bedrock is planned and not built yet. C++26 with static reflection, Apache-2.0.
 
 Status: the first release is `v0.1.0`. Verified with the real Claude Code CLI against a scripted upstream (`tests/e2e/claude_through_gateway.sh`) and through the compatibility scenarios on real GitHub Copilot and ChatGPT Plus accounts; the macOS and Linux binaries are built in CI for arm64 and x86-64, native Windows is not built yet (use WSL). Your first run needs your own sign-in: `llmgate init` walks through it.
 
@@ -82,14 +82,20 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `upstream` | object | - | The single backend of an older configuration; it keeps working and acts as one provider named default. |
 | `upstream.base_url` | string | required | Base URL of the single upstream; together with the other top-level keys it acts as one provider named default. |
 | `upstream.messages_path` | string | `"/v1/messages"` | Path of the Messages endpoint on the upstream. |
-| `upstream.preset` | one of `none`, `copilot`, `anthropic`, `chatgpt`, `openai_chat` | `"none"` | A working default for this kind of provider: copilot, anthropic, chatgpt (openai_chat is not built yet). It fills base_url when that is empty and the protocol when it is left at anthropic; whatever you set yourself wins. |
-| `upstream.protocol` | one of `anthropic`, `openai_responses` | `"anthropic"` | Wire protocol of the provider: anthropic (the Messages API, the default) or openai_responses (the OpenAI Responses API; Claude Code requests are translated, see docs/translation-responses.md). With openai_responses the messages_path default becomes /responses. |
+| `upstream.preset` | one of `none`, `copilot`, `anthropic`, `chatgpt`, `openai_chat` | `"none"` | A working default for this kind of provider: copilot, anthropic, chatgpt, openai_chat (a chat-completions server: it sets the protocol and leaves base_url to you). It fills base_url when that is empty and the protocol when it is left at anthropic; whatever you set yourself wins. |
+| `upstream.protocol` | one of `anthropic`, `openai_responses`, `openai_chat` | `"anthropic"` | Wire protocol: anthropic (the Messages API, the default), openai_responses (OpenAI Responses, translated: docs/translation-responses.md) or openai_chat (a chat-completions server such as Azure OpenAI or vLLM, translated: docs/llmgate-rollout.md). The messages_path default becomes /responses or /chat/completions; a {model} in messages_path is replaced by the upstream model name. |
 | `upstream.headers` | map of string | `{}` | Extra headers sent to the upstream on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here. |
 | `upstream.limits` | map of object | `{}` | Limits per upstream model id, as the provider reports them (llmgate models lists them). max_tokens above output_tokens is clamped; the model list carries prompt_tokens and output_tokens. |
 | `upstream.limits.<name>.context_tokens` | integer | `0` | Context window of the model in tokens; 0 means unknown. |
 | `upstream.limits.<name>.prompt_tokens` | integer | `0` | Largest prompt the model accepts, in tokens; 0 means unknown. Published as max_input_tokens in the model list. |
 | `upstream.limits.<name>.output_tokens` | integer | `0` | Largest reply the model produces, in tokens; 0 means unknown. A request with a larger max_tokens is clamped to it, and the model list publishes it as max_tokens. |
-| `upstream.model_protocols` | map of one of `anthropic`, `openai_responses` | `{}` | Wire protocol of single models, keyed by upstream model id; a model not listed uses the provider's protocol. A provider whose list gives supported_endpoints (a Copilot seat serves Claude models on /v1/messages and GPT models on /responses) needs one entry per model that differs. |
+| `upstream.model_protocols` | map of one of `anthropic`, `openai_responses`, `openai_chat` | `{}` | Wire protocol of single models, keyed by upstream model id; a model not listed uses the provider's protocol. A provider whose list gives supported_endpoints (a Copilot seat serves Claude models on /v1/messages and GPT models on /responses) needs one entry per model that differs. |
+| `upstream.chat` | object | - | Quirks of a chat-completions server (protocol openai_chat), as true or false flags: use_max_completion_tokens, drop_stop_sequences, drop_sampling, drop_reasoning_effort, drop_reasoning_effort_with_tools. Azure OpenAI reasoning models need the first three and the last. |
+| `upstream.chat.use_max_completion_tokens` | boolean | `false` | Send the output limit as max_completion_tokens instead of max_tokens, which the reasoning models of OpenAI and Azure OpenAI require. |
+| `upstream.chat.drop_stop_sequences` | boolean | `false` | Leave stop sequences out of the request, for models that refuse the stop field. |
+| `upstream.chat.drop_sampling` | boolean | `false` | Leave temperature and top_p out of the request, for models that refuse any value but their default. |
+| `upstream.chat.drop_reasoning_effort` | boolean | `false` | Leave reasoning_effort out of the request, for models and servers that do not know it. Claude Code asks for thinking on every request, so a model that does not reason needs this. |
+| `upstream.chat.drop_reasoning_effort_with_tools` | boolean | `false` | Leave reasoning_effort out of a request that carries tools, which some reasoning models refuse on the chat-completions endpoint (they ask for the Responses endpoint or an effort of none). |
 | `upstream.forward_credentials` | boolean | `false` | Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen. |
 | `upstream.offer` | array of string | `[]` | Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER. |
 | `upstream.labels` | array of string | `[]` | Labels of this provider, shown beside every model it serves in the pane, the /model picker and the CLI, and used to group usage and filter targets. Each is 1 to 24 letters, digits, - or _. |
@@ -104,14 +110,20 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `providers` | map of object | `{}` | More than one backend: name each one here. A provider with a copilot object uses the Copilot login, one with static_token_env uses that variable. The keys upstream, models, copilot and static_token_env stay valid and act as one provider named default. |
 | `providers.<name>.base_url` | string | `""` | Base URL of the provider; a preset supplies it when this is empty. |
 | `providers.<name>.messages_path` | string | `"/v1/messages"` | Path of the Messages endpoint on the provider. |
-| `providers.<name>.preset` | one of `none`, `copilot`, `anthropic`, `chatgpt`, `openai_chat` | `"none"` | A working default for this kind of provider: copilot, anthropic, chatgpt (openai_chat is not built yet). It fills base_url when that is empty and the protocol when it is left at anthropic; whatever you set yourself wins. |
-| `providers.<name>.protocol` | one of `anthropic`, `openai_responses` | `"anthropic"` | Wire protocol of the provider: anthropic (the Messages API, the default) or openai_responses (the OpenAI Responses API; Claude Code requests are translated, see docs/translation-responses.md). With openai_responses the messages_path default becomes /responses. |
+| `providers.<name>.preset` | one of `none`, `copilot`, `anthropic`, `chatgpt`, `openai_chat` | `"none"` | A working default for this kind of provider: copilot, anthropic, chatgpt, openai_chat (a chat-completions server: it sets the protocol and leaves base_url to you). It fills base_url when that is empty and the protocol when it is left at anthropic; whatever you set yourself wins. |
+| `providers.<name>.protocol` | one of `anthropic`, `openai_responses`, `openai_chat` | `"anthropic"` | Wire protocol: anthropic (the Messages API, the default), openai_responses (OpenAI Responses, translated: docs/translation-responses.md) or openai_chat (a chat-completions server such as Azure OpenAI or vLLM, translated: docs/llmgate-rollout.md). The messages_path default becomes /responses or /chat/completions; a {model} in messages_path is replaced by the upstream model name. |
 | `providers.<name>.headers` | map of string | `{}` | Extra headers sent to the provider on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here. |
 | `providers.<name>.limits` | map of object | `{}` | Limits per upstream model id, as the provider reports them (llmgate models lists them). max_tokens above output_tokens is clamped; the model list carries prompt_tokens and output_tokens. |
 | `providers.<name>.limits.<name>.context_tokens` | integer | `0` | Context window of the model in tokens; 0 means unknown. |
 | `providers.<name>.limits.<name>.prompt_tokens` | integer | `0` | Largest prompt the model accepts, in tokens; 0 means unknown. Published as max_input_tokens in the model list. |
 | `providers.<name>.limits.<name>.output_tokens` | integer | `0` | Largest reply the model produces, in tokens; 0 means unknown. A request with a larger max_tokens is clamped to it, and the model list publishes it as max_tokens. |
-| `providers.<name>.model_protocols` | map of one of `anthropic`, `openai_responses` | `{}` | Wire protocol of single models, keyed by upstream model id; a model not listed uses the provider's protocol. A provider whose list gives supported_endpoints (a Copilot seat serves Claude models on /v1/messages and GPT models on /responses) needs one entry per model that differs. |
+| `providers.<name>.model_protocols` | map of one of `anthropic`, `openai_responses`, `openai_chat` | `{}` | Wire protocol of single models, keyed by upstream model id; a model not listed uses the provider's protocol. A provider whose list gives supported_endpoints (a Copilot seat serves Claude models on /v1/messages and GPT models on /responses) needs one entry per model that differs. |
+| `providers.<name>.chat` | object | - | Quirks of a chat-completions server (protocol openai_chat), as true or false flags: use_max_completion_tokens, drop_stop_sequences, drop_sampling, drop_reasoning_effort, drop_reasoning_effort_with_tools. Azure OpenAI reasoning models need the first three and the last. |
+| `providers.<name>.chat.use_max_completion_tokens` | boolean | `false` | Send the output limit as max_completion_tokens instead of max_tokens, which the reasoning models of OpenAI and Azure OpenAI require. |
+| `providers.<name>.chat.drop_stop_sequences` | boolean | `false` | Leave stop sequences out of the request, for models that refuse the stop field. |
+| `providers.<name>.chat.drop_sampling` | boolean | `false` | Leave temperature and top_p out of the request, for models that refuse any value but their default. |
+| `providers.<name>.chat.drop_reasoning_effort` | boolean | `false` | Leave reasoning_effort out of the request, for models and servers that do not know it. Claude Code asks for thinking on every request, so a model that does not reason needs this. |
+| `providers.<name>.chat.drop_reasoning_effort_with_tools` | boolean | `false` | Leave reasoning_effort out of a request that carries tools, which some reasoning models refuse on the chat-completions endpoint (they ask for the Responses endpoint or an effort of none). |
 | `providers.<name>.forward_credentials` | boolean | `false` | Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a gateway credential. For an Anthropic provider only; refused together with client_key_env or a non-loopback listen. |
 | `providers.<name>.offer` | array of string | `[]` | Models of this provider to list in Claude Code's /model picker besides the values of models; each appears as claude-NAME@PROVIDER. |
 | `providers.<name>.labels` | array of string | `[]` | Labels of this provider, shown beside every model it serves in the pane, the /model picker and the CLI, and used to group usage and filter targets. Each is 1 to 24 letters, digits, - or _. |
@@ -353,8 +365,24 @@ model list can change; `llmgate doctor` checks the sign-in.
   Content sent through the plan is subject to the data controls of that ChatGPT account, so test with invented
   data.
 
-A chat-completions translator for local models (for example vLLM on a Thor) follows the same design and is not
-built.
+## OpenAI chat-completions servers (Azure OpenAI, vLLM, Grok)
+
+`protocol: "openai_chat"` sends Claude Code's requests to a server that speaks the OpenAI chat-completions API and turns its streamed chunks back into Messages events: text and tool calls (arguments are joined and checked before they are passed on), tool results, images as data URLs, the system prompt, thinking as `reasoning_effort`, and usage with the cache share split out. The reply ends only after the server's usage chunk, and the request asks for it (`stream_options.include_usage`). A tool name the server cannot take (over 64 characters or outside letters, digits, `_`, `-`) is replaced by a stable hash-suffixed name and mapped back in the answer. A request that is not streamed, or that carries a server tool such as the advisor, is refused with a named reason.
+
+An Azure OpenAI deployment (GPT reasoning models) looks like this; `{model}` in `messages_path` becomes the upstream model name:
+
+```jsonc
+"azure": {
+  "base_url": "https://YOUR-RESOURCE.openai.azure.com",
+  "protocol": "openai_chat",
+  "messages_path": "/openai/deployments/{model}/chat/completions?api-version=2024-10-21",
+  "auth": { "kind": "header", "header": "api-key", "env": "AZURE_OPENAI_KEY" },
+  "chat": { "use_max_completion_tokens": true, "drop_stop_sequences": true, "drop_sampling": true, "drop_reasoning_effort_with_tools": true },
+  "models": { "claude-sonnet-5-5": "YOUR-DEPLOYMENT" }
+}
+```
+
+The `chat` flags describe what the server refuses; each is off by default, so a plain OpenAI-compatible server such as vLLM needs none. Reasoning models of OpenAI and Azure refuse `max_tokens` (use `use_max_completion_tokens`), `stop` (`drop_stop_sequences`), `temperature` and `top_p` other than the default (`drop_sampling`) and, on the chat-completions endpoint, `reasoning_effort` together with tools (`drop_reasoning_effort_with_tools`). A model that does not reason at all needs `drop_reasoning_effort`, because Claude Code asks for thinking on every request; keep reasoning and non-reasoning models in separate providers, or give a model its protocol with `model_protocols`. A provider that lists `supported_endpoints` (a Copilot seat) offers its chat-only models with this protocol: `llmgate models offer`.
 
 ## The llmgate mod: the route inside Claude Code
 

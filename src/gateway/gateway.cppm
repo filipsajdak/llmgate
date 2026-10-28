@@ -9,6 +9,8 @@ import llmgate.anthropic;
 import llmgate.async;
 import llmgate.capture;
 import llmgate.claude;
+import llmgate.chat_request;
+import llmgate.chat_stream;
 import llmgate.control;
 import llmgate.history;
 import llmgate.http;
@@ -39,8 +41,23 @@ constexpr wire_protocol wire_for(provider_config const& settings, std::string_vi
     return found == settings.model_protocols.end() ? settings.protocol : found->second;
 }
 
-constexpr std::string effective_messages_path(wire_protocol const protocol, std::string_view const configured) {
-    return protocol == wire_protocol::openai_responses && configured == default_messages_path ? std::string{default_responses_path} : std::string{configured};
+constexpr std::string_view default_path_for(wire_protocol const protocol) {
+    switch (protocol) {
+        case wire_protocol::openai_responses: return default_responses_path;
+        case wire_protocol::openai_chat: return default_chat_path;
+        case wire_protocol::anthropic: break;
+    }
+    return default_messages_path;
+}
+
+constexpr std::string_view model_placeholder = "{model}";
+
+constexpr std::string effective_messages_path(wire_protocol const protocol, std::string_view const configured, std::string_view const upstream_model) {
+    std::string path{configured == default_messages_path ? default_path_for(protocol) : configured};
+    for (auto at = path.find(model_placeholder); at != std::string::npos; at = path.find(model_placeholder, at + upstream_model.size())) {
+        path.replace(at, model_placeholder.size(), upstream_model);
+    }
+    return path;
 }
 
 provider_config legacy_provider(config const& settings) {
@@ -200,9 +217,6 @@ std::string label_problem(std::string const& name, provider_config const& item) 
 }
 
 std::string provider_problem(std::string const& name, provider_config const& item, config const& settings) {
-    if (item.preset == preset_kind::openai_chat) {
-        return "provider " + name + ": the openai_chat preset is not built yet";
-    }
     if (auto const parsed = routing::parse_url(item.base_url); !parsed) {
         return "provider " + name + ": " + parsed.error();
     }
@@ -673,6 +687,7 @@ struct request_note {
     std::string agent_type{};
     bool fallback = false;
     wire_protocol wire = wire_protocol::anthropic;
+    std::vector<chat::renamed_name> renamed{};
     httpio::request const* request = nullptr;
 };
 
@@ -711,6 +726,7 @@ struct relay_state {
     sse::parser parser{};
     anthropic::stream_guard guard{};
     std::optional<responses::stream_translator> translator{};
+    std::optional<chat::stream_translator> chat_translator{};
     bool capture = false;
     std::string raw{};
     std::deque<std::string> pending{};
@@ -732,10 +748,18 @@ struct relay_state {
         }
     }
 
+    void through_guard(sse::event const& event) {
+        guard.on_event(event, [this](auto const& out) { emit(out); }, [this](auto const& fix) { note(fix); });
+    }
+
+    bool translating() const { return translator.has_value() || chat_translator.has_value(); }
+
     void accept(sse::event const& item) {
-        auto const guarded = [this](sse::event const& event) { guard.on_event(event, [this](auto const& out) { emit(out); }, [this](auto const& fix) { note(fix); }); };
+        auto const guarded = [this](sse::event const& event) { through_guard(event); };
         if (translator) {
             translator->on_event(item, guarded);
+        } else if (chat_translator) {
+            chat_translator->on_event(item, guarded);
         } else {
             guarded(item);
         }
@@ -766,7 +790,7 @@ struct relay_state {
         }
         auto const type = incoming.fields.find("content-type").value_or("");
         auto const success = incoming.status >= http_success_floor && incoming.status < http_success_floor + http_success_span;
-        streaming = success && (type.starts_with("text/event-stream") || (translator && type.empty()));
+        streaming = success && (type.starts_with("text/event-stream") || (translating() && type.empty()));
     }
 
     bool unusable_success() const {
@@ -776,6 +800,9 @@ struct relay_state {
 
     void finish_stream() {
         parser.finish([this](sse::event const& item) { accept(item); });
+        if (chat_translator) {
+            chat_translator->finish([this](sse::event const& event) { through_guard(event); });
+        }
         guard.on_end([this](auto const& out) { emit(out); }, [this](auto const& fix) { note(fix); });
     }
 
@@ -853,12 +880,39 @@ std::expected<std::string, attempt_result> to_responses_body(std::string const& 
     return std::move(done->body);
 }
 
+struct translated_body {
+    std::string body{};
+    std::vector<chat::renamed_name> renamed{};
+};
+
+std::expected<translated_body, attempt_result> to_chat_body(std::string const& body, chat::quirks const& chosen, stats& counters) {
+    auto done = chat::translate_request(body, chosen);
+    if (!done) {
+        return std::unexpected{refused(routing::error_reply(400, "invalid_request_error", done.error().message), health::neutral)};
+    }
+    if (!done->client_streams) {
+        return std::unexpected{refused(routing::error_reply(400, "invalid_request_error", "stream must be true for a provider with the openai_chat protocol"), health::neutral)};
+    }
+    for (auto const& name : done->dropped) {
+        ++counters.dropped_fields[name];
+    }
+    return translated_body{.body = std::move(done->body), .renamed = std::move(done->renamed)};
+}
+
+struct built_request {
+    httpio::request_spec spec{};
+    std::vector<chat::renamed_name> renamed{};
+};
+
 bool translates_errors(wire_protocol const wire, int const status) {
-    return wire == wire_protocol::openai_responses && status >= http_error_floor;
+    return wire != wire_protocol::anthropic && status >= http_error_floor;
 }
 
 std::string client_error_body(wire_protocol const wire, int const status, std::string body) {
-    return translates_errors(wire, status) ? responses::error_body(status, body) : std::move(body);
+    if (!translates_errors(wire, status)) {
+        return body;
+    }
+    return wire == wire_protocol::openai_chat ? chat::error_body(status, body) : responses::error_body(status, body);
 }
 
 attempt_result delivered(net::result_void client, health const state) {
@@ -1462,15 +1516,16 @@ private:
     async::task<detail::attempt_result> attempt(std::size_t const index, std::optional<std::string> upstream_model, httpio::request const& incoming,
                                                 httpio::response_writer<Client>& out, detail::request_note note) {
         note.wire = wire_for(providers_[index].settings, detail::upstream_name_of(providers_[index].settings.models, upstream_model, note.requested));
-        auto spec = co_await build_spec(index, upstream_model, note.wire, incoming, note.session);
-        if (!spec) {
-            co_return std::move(spec.error());
+        auto built = co_await build_spec(index, upstream_model, note.wire, incoming, note.session);
+        if (!built) {
+            co_return std::move(built.error());
         }
+        note.renamed = std::move(built->renamed);
         auto upstream = co_await connect_upstream(*providers_[index].url);
         if (!upstream) {
             co_return unreachable(upstream.error());
         }
-        if (auto refusal = co_await send_request(*upstream, std::move(*spec))) {
+        if (auto refusal = co_await send_request(*upstream, std::move(built->spec))) {
             co_return std::move(*refusal);
         }
         co_return co_await read_reply(index, *upstream, out, std::move(note));
@@ -1514,11 +1569,18 @@ private:
         return found == provider->settings.limits.end() ? model_limits{} : found->second;
     }
 
-    std::expected<std::string, detail::attempt_result> upstream_body(wire_protocol const wire, httpio::request const& incoming, std::string body) {
-        if (wire != wire_protocol::openai_responses) {
-            return body;
+    std::expected<detail::translated_body, detail::attempt_result> upstream_body(wire_protocol const wire, httpio::request const& incoming, std::string body, provider_config const& settings) {
+        if (wire == wire_protocol::openai_chat) {
+            return detail::to_chat_body(body, settings.chat, counters_);
         }
-        return detail::to_responses_body(body, incoming, counters_);
+        if (wire != wire_protocol::openai_responses) {
+            return detail::translated_body{.body = std::move(body)};
+        }
+        auto done = detail::to_responses_body(body, incoming, counters_);
+        if (!done) {
+            return std::unexpected{std::move(done.error())};
+        }
+        return detail::translated_body{.body = std::move(*done)};
     }
 
     async::task<std::expected<std::string, detail::attempt_result>> upstream_token(std::size_t const index) {
@@ -1534,7 +1596,7 @@ private:
         co_return std::move(*bearer);
     }
 
-    async::task<std::expected<httpio::request_spec, detail::attempt_result>> build_spec(std::size_t const index, std::optional<std::string> upstream_model, wire_protocol const wire, httpio::request const& incoming,
+    async::task<std::expected<detail::built_request, detail::attempt_result>> build_spec(std::size_t const index, std::optional<std::string> upstream_model, wire_protocol const wire, httpio::request const& incoming,
                                                                                                   std::string session) {
         auto& chosen = providers_[index];
         if (!chosen.url) {
@@ -1545,7 +1607,7 @@ private:
             co_return std::unexpected{detail::refused(std::move(prepared.error()), detail::health::neutral)};
         }
         auto const upstream_name = detail::upstream_name_of(chosen.settings.models, upstream_model, prepared->requested);
-        auto body = upstream_body(wire, incoming, history_for(chosen, session, clamp_output(chosen, upstream_name, std::move(prepared->body))));
+        auto body = upstream_body(wire, incoming, history_for(chosen, session, clamp_output(chosen, upstream_name, std::move(prepared->body))), chosen.settings);
         if (!body) {
             co_return std::unexpected{std::move(body.error())};
         }
@@ -1558,12 +1620,13 @@ private:
                 chosen.url = std::move(parsed);
             }
         }
-        co_return httpio::request_spec{.method = "POST",
-                                       .target = chosen.url->base_path + effective_messages_path(wire, chosen.settings.messages_path),
-                                       .host = routing::host_header(*chosen.url),
-                                       .fields = detail::upstream_headers(incoming, chosen.settings.headers, chosen.settings.copilot.has_value(), chosen.settings.forward_credentials, *token,
-                                                                          wire, chosen.settings.auth),
-                                       .body = std::move(*body)};
+        co_return detail::built_request{.spec = {.method = "POST",
+                                                 .target = chosen.url->base_path + effective_messages_path(wire, chosen.settings.messages_path, upstream_name),
+                                                 .host = routing::host_header(*chosen.url),
+                                                 .fields = detail::upstream_headers(incoming, chosen.settings.headers, chosen.settings.copilot.has_value(), chosen.settings.forward_credentials, *token,
+                                                                                    wire, chosen.settings.auth),
+                                                 .body = std::move(body->body)},
+                                        .renamed = std::move(body->renamed)};
     }
 
     async::task<std::optional<detail::attempt_result>> send_request(net::any_stream& upstream, httpio::request_spec spec) {
@@ -1723,6 +1786,8 @@ private:
         state.capture = static_cast<bool>(capture_);
         if (state.wire == wire_protocol::openai_responses) {
             state.translator.emplace(note.requested);
+        } else if (state.wire == wire_protocol::openai_chat) {
+            state.chat_translator.emplace(note.requested, std::move(note.renamed));
         }
         auto const drained = co_await pump(upstream, state, out);
         absorb_translator_counts(state);
@@ -1752,6 +1817,11 @@ private:
     void absorb_translator_counts(detail::relay_state const& state) {
         if (state.translator) {
             for (auto const& [name, count] : state.translator->ignored()) {
+                counters_.ignored_events[name] += count;
+            }
+        }
+        if (state.chat_translator) {
+            for (auto const& [name, count] : state.chat_translator->ignored()) {
                 counters_.ignored_events[name] += count;
             }
         }
