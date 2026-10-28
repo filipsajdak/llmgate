@@ -121,7 +121,8 @@
         "fuzz_settings",
         "fuzz_launcher",
         "fuzz_usage",
-        "fuzz_schedule"
+        "fuzz_schedule",
+        "fuzz_proxy"
       ]
     },
     {

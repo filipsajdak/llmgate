@@ -15,6 +15,7 @@ export module llmgate.net;
 
 import std;
 import llmgate.async;
+import llmgate.proxy;
 import llmgate.tls;
 
 export namespace llmgate::net {
@@ -233,6 +234,38 @@ async::task<std::expected<unique_fd, std::error_code>> tcp_connect(async::reacto
     co_return std::unexpected{failure};
 }
 
+constexpr std::size_t tunnel_chunk_bytes = 1024;
+
+result_void tunnel_verdict(proxy::reply const& answer, std::size_t const received) {
+    if (answer.which == proxy::outcome::tunnel && answer.consumed == received) {
+        return {};
+    }
+    return std::unexpected{make_error_code(answer.which == proxy::outcome::authentication_required ? proxy::errc::proxy_wants_credentials : proxy::errc::proxy_refused)};
+}
+
+async::task<result_void> open_tunnel(async::reactor& reactor, int const descriptor, std::string host, std::uint16_t const port, std::string authorization,
+                                     idle_limit const timeout) {
+    auto const request = proxy::connect_request(host, port, authorization);
+    if (auto const sent = co_await send_all(reactor, descriptor, std::as_bytes(std::span{request})); !sent) {
+        co_return sent;
+    }
+    std::string answer;
+    std::array<std::byte, tunnel_chunk_bytes> chunk{};
+    for (;;) {
+        auto const received = co_await receive_some(reactor, descriptor, chunk, {.idle = timeout});
+        if (!received) {
+            co_return std::unexpected{received.error()};
+        }
+        if (*received == 0) {
+            co_return std::unexpected{make_error_code(proxy::errc::proxy_closed)};
+        }
+        std::ranges::transform(std::span{chunk}.first(*received), std::back_inserter(answer), [](std::byte const each) { return static_cast<char>(each); });
+        if (auto const parsed = proxy::parse_reply(answer); parsed.which != proxy::outcome::incomplete) {
+            co_return tunnel_verdict(parsed, answer.size());
+        }
+    }
+}
+
 }  // namespace llmgate::net::detail
 
 export namespace llmgate::net {
@@ -356,9 +389,15 @@ public:
                                                                            tls::client_context const& context,
                                                                            std::string host, std::uint16_t const port,
                                                                            idle_limit const timeout = std::nullopt) {
-        auto socket = co_await detail::tcp_connect(reactor, host, port, timeout);
+        auto const via = proxy::route_for(context.route(), host, port);
+        auto socket = co_await detail::tcp_connect(reactor, via ? via->host : host, via ? via->port : port, timeout);
         if (!socket) {
             co_return std::unexpected{socket.error()};
+        }
+        if (via) {
+            if (auto const opened = co_await detail::open_tunnel(reactor, raw(*socket), host, port, via->authorization, timeout); !opened) {
+                co_return std::unexpected{opened.error()};
+            }
         }
         auto session = tls::connection::make(context, host);
         if (!session) {

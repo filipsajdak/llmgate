@@ -23,6 +23,7 @@ import llmgate.httpio;
 import llmgate.json;
 import llmgate.jsonedit;
 import llmgate.net;
+import llmgate.network;
 import llmgate.process;
 import llmgate.recipes;
 import llmgate.reflect;
@@ -174,9 +175,9 @@ int serve(gateway::config settings, std::string const& config_path) {
         return fail(exit_config, "listen must look like 127.0.0.1:9480");
     }
     async::reactor loop;
-    auto tls_context = tls::client_context::make(settings.tls_groups);
+    auto tls_context = commands::tls_context(commands::dial_of(settings));
     if (!tls_context) {
-        return fail(exit_runtime, std::format("cannot start: {}", tls_context.error().message()));
+        return fail(exit_runtime, std::format("cannot start: {}", tls_context.error()));
     }
     auto listening = net::listener::bind(loop, address->host, address->port);
     if (!listening) {
@@ -239,9 +240,9 @@ int request_login(async::reactor& loop, tls::client_context const& tls_context, 
 
 int login_with(gateway::config const& settings, gateway::copilot_config const& target, bool const json) {
     async::reactor loop;
-    auto tls_context = tls::client_context::make(settings.tls_groups);
+    auto tls_context = commands::tls_context(commands::dial_of(settings));
     if (!tls_context) {
-        return exit_runtime;
+        return fail(exit_runtime, tls_context.error());
     }
     return request_login(loop, *tls_context, target, json);
 }
@@ -271,9 +272,9 @@ void announce_browser(std::string const& url, bool const json) {
 
 int chatgpt_sign_in(gateway::config const& settings, gateway::chatgpt_config const& target, bool const json) {
     async::reactor loop;
-    auto tls_context = tls::client_context::make(settings.tls_groups);
+    auto tls_context = commands::tls_context(commands::dial_of(settings));
     if (!tls_context) {
-        return exit_runtime;
+        return fail(exit_runtime, tls_context.error());
     }
     chatgpt::sign_in_options options{.announce = [json](std::string const& url) { announce_browser(url, json); }};
     auto const done = loop.run(chatgpt::sign_in(loop, *tls_context, target, std::move(options)));
@@ -302,11 +303,11 @@ int login(gateway::config const& settings, std::string_view const provider, bool
     return login_with(settings, std::get<gateway::copilot_config>(*target), json);
 }
 
-std::expected<std::string, std::string> fetch_listing(tls::group_policy const tls_groups, gateway::provider_config const& provider) {
+std::expected<std::string, std::string> fetch_listing(commands::dial_settings const& dial, gateway::provider_config const& provider) {
     async::reactor loop;
-    auto tls_context = tls::client_context::make(tls_groups);
+    auto tls_context = commands::tls_context(dial);
     if (!tls_context) {
-        return std::unexpected{std::string{"cannot start TLS"}};
+        return std::unexpected{std::format("cannot start TLS: {}", tls_context.error())};
     }
     auto const credential = make_credential(loop, *tls_context, provider);
     auto const listed = loop.run(discovery::fetch_models(loop, *tls_context, provider, *credential));
@@ -319,9 +320,9 @@ std::expected<std::string, std::string> fetch_listing(tls::group_policy const tl
     return listed->body;
 }
 
-commands::model_lister provider_lister(tls::group_policy const tls_groups) {
-    return [groups = tls_groups](std::string const&, gateway::provider_config const& provider) -> std::expected<std::vector<model_list::entry>, std::string> {
-        auto const body = fetch_listing(groups, provider);
+commands::model_lister provider_lister(commands::dial_settings dial) {
+    return [dial = std::move(dial)](std::string const&, gateway::provider_config const& provider) -> std::expected<std::vector<model_list::entry>, std::string> {
+        auto const body = fetch_listing(dial, provider);
         if (!body) {
             return std::unexpected{body.error()};
         }
@@ -627,7 +628,7 @@ constexpr std::string_view offer_usage = "usage: llmgate models offer PROVIDER M
 constexpr std::string_view offer_all = "all";
 
 std::expected<std::vector<model_list::entry>, std::string> listed_models(commands::context const& where, gateway::provider_config const& provider) {
-    auto const body = fetch_listing(where.settings.tls_groups, provider);
+    auto const body = fetch_listing(commands::dial_of(where.settings), provider);
     if (!body) {
         return std::unexpected{body.error()};
     }
@@ -720,7 +721,7 @@ int models_command(commands::context const& where) {
     if (!chosen) {
         return fail(exit_config, chosen.error());
     }
-    auto const body = fetch_listing(where.settings.tls_groups, chosen->second);
+    auto const body = fetch_listing(commands::dial_of(where.settings), chosen->second);
     return body ? print_listing(where, *body) : fail(exit_runtime, body.error());
 }
 
@@ -1126,7 +1127,7 @@ int print_document(arguments::document const which) {
 }
 
 commands::context make_context(arguments::options const& parsed, std::expected<gateway::config, std::string> settings, char const* const program) {
-    auto lister = provider_lister(settings ? settings->tls_groups : gateway::config{}.tls_groups);
+    auto lister = provider_lister(commands::dial_of(settings ? *settings : gateway::config{}));
     return {.options = parsed,
             .settings = settings ? std::move(*settings) : gateway::config{},
             .binary = process::current_executable().value_or(std::filesystem::path{program}),

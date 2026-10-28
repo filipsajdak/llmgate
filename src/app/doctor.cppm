@@ -11,7 +11,7 @@ import llmgate.text;
 export namespace llmgate::doctor {
 
 enum class status { pass, warn, fail };
-enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, models, ledger, budget, quota, subagents, agent_targets, model_limits };
+enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, models, ledger, budget, quota, subagents, agent_targets, model_limits, network };
 static_assert(reflect::unique_values<check>());
 
 enum class port_state { free, ours, foreign };
@@ -56,6 +56,12 @@ struct model_fact {
     model_state state = model_state::listed;
 };
 
+struct network_fact {
+    std::string proxy{};
+    std::string problem{};
+    bool proxy_answers = true;
+};
+
 struct facts {
     std::string config_error{};
     std::string listen{};
@@ -86,6 +92,7 @@ struct facts {
     bool subagent_model_forced = false;
     std::vector<std::string> dangling_targets{};
     std::vector<std::string> unknown_limits{};
+    network_fact network{};
 };
 
 }  // namespace llmgate::doctor
@@ -281,6 +288,23 @@ constexpr std::optional<finding> model_limits_finding(facts const& seen) {
     return make(check::model_limits, status::warn, detail, "llmgate models offer PROVIDER MODEL... records the limits the provider reports");
 }
 
+constexpr std::optional<finding> network_finding(facts const& seen) {
+    auto const& network = seen.network;
+    if (!network.problem.empty()) {
+        return make(check::network, status::fail, network.problem, "fix network.proxy, network.no_proxy or network.ca_file in the configuration, or the proxy variables of the environment");
+    }
+    if (network.proxy.empty()) {
+        return std::nullopt;
+    }
+    std::string detail;
+    if (!network.proxy_answers) {
+        text::append_all(detail, "the proxy ", network.proxy, " does not answer");
+        return make(check::network, status::warn, detail, "check network.proxy (or HTTPS_PROXY) and that the proxy is reachable from here");
+    }
+    text::append_all(detail, "providers are reached through the proxy ", network.proxy);
+    return make(check::network, status::pass, detail);
+}
+
 constexpr finding static_credential_finding(facts const& seen) {
     if (seen.static_token_variable.empty()) {
         return make(check::credential, status::warn, "no upstream credential is configured", "set copilot.token_file, or static_token_env for another upstream");
@@ -424,6 +448,7 @@ constexpr std::vector<finding> diagnose(facts const& seen) {
     detail::add(out, detail::subagent_finding(seen));
     detail::add(out, detail::agent_targets_finding(seen));
     detail::add(out, detail::model_limits_finding(seen));
+    detail::add(out, detail::network_finding(seen));
     return out;
 }
 

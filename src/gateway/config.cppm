@@ -182,6 +182,16 @@ struct debug_config {
     [[= reflect::doc{"Size in MiB at which the capture file stops growing."}]] std::uint64_t capture_limit_mib = 256;
 };
 
+struct network_config {
+    [[= reflect::doc{"Proxy for every outbound connection to a provider: an http:// URL, with user:password@ in front of the host for a proxy that asks for credentials. Empty uses HTTPS_PROXY, https_proxy or ALL_PROXY from the environment. Addresses on this machine are never proxied."}]]
+    [[= reflect::example{R"("http://proxy.corp.example:3128")"}]] [[= reflect::commented]] std::string proxy{};
+    [[= reflect::doc{"Hosts that skip the proxy: a name (with or without a leading dot, it matches its subdomains too), an IP address, a CIDR range, host:port, or *. Empty uses NO_PROXY or no_proxy from the environment."}]]
+    [[= reflect::example{R"(["internal.corp.example", "10.0.0.0/8"])"}]] [[= reflect::commented]] std::vector<std::string> no_proxy{};
+    [[= reflect::doc{"PEM file of extra trusted certificate authorities, for a network that inspects TLS with its own authority."}]]
+    [[= reflect::example{R"("~/.config/llmgate/corporate-ca.pem")"}]] [[= reflect::commented]] std::string ca_file{};
+    [[= reflect::doc{"Also trust the authorities of the operating system (on macOS the system and system-root keychains; on Linux the usual bundle paths are always read). SSL_CERT_FILE and SSL_CERT_DIR are always honoured."}]] bool system_roots = true;
+};
+
 struct config {
     [[= json::required]] [[= reflect::doc{"Address the gateway listens on; point Claude Code at it with ANTHROPIC_BASE_URL=http://ADDRESS/anthropic."}]]
     [[= reflect::example{R"("127.0.0.1:9480")"}]] std::string listen{};
@@ -222,6 +232,7 @@ struct config {
     fallback_config fallback{};
     [[= reflect::doc{"Time limits of the gateway."}]] timeouts time{};
     [[= reflect::doc{"TLS key exchange groups offered to the providers."}]] tls::group_policy tls_groups = tls::group_policy::post_quantum_preferred;
+    [[= reflect::doc{"Proxy and certificate authorities for the connections llmgate opens to providers."}]] [[= reflect::commented]] network_config network{};
     [[= reflect::doc{"GitHub Copilot device login of the default provider; run llmgate login once."}]] std::optional<copilot_config> copilot{};
     [[= reflect::doc{"ChatGPT plan sign-in of this provider (OpenAI's documented token sharing for open-source tools); used instead of static_token_env, with protocol openai_responses."}]] std::optional<chatgpt_config> chatgpt{};
     [[= reflect::doc{"Name of the environment variable that holds the API key of the default provider."}]]

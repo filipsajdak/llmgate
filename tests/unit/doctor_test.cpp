@@ -84,6 +84,31 @@ const suite doctor_suite = [] {
         expect(exit_code(findings) == 0);
     };
 
+    "capability_the_network_check_fails_on_a_problem_warns_on_a_silent_proxy_and_is_absent_without_one"_test = [] {
+        auto const named = [](facts const& seen) {
+            auto const findings = diagnose(seen);
+            return std::ranges::find(findings, std::string{"network"}, &finding::check) != findings.end();
+        };
+        auto broken = healthy();
+        broken.network.problem = "network.ca_file cannot be read";
+        auto silent = healthy();
+        silent.network = {.proxy = "proxy.corp:3128", .proxy_answers = false};
+        auto answering = healthy();
+        answering.network = {.proxy = "proxy.corp:3128"};
+
+        auto const broken_findings = diagnose(broken);
+        auto const failed = std::ranges::find(broken_findings, std::string{"network"}, &finding::check);
+        auto const silent_findings = diagnose(silent);
+        auto const warned = std::ranges::find(silent_findings, std::string{"network"}, &finding::check);
+        auto const answering_findings = diagnose(answering);
+        auto const passed = std::ranges::find(answering_findings, std::string{"network"}, &finding::check);
+
+        expect(failed->status == status::fail && failed->detail.contains("ca_file") && failed->remedy.contains("network.ca_file") && exit_code(broken_findings) != 0);
+        expect(warned->status == status::warn && warned->detail.contains("proxy.corp:3128") && exit_code(silent_findings) == 0);
+        expect(passed->status == status::pass && passed->detail.contains("through the proxy proxy.corp:3128"));
+        expect(!named(healthy()));
+    };
+
     "capability_a_healthy_setup_passes_every_check_and_exits_zero"_test = [] {
         auto const found = diagnose(healthy());
 

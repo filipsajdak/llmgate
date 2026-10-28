@@ -145,6 +145,24 @@
   // post_quantum_preferred, classical_only.
   "tls_groups": "post_quantum_preferred",
 
+  // Proxy and certificate authorities for the connections llmgate opens to providers.
+  // "network": {
+  //   // Proxy for every outbound connection to a provider: an http:// URL, with user:password@ in front of
+  //   // the host for a proxy that asks for credentials. Empty uses HTTPS_PROXY, https_proxy or ALL_PROXY
+  //   // from the environment. Addresses on this machine are never proxied.
+  //   // "proxy": "http://proxy.corp.example:3128",
+  //   // Hosts that skip the proxy: a name (with or without a leading dot, it matches its subdomains too), an
+  //   // IP address, a CIDR range, host:port, or *. Empty uses NO_PROXY or no_proxy from the environment.
+  //   // "no_proxy": ["internal.corp.example", "10.0.0.0/8"],
+  //   // PEM file of extra trusted certificate authorities, for a network that inspects TLS with its own
+  //   // authority.
+  //   // "ca_file": "~/.config/llmgate/corporate-ca.pem",
+  //   // Also trust the authorities of the operating system (on macOS the system and system-root keychains;
+  //   // on Linux the usual bundle paths are always read). SSL_CERT_FILE and SSL_CERT_DIR are always
+  //   // honoured.
+  //   "system_roots": true
+  // },
+
   // GitHub Copilot device login of the default provider; run llmgate login once.
   "copilot": {
     // File that holds the GitHub OAuth token; run llmgate login once to write it.

@@ -22,7 +22,9 @@ import llmgate.gateway;
 import llmgate.json;
 import llmgate.mod_bundle;
 import llmgate.model_list;
+import llmgate.network;
 import llmgate.process;
+import llmgate.proxy;
 import llmgate.proof;
 import llmgate.quota;
 import llmgate.routing;
@@ -47,6 +49,15 @@ struct context {
     model_lister list_models{};
     bool reload_after_edit = true;
 };
+
+struct dial_settings {
+    tls::group_policy groups = tls::group_policy::post_quantum_preferred;
+    gateway::network_config network{};
+};
+
+inline dial_settings dial_of(gateway::config const& settings) {
+    return {.groups = settings.tls_groups, .network = settings.network};
+}
 
 struct model_findings {
     std::vector<doctor::model_fact> models{};
@@ -127,6 +138,39 @@ std::expected<std::string, std::string> read_file(std::filesystem::path const& p
         return std::unexpected{"cannot read " + path.string()};
     }
     return std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+}
+
+constexpr std::string_view certificate_marker = "BEGIN CERTIFICATE";
+constexpr int proxy_probe_ms = 1500;
+
+std::string system_roots_pem() {
+#if defined(__APPLE__)
+    static std::string const cached = [] {
+        std::string out;
+        for (auto const* keychain : {"/System/Library/Keychains/SystemRootCertificates.keychain", "/Library/Keychains/System.keychain"}) {
+            if (auto const exported = process::run_capturing("/usr/bin/security", {"find-certificate", "-a", "-p", keychain})) {
+                out += *exported;
+            }
+        }
+        return out;
+    }();
+    return cached;
+#else
+    return {};
+#endif
+}
+
+std::expected<std::string, std::string> trust_pem(gateway::network_config const& chosen) {
+    std::string out = chosen.system_roots ? system_roots_pem() : std::string{};
+    if (chosen.ca_file.empty()) {
+        return out;
+    }
+    auto text = read_file(process::expand_home(chosen.ca_file));
+    if (!text || !text->contains(certificate_marker)) {
+        return std::unexpected{std::format("network.ca_file {}", text ? "holds no PEM certificate" : "cannot be read")};
+    }
+    out += *text;
+    return out;
 }
 
 constexpr mode_t mod_file_mode = 0600;
@@ -606,6 +650,22 @@ outcome run_setup_steps(context const& where, claude::environment_list const& li
 
 export namespace llmgate::commands {
 
+inline std::expected<tls::client_context, std::string> tls_context(dial_settings const& dial) {
+    auto policy = network::policy_of(dial.network, [](std::string_view const name) { return detail::variable(name); });
+    if (!policy) {
+        return std::unexpected{std::move(policy.error())};
+    }
+    auto trust = detail::trust_pem(dial.network);
+    if (!trust) {
+        return std::unexpected{std::move(trust.error())};
+    }
+    auto made = tls::client_context::make(dial.groups, *trust, std::move(*policy));
+    if (!made) {
+        return std::unexpected{made.error().message()};
+    }
+    return std::move(*made);
+}
+
 inline int run_setup(context const& where) {
     auto const list = detail::environment_for(where.settings);
     if (!list) {
@@ -751,7 +811,7 @@ std::optional<gateway::copilot_config> copilot_target(gateway::config const& set
 
 void probe_network(gateway::config const& settings, doctor::facts& seen) {
     async::reactor loop;
-    auto tls_context = tls::client_context::make(settings.tls_groups);
+    auto tls_context = commands::tls_context(dial_of(settings));
     if (!tls_context) {
         seen.exchange = doctor::exchange_state::unreachable;
         return;
@@ -907,6 +967,24 @@ bool subagent_model_forced(std::string const& profile_dir) {
     return std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}}.contains(name);
 }
 
+doctor::network_fact network_facts(context const& where) {
+    doctor::network_fact seen;
+    auto const policy = network::policy_of(where.settings.network, [](std::string_view const name) { return variable(name); });
+    if (!policy) {
+        seen.problem = policy.error();
+        return seen;
+    }
+    if (auto const trust = trust_pem(where.settings.network); !trust) {
+        seen.problem = trust.error();
+        return seen;
+    }
+    if (policy->via) {
+        seen.proxy = std::format("{}:{}", policy->via->host, policy->via->port);
+        seen.proxy_answers = where.options.offline || process::tcp_connectable(policy->via->host, policy->via->port, std::chrono::milliseconds{proxy_probe_ms});
+    }
+    return seen;
+}
+
 doctor::facts gather_facts(context const& where) {
     doctor::facts seen;
     seen.config_error = where.config_error;
@@ -931,6 +1009,7 @@ doctor::facts gather_facts(context const& where) {
     seen.subagent_model_forced = detail::subagent_model_forced(seen.profile_dir);
     seen.dangling_targets = dangling_targets_of(where.settings);
     seen.unknown_limits = unknown_limits_of(where.settings);
+    seen.network = network_facts(where);
     return seen;
 }
 
@@ -960,9 +1039,9 @@ inline int run_quota(context const& where) {
         return exit_failure;
     }
     async::reactor loop;
-    auto tls_context = tls::client_context::make(where.settings.tls_groups);
+    auto tls_context = commands::tls_context(dial_of(where.settings));
     if (!tls_context) {
-        std::println(stderr, "llmgate: cannot start TLS: {}", tls_context.error().message());
+        std::println(stderr, "llmgate: cannot start TLS: {}", tls_context.error());
         return exit_failure;
     }
     auto const found = detail::fetch_quota(loop, *tls_context, *copilot_settings);

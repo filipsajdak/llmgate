@@ -7,6 +7,7 @@ module;
 export module llmgate.tls;
 
 import std;
+import llmgate.proxy;
 import llmgate.reflect;
 
 export namespace llmgate::tls {
@@ -18,6 +19,9 @@ enum class [[=reflect::error_enum]] errc {
     protocol_error,
     truncated,
     peer_closed,
+    certificate_not_trusted [[= reflect::meaning{"the server's certificate comes from an authority this machine does not trust: add the authority with network.ca_file or SSL_CERT_FILE"}]],
+    certificate_expired [[= reflect::meaning{"the server's certificate has expired or is not valid yet: check this machine's clock"}]],
+    certificate_wrong_host [[= reflect::meaning{"the server's certificate is for another host name: a proxy or another gateway may be answering instead"}]],
 };
 static_assert(reflect::unique_values<errc>() && reflect::starts_at_one<errc>());
 
@@ -117,6 +121,20 @@ bool configure_trust(SSL_CTX* const context, std::string_view const extra_truste
     return extra_trusted_pem.empty() || trust_pem(context, extra_trusted_pem);
 }
 
+constexpr auto untrusted_codes = std::to_array<long>({X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT, X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY, X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE,
+                                                      X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT, X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN});
+constexpr auto expired_codes = std::to_array<long>({X509_V_ERR_CERT_HAS_EXPIRED, X509_V_ERR_CERT_NOT_YET_VALID});
+
+std::optional<errc> verification_failure(long const result) {
+    if (std::ranges::contains(untrusted_codes, result)) {
+        return errc::certificate_not_trusted;
+    }
+    if (std::ranges::contains(expired_codes, result)) {
+        return errc::certificate_expired;
+    }
+    return result == X509_V_ERR_HOSTNAME_MISMATCH ? std::optional{errc::certificate_wrong_host} : std::nullopt;
+}
+
 std::string drain_errors() {
     std::string text;
     while (auto const code = ERR_get_error()) {
@@ -135,9 +153,10 @@ using reflect::make_error_code;
 
 class client_context {
 public:
-    static std::expected<client_context, std::error_code> make(group_policy const policy,
-                                                               std::string_view const extra_trusted_pem = {}) {
+    static std::expected<client_context, std::error_code> make(group_policy const policy, std::string_view const extra_trusted_pem = {},
+                                                               proxy::policy route = {}) {
         client_context context{SSL_CTX_new(TLS_client_method())};
+        context.route_ = std::make_shared<proxy::policy const>(std::move(route));
         auto* const native = context.native_.get();
         auto const configured = native != nullptr && detail::configure_protocol(native, policy) &&
                                 SSL_CTX_set_alpn_protos(native, detail::alpn_http11.data(), detail::alpn_http11.size()) == 0 &&
@@ -151,11 +170,13 @@ public:
     }
 
     SSL_CTX* native() const noexcept { return native_.get(); }
+    proxy::policy const& route() const noexcept { return *route_; }
 
 private:
     explicit client_context(SSL_CTX* native) noexcept : native_{native} {}
 
     std::unique_ptr<SSL_CTX, detail::ssl_ctx_deleter> native_;
+    std::shared_ptr<proxy::policy const> route_ = std::make_shared<proxy::policy const>();
 };
 
 class server_context {
@@ -297,7 +318,8 @@ private:
         }
         auto const truncated = ERR_GET_REASON(ERR_peek_last_error()) == SSL_R_UNEXPECTED_EOF_WHILE_READING;
         diagnostic_ = detail::drain_errors();
-        return std::unexpected{make_error_code(truncated ? errc::truncated : errc::handshake_failed)};
+        auto const verdict = detail::verification_failure(SSL_get_verify_result(session_.get()));
+        return std::unexpected{make_error_code(truncated ? errc::truncated : verdict.value_or(errc::handshake_failed))};
     }
 
     std::unique_ptr<SSL, detail::ssl_deleter> session_;

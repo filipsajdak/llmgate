@@ -160,6 +160,11 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `time.stream_idle` | duration | `"2m"` | How long a streaming response may stay silent before the gateway cuts it with an error event, so that the client can retry. Anthropic servers send a ping every few seconds, so a silence of two minutes is a stall; raise it for a provider that streams nothing while it reasons. |
 | `time.drain` | duration | `"10s"` | How long a stop (SIGINT or SIGTERM) lets running requests finish; a second signal exits at once. |
 | `tls_groups` | one of `post_quantum_required`, `post_quantum_preferred`, `classical_only` | `"post_quantum_preferred"` | TLS key exchange groups offered to the providers. |
+| `network` | object | - | Proxy and certificate authorities for the connections llmgate opens to providers. |
+| `network.proxy` | string | `""` | Proxy for every outbound connection to a provider: an http:// URL, with user:password@ in front of the host for a proxy that asks for credentials. Empty uses HTTPS_PROXY, https_proxy or ALL_PROXY from the environment. Addresses on this machine are never proxied. |
+| `network.no_proxy` | array of string | `[]` | Hosts that skip the proxy: a name (with or without a leading dot, it matches its subdomains too), an IP address, a CIDR range, host:port, or *. Empty uses NO_PROXY or no_proxy from the environment. |
+| `network.ca_file` | string | `""` | PEM file of extra trusted certificate authorities, for a network that inspects TLS with its own authority. |
+| `network.system_roots` | boolean | `true` | Also trust the authorities of the operating system (on macOS the system and system-root keychains; on Linux the usual bundle paths are always read). SSL_CERT_FILE and SSL_CERT_DIR are always honoured. |
 | `copilot` | object | none | GitHub Copilot device login of the default provider; run llmgate login once. |
 | `copilot.token_file` | string | `""` | File that holds the GitHub OAuth token; run llmgate login once to write it. |
 | `copilot.client_id` | string | `"Iv1.b507a08c87ecfe98"` | OAuth client id of the device login; the default is the one the VS Code Copilot extension uses. |
