@@ -11,7 +11,7 @@ import llmgate.text;
 export namespace llmgate::doctor {
 
 enum class status { pass, warn, fail };
-enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, models, ledger, budget, quota, subagents, agent_targets, model_limits, network };
+enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, models, ledger, budget, quota, subagents, agent_targets, model_limits, network, aws };
 static_assert(reflect::unique_values<check>());
 
 enum class port_state { free, ours, foreign };
@@ -62,6 +62,12 @@ struct network_fact {
     bool proxy_answers = true;
 };
 
+struct aws_fact {
+    std::string provider{};
+    std::string source{};
+    std::string problem{};
+};
+
 struct facts {
     std::string config_error{};
     std::string listen{};
@@ -93,6 +99,7 @@ struct facts {
     std::vector<std::string> dangling_targets{};
     std::vector<std::string> unknown_limits{};
     network_fact network{};
+    std::vector<aws_fact> aws{};
 };
 
 }  // namespace llmgate::doctor
@@ -288,6 +295,21 @@ constexpr std::optional<finding> model_limits_finding(facts const& seen) {
     return make(check::model_limits, status::warn, detail, "llmgate models offer PROVIDER MODEL... records the limits the provider reports");
 }
 
+constexpr std::optional<finding> aws_finding(facts const& seen) {
+    if (seen.aws.empty()) {
+        return std::nullopt;
+    }
+    std::string detail;
+    for (auto const& item : seen.aws) {
+        if (!item.problem.empty()) {
+            return make(check::aws, status::fail, std::format("provider {}: {}", item.provider, item.problem),
+                        "set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, add the profile to ~/.aws/credentials, or give it a credential_process, and set region on the provider");
+        }
+        text::append_all(detail, detail.empty() ? "" : "; ", "provider ", item.provider, " signs with credentials from ", item.source);
+    }
+    return make(check::aws, status::pass, detail);
+}
+
 constexpr std::optional<finding> network_finding(facts const& seen) {
     auto const& network = seen.network;
     if (!network.problem.empty()) {
@@ -449,6 +471,7 @@ constexpr std::vector<finding> diagnose(facts const& seen) {
     detail::add(out, detail::agent_targets_finding(seen));
     detail::add(out, detail::model_limits_finding(seen));
     detail::add(out, detail::network_finding(seen));
+    detail::add(out, detail::aws_finding(seen));
     return out;
 }
 

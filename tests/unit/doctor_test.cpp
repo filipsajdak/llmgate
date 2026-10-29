@@ -84,6 +84,25 @@ const suite doctor_suite = [] {
         expect(exit_code(findings) == 0);
     };
 
+    "capability_the_aws_check_names_where_credentials_come_from_fails_with_a_remedy_and_is_absent_without_a_signing_provider"_test = [] {
+        auto const found = [](doctor::facts const& seen) {
+            auto const findings = doctor::diagnose(seen);
+            return std::ranges::find(findings, std::string{"aws"}, &doctor::finding::check) != findings.end();
+        };
+        doctor::facts good;
+        good.aws = {{.provider = "bedrock", .source = "process"}};
+        doctor::facts broken;
+        broken.aws = {{.provider = "bedrock", .problem = "no AWS region: set region on the provider or AWS_REGION"}};
+        auto const passed_findings = doctor::diagnose(good);
+        auto const failed_findings = doctor::diagnose(broken);
+        auto const passed = std::ranges::find(passed_findings, std::string{"aws"}, &doctor::finding::check);
+        auto const failed = std::ranges::find(failed_findings, std::string{"aws"}, &doctor::finding::check);
+
+        expect(!found({}) && found(good) && found(broken));
+        expect(passed->status == doctor::status::pass && passed->detail.contains("credentials from process"));
+        expect(failed->status == doctor::status::fail && failed->detail.contains("provider bedrock") && failed->remedy.contains("credential_process"));
+    };
+
     "capability_the_network_check_fails_on_a_problem_warns_on_a_silent_proxy_and_is_absent_without_one"_test = [] {
         auto const named = [](facts const& seen) {
             auto const findings = diagnose(seen);

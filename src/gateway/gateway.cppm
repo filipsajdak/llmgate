@@ -28,6 +28,7 @@ import llmgate.role;
 import llmgate.routing;
 import llmgate.selection;
 import llmgate.shutdown;
+import llmgate.sigv4;
 import llmgate.sse;
 import llmgate.tls;
 import llmgate.usage;
@@ -224,8 +225,8 @@ std::string header_auth_problem(std::string const& name, auth_config const& auth
 
 std::string auth_problem(std::string const& name, provider_config const& item) {
     auto const& auth = item.auth;
-    if (auth.kind == auth_kind::none && (!auth.env.empty() || !auth.file.empty())) {
-        return std::format("provider {}: auth none takes no env or file", name);
+    if ((auth.kind == auth_kind::none || auth.kind == auth_kind::sigv4) && (!auth.env.empty() || !auth.file.empty())) {
+        return std::format("provider {}: auth {} takes no env or file", name, reflect::enum_name(auth.kind));
     }
     return auth.kind == auth_kind::header ? header_auth_problem(name, auth) : std::string{};
 }
@@ -383,9 +384,17 @@ struct access_policy {
     std::string identity_scope{};
 };
 
+struct aws_keys {
+    sigv4::credentials keys{};
+    std::string region{};
+};
+
 class credential {
 public:
     virtual ~credential() = default;
+    virtual async::task<std::expected<aws_keys, std::string>> signing_keys() {
+        co_return std::unexpected{std::string{"this provider does not sign requests"}};
+    }
     virtual async::task<std::expected<std::string, std::error_code>> bearer() = 0;
     virtual void rejected() noexcept {}
     virtual std::optional<std::string> endpoint() const { return std::nullopt; }
@@ -999,6 +1008,22 @@ std::expected<translated_body, attempt_result> to_bedrock_body(std::string const
     return translated_body{.body = std::move(done->body)};
 }
 
+struct upstream_auth {
+    std::string token{};
+    std::optional<aws_keys> aws{};
+};
+
+void add_signature(httpio::request_spec& spec, aws_keys const& found, std::string_view const service, std::int64_t const now) {
+    auto const stamp = sigv4::stamp_of(std::chrono::sys_seconds{std::chrono::seconds{now}});
+    auto const made = sigv4::sign({.method = spec.method, .target = spec.target, .host = spec.host, .body = spec.body}, found.keys,
+                                  {.region = found.region, .service = std::string{service}}, stamp);
+    spec.fields.add("x-amz-date", stamp);
+    if (!made.security_token.empty()) {
+        spec.fields.add("x-amz-security-token", made.security_token);
+    }
+    spec.fields.add("Authorization", made.authorization);
+}
+
 bool translates_errors(wire_protocol const wire, int const status) {
     return wire != wire_protocol::anthropic && status >= http_error_floor;
 }
@@ -1062,7 +1087,7 @@ std::string auth_name_of(provider_config const& settings) {
 }
 
 bool ready_of(provider_runtime const& item) {
-    return item.settings.forward_credentials || item.settings.auth.kind == auth_kind::none || item.creds->configured();
+    return item.settings.forward_credentials || item.settings.auth.kind == auth_kind::none || item.settings.auth.kind == auth_kind::sigv4 || item.creds->configured();
 }
 
 control::offer offer_of(std::string const& name, provider_config const& settings) {
@@ -1681,17 +1706,33 @@ private:
         return detail::translated_body{.body = std::move(*done)};
     }
 
-    async::task<std::expected<std::string, detail::attempt_result>> upstream_token(std::size_t const index) {
+    static void follow_dynamic_endpoint(detail::provider_runtime& chosen) {
+        if (auto const dynamic = chosen.creds->endpoint()) {
+            if (auto parsed = detail::parsed_url(*dynamic)) {
+                chosen.url = std::move(parsed);
+            }
+        }
+    }
+
+    async::task<std::expected<detail::upstream_auth, detail::attempt_result>> upstream_token(std::size_t const index) {
         auto& chosen = providers_[index];
-        if (chosen.settings.forward_credentials || chosen.settings.auth.kind == auth_kind::none) {
-            co_return std::string{};
+        auto const kind = chosen.settings.auth.kind;
+        if (chosen.settings.forward_credentials || kind == auth_kind::none) {
+            co_return detail::upstream_auth{};
+        }
+        if (kind == auth_kind::sigv4) {
+            auto found = co_await chosen.creds->signing_keys();
+            if (!found) {
+                co_return std::unexpected{detail::refused(routing::error_reply(401, "authentication_error", "no AWS credentials: " + found.error()), detail::health::neutral)};
+            }
+            co_return detail::upstream_auth{.aws = std::move(*found)};
         }
         auto bearer = co_await chosen.creds->bearer();
         if (!bearer) {
             co_return std::unexpected{detail::refused(
                 routing::error_reply(401, "authentication_error", "no upstream credential: run llmgate login (" + bearer.error().message() + ")"), detail::health::neutral)};
         }
-        co_return std::move(*bearer);
+        co_return detail::upstream_auth{.token = std::move(*bearer)};
     }
 
     async::task<std::expected<detail::built_request, detail::attempt_result>> build_spec(std::size_t const index, std::optional<std::string> upstream_model, wire_protocol const wire, httpio::request const& incoming,
@@ -1713,18 +1754,18 @@ private:
         if (!token) {
             co_return std::unexpected{std::move(token.error())};
         }
-        if (auto const dynamic = chosen.creds->endpoint()) {
-            if (auto parsed = detail::parsed_url(*dynamic)) {
-                chosen.url = std::move(parsed);
-            }
+        follow_dynamic_endpoint(chosen);
+        detail::built_request built{.spec = {.method = "POST",
+                                             .target = chosen.url->base_path + effective_messages_path(wire, chosen.settings.messages_path, upstream_name),
+                                             .host = routing::host_header(*chosen.url),
+                                             .fields = detail::upstream_headers(incoming, chosen.settings.headers, chosen.settings.copilot.has_value(), chosen.settings.forward_credentials, token->token,
+                                                                                wire, chosen.settings.auth),
+                                             .body = std::move(body->body)},
+                                    .renamed = std::move(body->renamed)};
+        if (token->aws) {
+            detail::add_signature(built.spec, *token->aws, chosen.settings.auth.service, clock_());
         }
-        co_return detail::built_request{.spec = {.method = "POST",
-                                                 .target = chosen.url->base_path + effective_messages_path(wire, chosen.settings.messages_path, upstream_name),
-                                                 .host = routing::host_header(*chosen.url),
-                                                 .fields = detail::upstream_headers(incoming, chosen.settings.headers, chosen.settings.copilot.has_value(), chosen.settings.forward_credentials, *token,
-                                                                                    wire, chosen.settings.auth),
-                                                 .body = std::move(body->body)},
-                                        .renamed = std::move(body->renamed)};
+        co_return built;
     }
 
     async::task<std::optional<detail::attempt_result>> send_request(net::any_stream& upstream, httpio::request_spec spec) {

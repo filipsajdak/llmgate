@@ -5,12 +5,15 @@ export PYTHONPATH
 root=$(cd "$(dirname "$0")/../.." && pwd)
 binary=${1:-$root/build/host/llmgate}
 work=$(mktemp -d)
-trap 'kill $tool_pid $limited_pid $gateway_pid 2>/dev/null || true; wait 2>/dev/null || true; rm -rf "$work"' EXIT
+trap 'kill $tool_pid $signed_pid $limited_pid $gateway_pid 2>/dev/null || true; wait 2>/dev/null || true; rm -rf "$work"' EXIT
 
 FAKE_REQUIRE_AUTHORIZATION="Bearer fake-bedrock-key" python3 "$root/tests/e2e/fake_bedrock.py" "$work/tool.port" "$work/tool.log" tool &
 tool_pid=$!
 python3 "$root/tests/e2e/fake_bedrock.py" "$work/limited.port" "$work/limited.log" rate_limited &
 limited_pid=$!
+FAKE_SIGV4="AKIDFLOW:secretflow:tokenflow" python3 "$root/tests/e2e/fake_bedrock.py" "$work/signed.port" "$work/signed.log" tool &
+signed_pid=$!
+while [ ! -s "$work/signed.port" ]; do sleep 0.1; done
 while [ ! -s "$work/tool.port" ] || [ ! -s "$work/limited.port" ]; do sleep 0.1; done
 
 port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
@@ -20,14 +23,25 @@ cat > "$work/config.jsonc" <<JSON
   "providers": {
     "bedrock": { "base_url": "http://127.0.0.1:$(cat "$work/tool.port")", "protocol": "bedrock_messages", "auth": { "kind": "bearer", "env": "BEDROCK_KEY" },
                  "models": { "claude-sonnet-5-5": "anthropic.claude-sonnet-4-6-v1:0" } },
+    "signed": { "base_url": "http://127.0.0.1:$(cat "$work/signed.port")", "protocol": "bedrock_messages", "region": "eu-central-1", "auth": { "kind": "sigv4", "profile": "flow" },
+                "models": { "claude-haiku-5-5": "anthropic.claude-sonnet-4-6-v1:0" } },
+    "stored": { "base_url": "http://127.0.0.1:$(cat "$work/signed.port")", "protocol": "bedrock_messages", "region": "eu-central-1", "auth": { "kind": "sigv4", "profile": "stored" },
+                "models": { "claude-fable-5-5": "anthropic.claude-sonnet-4-6-v1:0" } },
     "limited": { "base_url": "http://127.0.0.1:$(cat "$work/limited.port")", "protocol": "bedrock_messages", "auth": { "kind": "bearer", "env": "BEDROCK_KEY" },
                  "models": { "claude-opus-5-5": "anthropic.claude-sonnet-4-6-v1:0" } }
   },
-  "routes": { "other": ["bedrock"], "opus": ["limited"] },
+  "routes": { "other": ["bedrock"], "opus": ["limited"], "haiku": ["signed"], "fable": ["stored"] },
   "usage": { "ledger_file": "$work/usage.jsonl" }
 }
 JSON
-BEDROCK_KEY=fake-bedrock-key "$binary" --config "$work/config.jsonc" > "$work/gateway.log" 2>&1 &
+cat > "$work/process.py" <<PY
+import json, sys
+open("$work/process.count", "a").write("x")
+print(json.dumps({"Version": 1, "AccessKeyId": "AKIDFLOW", "SecretAccessKey": "secretflow", "SessionToken": "tokenflow", "Expiration": "2099-01-01T00:00:00Z"}))
+PY
+printf '[stored]\naws_access_key_id = AKIDFLOW\naws_secret_access_key = secretflow\naws_session_token = tokenflow\n' > "$work/aws_credentials"
+printf '[profile flow]\ncredential_process = python3 %s\n' "$work/process.py" > "$work/aws_config"
+AWS_CONFIG_FILE="$work/aws_config" AWS_SHARED_CREDENTIALS_FILE="$work/aws_credentials" BEDROCK_KEY=fake-bedrock-key "$binary" --config "$work/config.jsonc" > "$work/gateway.log" 2>&1 &
 gateway_pid=$!
 while ! grep -q "listening on" "$work/gateway.log"; do sleep 0.1; done
 
@@ -104,6 +118,19 @@ status, events, _ = post({"messages": [{"role": "user", "content": "FAKE_CORRUPT
 check("a corrupt frame ends the stream with an error that names the cause", events[-1]["type"] == "error" and "corrupt" in events[-1]["error"]["message"] and "message_crc" in events[-1]["error"]["message"])
 status, _, text = post({"messages": [{"role": "user", "content": "FAKE_400"}]})
 check("an upstream 400 reaches Claude Code with Bedrock's own message", status == 400 and json.loads(text)["error"]["type"] == "invalid_request_error" and "Extra inputs are not permitted" in json.loads(text)["error"]["message"])
+
+status, events, _ = post({"messages": [{"role": "user", "content": "signed please"}]}, model="claude-haiku-5-5")
+status_again, _, _ = post({"messages": [{"role": "user", "content": "signed again"}]}, model="claude-haiku-5-5")
+signed_log = [json.loads(line) for line in open(f"{work}/signed.log")]
+check("a request signed with credentials from a credential_process is accepted by an independent SigV4 verifier", status == 200 and status_again == 200 and len(signed_log) == 2)
+check("the signed path carries the model id encoded once on the wire (and twice in the signature)", signed_log[0]["path"] == "/model/anthropic.claude-sonnet-4-6-v1%3A0/invoke-with-response-stream")
+check("the credential_process ran once for two requests", len(open(f"{work}/process.count").read()) == 1)
+status, _, _ = post({"messages": [{"role": "user", "content": "from the stored profile"}]}, model="claude-fable-5-5")
+check("credentials stored in the shared credentials file sign a request the verifier accepts", status == 200)
+status, _, text = post({"messages": [{"role": "user", "content": "FAKE_REJECT"}]}, model="claude-haiku-5-5")
+post({"messages": [{"role": "user", "content": "after the rejection"}]}, model="claude-haiku-5-5")
+check("a 403 drops the cached process credential so the next request runs the process again", status == 403 and len(open(f"{work}/process.count").read()) == 2)
+check("no bearer key goes to a signing provider", all(not r["headers"]["authorization"].startswith("Bearer") for r in signed_log))
 
 stats = get("/llmgate/stats")
 check("the dropped beta token is counted by name", stats["dropped_fields"].get("anthropic-beta:unknown-beta-2099-01-01", 0) >= 5)

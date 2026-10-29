@@ -68,7 +68,7 @@
     // "auth": {
     //   // How the provider is authenticated: bearer (Authorization: Bearer SECRET, the default), header
     //   // (SECRET in the header named by header, after scheme when one is set) or none (no credential, for a
-    //   // local model). One of: bearer, header, none.
+    //   // local model). sigv4 (AWS Signature Version 4, for Bedrock). One of: bearer, header, none, sigv4.
     //   // "kind": "header",
     //   // Header that carries the secret when kind is header.
     //   // "header": "api-key",
@@ -79,6 +79,10 @@
     //   // File that holds the secret (one line); keep it readable by you only. It is read before the
     //   // environment variable.
     //   // "file": "~/.config/llmgate/partner.key",
+    //   // AWS profile that supplies the credentials when kind is sigv4; empty uses AWS_PROFILE, then default.
+    //   // "profile": "work",
+    //   // AWS service name that is signed when kind is sigv4.
+    //   // "service": "bedrock",
     // },
   },
 

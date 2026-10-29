@@ -14,6 +14,7 @@ export module llmgate.commands;
 import std;
 import llmgate.arguments;
 import llmgate.async;
+import llmgate.aws_credentials;
 import llmgate.claude;
 import llmgate.control;
 import llmgate.copilot;
@@ -27,6 +28,7 @@ import llmgate.process;
 import llmgate.proxy;
 import llmgate.proof;
 import llmgate.quota;
+import llmgate.reflect;
 import llmgate.routing;
 import llmgate.statusline;
 import llmgate.tls;
@@ -985,6 +987,27 @@ doctor::network_fact network_facts(context const& where) {
     return seen;
 }
 
+std::vector<doctor::aws_fact> aws_facts(gateway::config const& settings) {
+    std::vector<doctor::aws_fact> out;
+    auto const from = aws::process_sources();
+    for (auto const& [name, provider] : gateway::effective_providers(settings)) {
+        if (provider.auth.kind != gateway::auth_kind::sigv4) {
+            continue;
+        }
+        doctor::aws_fact fact{.provider = name};
+        auto const found = aws::resolve(from, provider.auth.profile);
+        if (!found) {
+            fact.problem = found.error();
+        } else if (aws::region_of(from, provider.region).empty()) {
+            fact.problem = "no AWS region: set region on the provider or AWS_REGION";
+        } else {
+            fact.source = std::string{reflect::enum_name(found->from)};
+        }
+        out.push_back(std::move(fact));
+    }
+    return out;
+}
+
 doctor::facts gather_facts(context const& where) {
     doctor::facts seen;
     seen.config_error = where.config_error;
@@ -1010,6 +1033,7 @@ doctor::facts gather_facts(context const& where) {
     seen.dangling_targets = dangling_targets_of(where.settings);
     seen.unknown_limits = unknown_limits_of(where.settings);
     seen.network = network_facts(where);
+    seen.aws = aws_facts(where.settings);
     return seen;
 }
 

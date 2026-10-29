@@ -75,16 +75,18 @@ constexpr std::string_view default_chat_path = "/chat/completions";
 constexpr std::string_view default_bedrock_path = "/model/{model}/invoke-with-response-stream";
 constexpr std::string_view bedrock_key_variable = "AWS_BEARER_TOKEN_BEDROCK";
 
-enum class auth_kind { bearer, header, none };
+enum class auth_kind { bearer, header, none, sigv4 };
 static_assert(reflect::unique_values<auth_kind>());
 
 struct auth_config {
-    [[= reflect::doc{"How the provider is authenticated: bearer (Authorization: Bearer SECRET, the default), header (SECRET in the header named by header, after scheme when one is set) or none (no credential, for a local model)."}]]
+    [[= reflect::doc{"How the provider is authenticated: bearer (Authorization: Bearer SECRET, the default), header (SECRET in the header named by header, after scheme when one is set) or none (no credential, for a local model). sigv4 (AWS Signature Version 4, for Bedrock)."}]]
     [[= reflect::example{R"("header")"}]] [[= reflect::commented]] auth_kind kind = auth_kind::bearer;
     [[= reflect::doc{"Header that carries the secret when kind is header."}]] [[= reflect::example{R"("api-key")"}]] [[= reflect::commented]] std::string header = "api-key";
     [[= reflect::doc{"Text put before the secret in that header, such as Bearer; empty sends the secret alone."}]] [[= reflect::commented]] std::string scheme{};
     [[= reflect::doc{"Name of the environment variable that holds the secret."}]] [[= reflect::example{R"("PARTNER_PROD_API_KEY")"}]] [[= reflect::commented]] std::string env{};
     [[= reflect::doc{"File that holds the secret (one line); keep it readable by you only. It is read before the environment variable."}]] [[= reflect::example{R"("~/.config/llmgate/partner.key")"}]] [[= reflect::commented]] std::string file{};
+    [[= reflect::doc{"AWS profile that supplies the credentials when kind is sigv4; empty uses AWS_PROFILE, then default."}]] [[= reflect::example{R"("work")"}]] [[= reflect::commented]] std::string profile{};
+    [[= reflect::doc{"AWS service name that is signed when kind is sigv4."}]] [[= reflect::example{R"("bedrock")"}]] [[= reflect::commented]] std::string service = "bedrock";
 };
 
 constexpr std::uint64_t default_long_prompt_bytes = 400000;
