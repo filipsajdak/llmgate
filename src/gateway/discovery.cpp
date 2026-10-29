@@ -65,7 +65,7 @@ http::header_map headers_for(gateway::provider_config const& provider, std::stri
 }
 
 bool needs_secret(gateway::provider_config const& provider) {
-    return provider.auth.kind != gateway::auth_kind::none;
+    return provider.auth.kind == gateway::auth_kind::bearer || provider.auth.kind == gateway::auth_kind::header;
 }
 
 }  // namespace

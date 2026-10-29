@@ -1,6 +1,9 @@
 import base64
+import hashlib
+import hmac
 import json
 import os
+import urllib.parse
 import struct
 import sys
 import zlib
@@ -15,6 +18,8 @@ EXPECTED_AUTHORIZATION = os.environ.get("FAKE_REQUIRE_AUTHORIZATION", "")
 TOOL_COMMAND = os.environ.get("FAKE_TOOL_COMMAND", "echo tool-ran")
 ALLOWED_BETAS = {"interleaved-thinking-2025-05-14", "context-management-2025-06-27"}
 USAGE = {"input_tokens": 20, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 0, "output_tokens": 9}
+SIGV4 = os.environ.get("FAKE_SIGV4", "").split(":")
+SIGV4_REGION = os.environ.get("FAKE_SIGV4_REGION", "eu-central-1")
 PATH_PREFIX = "/model/anthropic.claude-sonnet-4-6-v1%3A0/invoke-with-response-stream"
 
 
@@ -63,6 +68,29 @@ def answers_a_tool(request):
     return isinstance(content, list) and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
 
 
+def signature_problem(handler, raw_body):
+    access, secret, token = (SIGV4 + ["", ""])[:3]
+    authorization = handler.headers.get("authorization", "")
+    stamp = handler.headers.get("x-amz-date", "")
+    if not authorization.startswith("AWS4-HMAC-SHA256 ") or not stamp:
+        return "no signature"
+    signed = ["host", "x-amz-date"] + (["x-amz-security-token"] if token else [])
+    if token and handler.headers.get("x-amz-security-token") != token:
+        return "wrong session token"
+    path, _, query = handler.path.partition("?")
+    canonical_path = urllib.parse.quote(path, safe="/-_.~")
+    headers = {"host": handler.headers.get("host"), "x-amz-date": stamp, "x-amz-security-token": token}
+    canonical = "\n".join(["POST", canonical_path, "&".join(sorted(query.split("&"))) if query else "",
+                           "".join(f"{name}:{headers[name]}\n" for name in signed), ";".join(signed), hashlib.sha256(raw_body).hexdigest()])
+    scope = f"{stamp[:8]}/{SIGV4_REGION}/bedrock/aws4_request"
+    to_sign = "\n".join(["AWS4-HMAC-SHA256", stamp, scope, hashlib.sha256(canonical.encode()).hexdigest()])
+    key = ("AWS4" + secret).encode()
+    for part in (stamp[:8], SIGV4_REGION, "bedrock", "aws4_request"):
+        key = hmac.new(key, part.encode(), hashlib.sha256).digest()
+    expected = f"AWS4-HMAC-SHA256 Credential={access}/{scope}, SignedHeaders={';'.join(signed)}, Signature={hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()}"
+    return "" if authorization == expected else "signature mismatch"
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -78,11 +106,16 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        request = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
+        raw_body = self.rfile.read(int(self.headers.get("content-length", 0)))
+        request = json.loads(raw_body or b"{}")
         with open(LOG, "a") as log:
             log.write(json.dumps({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "request": request}) + "\n")
         if self.path != PATH_PREFIX:
             return self.fail(404, "unknown path " + self.path)
+        if "FAKE_REJECT" in json.dumps(request.get("messages")):
+            return self.fail(403, "the security token is expired")
+        if SIGV4[0] and (problem := signature_problem(self, raw_body)):
+            return self.fail(403, problem)
         if EXPECTED_AUTHORIZATION and self.headers.get("authorization") != EXPECTED_AUTHORIZATION:
             return self.fail(403, "bad key")
         if "FAKE_400" in json.dumps(request.get("messages")):

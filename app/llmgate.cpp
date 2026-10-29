@@ -7,6 +7,7 @@
 import std;
 import llmgate.arguments;
 import llmgate.async;
+import llmgate.aws_credentials;
 import llmgate.chatgpt;
 import llmgate.check;
 import llmgate.claude;
@@ -77,6 +78,10 @@ std::unique_ptr<gateway::credential> make_credential(async::reactor& loop, tls::
     }
     if (provider.chatgpt) {
         return std::make_unique<chatgpt::chatgpt_credential>(loop, tls_context, *provider.chatgpt);
+    }
+    if (provider.auth.kind == gateway::auth_kind::sigv4) {
+        return std::make_unique<aws::aws_credential>(aws::process_sources(), provider.auth.profile, provider.region,
+                                                    [] { return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count(); });
     }
     return std::make_unique<gateway::static_credential>(gateway::secret_of(provider, process_secret_readers()));
 }
