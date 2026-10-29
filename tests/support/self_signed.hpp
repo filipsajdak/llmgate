@@ -47,9 +47,10 @@ inline credentials make_self_signed(std::string const& dns_name) {
     X509_gmtime_adj(X509_getm_notBefore(certificate.get()), 0);
     X509_gmtime_adj(X509_getm_notAfter(certificate.get()), detail::valid_for_seconds);
     X509_set_pubkey(certificate.get(), key.get());
-    auto* const name = X509_get_subject_name(certificate.get());
-    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, reinterpret_cast<unsigned char const*>(dns_name.c_str()), -1, -1, 0);
-    X509_set_issuer_name(certificate.get(), name);
+    std::unique_ptr<X509_NAME, decltype([](X509_NAME* each) { X509_NAME_free(each); })> const name{X509_NAME_new()};
+    X509_NAME_add_entry_by_txt(name.get(), "CN", MBSTRING_ASC, reinterpret_cast<unsigned char const*>(dns_name.c_str()), -1, -1, 0);
+    X509_set_subject_name(certificate.get(), name.get());
+    X509_set_issuer_name(certificate.get(), name.get());
     X509V3_CTX context;
     X509V3_set_ctx_nodb(&context);
     X509V3_set_ctx(&context, certificate.get(), certificate.get(), nullptr, nullptr, 0);
