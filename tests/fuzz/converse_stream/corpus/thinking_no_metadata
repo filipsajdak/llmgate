@@ -1,0 +1,4 @@
+contentBlockDelta {"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"x"}}}
+contentBlockDelta {"contentBlockIndex":0,"delta":{"reasoningContent":{"signature":"s"}}}
+contentBlockStop {"contentBlockIndex":0}
+messageStop {"stopReason":"max_tokens"}

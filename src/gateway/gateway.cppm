@@ -13,6 +13,8 @@ import llmgate.bedrock_request;
 import llmgate.chat_request;
 import llmgate.chat_stream;
 import llmgate.control;
+import llmgate.converse_request;
+import llmgate.converse_stream;
 import llmgate.eventstream;
 import llmgate.history;
 import llmgate.http;
@@ -49,6 +51,7 @@ constexpr std::string_view default_path_for(wire_protocol const protocol) {
         case wire_protocol::openai_responses: return default_responses_path;
         case wire_protocol::openai_chat: return default_chat_path;
         case wire_protocol::bedrock_messages: return default_bedrock_path;
+        case wire_protocol::bedrock_converse: return default_converse_path;
         case wire_protocol::anthropic: break;
     }
     return default_messages_path;
@@ -773,6 +776,7 @@ struct relay_state {
     anthropic::stream_guard guard{};
     std::optional<responses::stream_translator> translator{};
     std::optional<chat::stream_translator> chat_translator{};
+    std::optional<converse::stream_translator> converse_translator{};
     std::optional<eventstream::decoder> frames{};
     bool frames_failed = false;
     bool capture = false;
@@ -800,9 +804,13 @@ struct relay_state {
         guard.on_event(event, [this](auto const& out) { emit(out); }, [this](auto const& fix) { note(fix); });
     }
 
-    bool translating() const { return translator.has_value() || chat_translator.has_value(); }
+    bool translating() const { return translator.has_value() || chat_translator.has_value() || converse_translator.has_value(); }
 
     void accept_frame(eventstream::frame const& each) {
+        if (converse_translator && each.message_type == "event") {
+            converse_translator->on_event(each.event_type, each.payload, [this](sse::event const& event) { through_guard(event); });
+            return;
+        }
         if (auto const made = eventstream::event_of(each)) {
             accept({.name = made->name, .data = made->data, .id = {}});
         }
@@ -835,6 +843,10 @@ struct relay_state {
             case wire_protocol::openai_responses: translator.emplace(note.requested); break;
             case wire_protocol::openai_chat: chat_translator.emplace(note.requested, std::move(note.renamed)); break;
             case wire_protocol::bedrock_messages: frames.emplace(); break;
+            case wire_protocol::bedrock_converse:
+                frames.emplace();
+                converse_translator.emplace(note.requested, std::move(note.renamed));
+                break;
             case wire_protocol::anthropic: break;
         }
     }
@@ -892,6 +904,9 @@ struct relay_state {
         parser.finish([this](sse::event const& item) { accept(item); });
         if (chat_translator) {
             chat_translator->finish([this](sse::event const& event) { through_guard(event); });
+        }
+        if (converse_translator) {
+            converse_translator->finish([this](sse::event const& event) { through_guard(event); });
         }
         guard.on_end([this](auto const& out) { emit(out); }, [this](auto const& fix) { note(fix); });
     }
@@ -982,6 +997,20 @@ std::expected<translated_body, attempt_result> to_chat_body(std::string const& b
     }
     if (!done->client_streams) {
         return std::unexpected{refused(routing::error_reply(400, "invalid_request_error", "stream must be true for a provider with the openai_chat protocol"), health::neutral)};
+    }
+    for (auto const& name : done->dropped) {
+        ++counters.dropped_fields[name];
+    }
+    return translated_body{.body = std::move(done->body), .renamed = std::move(done->renamed)};
+}
+
+std::expected<translated_body, attempt_result> to_converse_body(std::string const& body, bedrock::converse_options const& chosen, stats& counters) {
+    auto done = converse::translate_request(body, chosen);
+    if (!done) {
+        return std::unexpected{refused(routing::error_reply(400, "invalid_request_error", done.error().message), health::neutral)};
+    }
+    if (!done->client_streams) {
+        return std::unexpected{refused(routing::error_reply(400, "invalid_request_error", "stream must be true for a provider with the bedrock_converse protocol"), health::neutral)};
     }
     for (auto const& name : done->dropped) {
         ++counters.dropped_fields[name];
@@ -1690,15 +1719,17 @@ private:
     }
 
     std::expected<detail::translated_body, detail::attempt_result> upstream_body(wire_protocol const wire, httpio::request const& incoming, std::string body, provider_config const& settings) {
-        if (wire == wire_protocol::openai_chat) {
-            return detail::to_chat_body(body, settings.chat, counters_);
+        switch (wire) {
+            case wire_protocol::openai_chat: return detail::to_chat_body(body, settings.chat, counters_);
+            case wire_protocol::bedrock_messages: return detail::to_bedrock_body(body, incoming.head.fields.find("anthropic-beta").value_or(""), settings.bedrock, counters_);
+            case wire_protocol::bedrock_converse: return detail::to_converse_body(body, settings.bedrock.converse, counters_);
+            case wire_protocol::openai_responses: return responses_body(body, incoming);
+            case wire_protocol::anthropic: break;
         }
-        if (wire == wire_protocol::bedrock_messages) {
-            return detail::to_bedrock_body(body, incoming.head.fields.find("anthropic-beta").value_or(""), settings.bedrock, counters_);
-        }
-        if (wire != wire_protocol::openai_responses) {
-            return detail::translated_body{.body = std::move(body)};
-        }
+        return detail::translated_body{.body = std::move(body)};
+    }
+
+    std::expected<detail::translated_body, detail::attempt_result> responses_body(std::string const& body, httpio::request const& incoming) {
         auto done = detail::to_responses_body(body, incoming, counters_);
         if (!done) {
             return std::unexpected{std::move(done.error())};
@@ -1949,16 +1980,21 @@ private:
         co_return detail::delivered(std::move(concluded), detail::health_of(state, drained.failure));
     }
 
+    void absorb_ignored(std::map<std::string, std::uint64_t> const& ignored) {
+        for (auto const& [name, count] : ignored) {
+            counters_.ignored_events[name] += count;
+        }
+    }
+
     void absorb_translator_counts(detail::relay_state const& state) {
         if (state.translator) {
-            for (auto const& [name, count] : state.translator->ignored()) {
-                counters_.ignored_events[name] += count;
-            }
+            absorb_ignored(state.translator->ignored());
         }
         if (state.chat_translator) {
-            for (auto const& [name, count] : state.chat_translator->ignored()) {
-                counters_.ignored_events[name] += count;
-            }
+            absorb_ignored(state.chat_translator->ignored());
+        }
+        if (state.converse_translator) {
+            absorb_ignored(state.converse_translator->ignored());
         }
     }
 

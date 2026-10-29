@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
-target=${1:?usage: run.sh <http_parser|sse_parser|jsonscan|guard|json|routing|settings|launcher|usage|schedule|proxy|eventstream> [seconds]}
+target=${1:?usage: run.sh <http_parser|sse_parser|jsonscan|guard|json|routing|settings|launcher|usage|schedule|proxy|eventstream|converse_stream> [seconds]}
 seconds=${2:-60}
 docker build -q -t llmgate-build "$root/ops/ci" >/dev/null
 docker build -q -t llmgate-fuzz -f "$root/ops/ci/Dockerfile.fuzz" "$root/ops/ci" >/dev/null

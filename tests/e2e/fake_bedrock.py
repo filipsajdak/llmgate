@@ -20,6 +20,7 @@ ALLOWED_BETAS = {"interleaved-thinking-2025-05-14", "context-management-2025-06-
 USAGE = {"input_tokens": 20, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 0, "output_tokens": 9}
 SIGV4 = os.environ.get("FAKE_SIGV4", "").split(":")
 SIGV4_REGION = os.environ.get("FAKE_SIGV4_REGION", "eu-central-1")
+CONVERSE_PATH = "/model/amazon.nova-pro-v1%3A0/converse-stream"
 PATH_PREFIX = "/model/anthropic.claude-sonnet-4-6-v1%3A0/invoke-with-response-stream"
 
 
@@ -91,6 +92,36 @@ def signature_problem(handler, raw_body):
     return "" if authorization == expected else "signature mismatch"
 
 
+def converse_event(name, payload):
+    return frame([(":event-type", name), (":content-type", "application/json"), (":message-type", "event")], json.dumps(payload).encode())
+
+
+def converse_text(text):
+    return [converse_event("messageStart", {"role": "assistant"}), converse_event("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": text[:5]}}),
+            converse_event("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": text[5:]}}), converse_event("contentBlockStop", {"contentBlockIndex": 0}),
+            converse_event("messageStop", {"stopReason": "end_turn"}),
+            converse_event("metadata", {"usage": {"inputTokens": 20, "outputTokens": 9, "totalTokens": 129, "cacheReadInputTokens": 100, "cacheWriteInputTokens": 3}, "metrics": {"latencyMs": 5}})]
+
+
+def converse_tool(name):
+    arguments = json.dumps({"command": TOOL_COMMAND})
+    return [converse_event("messageStart", {"role": "assistant"}),
+            converse_event("contentBlockStart", {"contentBlockIndex": 0, "start": {"toolUse": {"toolUseId": "tooluse_fake", "name": name}}}),
+            converse_event("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"toolUse": {"input": arguments[:10]}}}),
+            converse_event("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"toolUse": {"input": arguments[10:]}}}),
+            converse_event("contentBlockStop", {"contentBlockIndex": 0}), converse_event("messageStop", {"stopReason": "tool_use"}),
+            converse_event("metadata", {"usage": {"inputTokens": 20, "outputTokens": 9}})]
+
+
+def converse_problem(request):
+    if "model" in request or "stream" in request or "anthropic_version" in request or "thinking" in request:
+        return "model, stream, anthropic_version and thinking do not belong in a Converse body"
+    for message in request.get("messages") or []:
+        if message.get("role") not in ("user", "assistant") or not isinstance(message.get("content"), list):
+            return "messages must alternate user and assistant with block content"
+    return ""
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -105,11 +136,36 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_frames(self, frames):
+        self.send_response(200)
+        self.send_header("content-type", "application/vnd.amazon.eventstream")
+        self.send_header("transfer-encoding", "chunked")
+        self.end_headers()
+        for item in frames:
+            self.wfile.write(f"{len(item):x}\r\n".encode() + item + b"\r\n")
+            self.wfile.flush()
+        self.wfile.write(b"0\r\n\r\n")
+
+    def converse(self, request):
+        if EXPECTED_AUTHORIZATION and self.headers.get("authorization") != EXPECTED_AUTHORIZATION:
+            return self.fail(403, "bad key")
+        if problem := converse_problem(request):
+            return self.fail(400, problem)
+        text = json.dumps(request.get("messages"))
+        tools = ((request.get("toolConfig") or {}).get("tools")) or []
+        if "FAKE_EXCEPTION" in text:
+            return self.send_frames([converse_event("messageStart", {"role": "assistant"}), exception("throttlingException", "Too many tokens, slow down")])
+        if MODE == "tool" and tools and not any("toolResult" in block for message in request["messages"] for block in message["content"]):
+            return self.send_frames(converse_tool(tools[0]["toolSpec"]["name"]))
+        return self.send_frames(converse_text("Tool finished: all good" if MODE == "tool" else "Hello from the fake Converse"))
+
     def do_POST(self):
         raw_body = self.rfile.read(int(self.headers.get("content-length", 0)))
         request = json.loads(raw_body or b"{}")
         with open(LOG, "a") as log:
             log.write(json.dumps({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "request": request}) + "\n")
+        if self.path == CONVERSE_PATH:
+            return self.converse(request)
         if self.path != PATH_PREFIX:
             return self.fail(404, "unknown path " + self.path)
         if "FAKE_REJECT" in json.dumps(request.get("messages")):

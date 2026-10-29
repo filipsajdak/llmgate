@@ -336,6 +336,14 @@ constexpr std::optional<json::value> tool_choice_of(context& ctx, json::value co
     return std::nullopt;
 }
 
+constexpr void add_tool_choice(context& ctx, json::object& config, json::value const& parsed) {
+    auto const* choice = member(parsed, "tool_choice");
+    auto mapped = choice == nullptr ? std::nullopt : tool_choice_of(ctx, *choice);
+    if (mapped) {
+        config.emplace_back("toolChoice", std::move(*mapped));
+    }
+}
+
 constexpr bool tool_choice_is_none(json::value const& parsed) {
     auto const* choice = member(parsed, "tool_choice");
     return choice != nullptr && text_member(*choice, "type") == "none";
@@ -352,11 +360,7 @@ constexpr std::optional<refusal> add_tool_config(context& ctx, json::object& out
         return std::move(listed.error());
     }
     json::object config{{"tools", json::value{std::move(*listed)}}};
-    if (auto const* choice = member(parsed, "tool_choice")) {
-        if (auto mapped = tool_choice_of(ctx, *choice)) {
-            config.emplace_back("toolChoice", std::move(*mapped));
-        }
-    }
+    add_tool_choice(ctx, config, parsed);
     out.emplace_back("toolConfig", json::value{std::move(config)});
     return std::nullopt;
 }

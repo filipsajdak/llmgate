@@ -2376,6 +2376,14 @@ const suite gateway_suite = [] {
         expect(gateway::effective_messages_path(wire_protocol::bedrock_messages, "/custom/{model}/go", "a b") == "/custom/a%20b/go");
     };
 
+    "capability_one_bedrock_provider_sends_a_listed_model_through_converse_and_the_rest_through_invoke"_test = [] {
+        using gateway::wire_protocol;
+        gateway::provider_config bedrock{.protocol = wire_protocol::bedrock_messages, .model_protocols = {{"amazon.nova-pro-v1:0", wire_protocol::bedrock_converse}}};
+
+        expect(gateway::wire_for(bedrock, "amazon.nova-pro-v1:0") == wire_protocol::bedrock_converse && gateway::wire_for(bedrock, "anthropic.claude-sonnet-4-6-v1:0") == wire_protocol::bedrock_messages);
+        expect(gateway::effective_messages_path(wire_protocol::bedrock_converse, "/v1/messages", "amazon.nova-pro-v1:0") == "/model/amazon.nova-pro-v1%3A0/converse-stream");
+    };
+
     "capability_a_model_listed_for_the_chat_protocol_uses_it_whatever_the_provider_says"_test = [] {
         gateway::provider_config provider;
         provider.model_protocols["old-chat"] = gateway::wire_protocol::openai_chat;
