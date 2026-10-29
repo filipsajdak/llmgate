@@ -116,6 +116,22 @@ Slice 6 is built in three parts: 6a Claude models with an API key, 6b SigV4 cred
 | V16 | `doctor` reports for a `sigv4` provider where the credentials come from (environment, profile, process) and, for a process, whether it ran, never a value. |
 | V17 | A Bedrock API key still wins when `auth.kind` is `bearer`; the two kinds are never mixed on one provider. |
 
+### 6c: Converse for models that are not Claude
+
+| # | Behaviour |
+|---|---|
+| C1 | `protocol: bedrock_converse` sends a request to the `converse-stream` operation. Its default `messages_path` is `/model/{model}/converse-stream`, with the model percent-encoded as in V1. One provider serves both families: `model_protocols: { "amazon.nova-pro-v1:0": "bedrock_converse" }` sends that model through Converse and every other model stays on `bedrock_messages`. The protocol is never guessed from the model id. |
+| C2 | The Messages request becomes a Converse request: `system` to `system` blocks; turns to `messages` with `text`, `image` (`format`, base64 `source.bytes`), `document` for PDF (`format`, `name`, `source.bytes`), `audio` and `video` blocks, `toolUse` (`toolUseId`, `name`, `input`) and `toolResult` (`toolUseId`, `content`, `status`); `max_tokens`, `temperature`, `top_p` and `stop_sequences` to `inferenceConfig`; `tools` to `toolConfig.tools[].toolSpec` and `tool_choice` (auto, any, tool). A block the model cannot take is refused with a named reason, as for chat completions. |
+| C3 | A tool name over 64 characters or outside letters, digits, `_` and `-` is replaced by a stable hash-suffixed name and mapped back in the answer, with the same code as the chat translator. |
+| C4 | Each `cache_control` marker becomes a `{"cachePoint": {"type": "default"}}` block after the marked block (system, message content, tool list). `bedrock.converse.drop_cache_points` removes them for a model that refuses them. Usage maps `cacheReadInputTokens` and `cacheWriteInputTokens` to `cache_read_input_tokens` and `cache_creation_input_tokens`. |
+| C5 | `thinking` goes to `additionalModelRequestFields.thinking` only for a model listed in `bedrock.converse.thinking_models`. For every other model `thinking`, `output_config` and `context_management` are dropped and counted by name. |
+| C6 | The answer is the AWS event stream with plain JSON payloads. `messageStart` becomes `message_start`; `contentBlockStart` with a tool use becomes `content_block_start`; `contentBlockDelta` carries `text`, `toolUse.input` fragments or `reasoningContent` and becomes the matching delta; `contentBlockStop`; `messageStop.stopReason` (`end_turn`, `tool_use`, `max_tokens`, `stop_sequence`, `guardrail_intervened`, `content_filtered`) becomes a Messages `stop_reason`. The closing `message_delta` and `message_stop` wait for the `metadata` event that carries usage. Exception frames become error events as in V5. |
+| C7 | A request that is not streamed, or that carries a server tool such as the advisor or web search, is refused with a named reason. |
+| C8 | The event-stream decoder (V4), the signer and the credentials (V10 to V17) are the ones of 6a and 6b. |
+| C9 | `bedrock.converse` has `thinking_models` (default empty) and `drop_cache_points` (default false). |
+
+Not in 6c, each to be specified with the owner first: image generation (Nova Canvas, Titan) as an agent type, and messages between sessions.
+
 ## Phase 1 slices
 
 | Slice | Content | Gate (fails today) |
