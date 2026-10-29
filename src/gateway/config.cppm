@@ -262,6 +262,7 @@ struct config {
     [[= reflect::doc{"What llmgate claude and llmgate env give Claude Code: model names per role, context window and profile."}]] claude::launch_config claude{};
     [[= reflect::doc{"Usage ledger and token budgets."}]] usage_config usage{};
     [[= reflect::doc{"Debugging aids that are off by default."}]] debug_config debug{};
+    [[= reflect::doc{"Providers a person may use; a provider outside the list makes the configuration invalid. An org pack sets it; empty means no restriction."}]] [[= reflect::example{R"(["bedrock", "copilot"])"}]] [[= reflect::commented]] std::vector<std::string> providers_allowed{};
 };
 
 }  // namespace llmgate::gateway

@@ -289,4 +289,8 @@
     // Size in MiB at which the capture file stops growing.
     "capture_limit_mib": 256
   }
+
+  // Providers a person may use; a provider outside the list makes the configuration invalid. An org pack
+  // sets it; empty means no restriction.
+  // "providers_allowed": ["bedrock", "copilot"],
 }

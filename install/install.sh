@@ -12,6 +12,8 @@ uninstall=0
 purge=0
 run_init=1
 with_claude=0
+org=
+org_ref=
 log=
 tty=${LLMGATE_INSTALL_TTY:-/dev/tty}
 
@@ -26,6 +28,8 @@ Options:
   --version X.Y.Z   install this version (default: the latest release)
   --prefix DIR      install into DIR (default: ~/.local/bin)
   --repo OWNER/NAME take releases from another repository (a fork)
+  --org SOURCE      apply an organisation pack (a directory or git URL) before init
+  --org-ref REF     the tag or full commit of a git URL pack
   --no-init         do not run llmgate init (or llmgate setup) afterwards
   --with-claude     install Claude Code with its official installer if it is missing
   --force           reinstall even when the version is already installed
@@ -84,6 +88,8 @@ while [ $# -gt 0 ]; do
     --prefix) [ $# -ge 2 ] || die "--prefix needs a value"; prefix=$2; shift ;;
     --repo) [ $# -ge 2 ] || die "--repo needs a value"; repo=$2; shift ;;
     --base-url) [ $# -ge 2 ] || die "--base-url needs a value"; base_url=$2; shift ;;
+    --org) [ $# -ge 2 ] || die "--org needs a value"; org=$2; shift ;;
+    --org-ref) [ $# -ge 2 ] || die "--org-ref needs a value"; org_ref=$2; shift ;;
     --no-init) run_init=0 ;;
     --with-claude) with_claude=1 ;;
     --force) force=1 ;;
@@ -244,6 +250,21 @@ if ! command -v claude >/dev/null 2>&1; then
     fi
   else
     say "Install it from https://claude.ai/install.sh, then run llmgate again."
+  fi
+fi
+
+if [ -n "$org" ]; then
+  set -- org install "$org"
+  [ -z "$org_ref" ] || set -- "$@" --ref "$org_ref"
+  [ "$yes" -eq 0 ] || set -- "$@" --yes
+  if [ "$dry_run" -eq 1 ]; then
+    say "would: run llmgate $*"
+  elif [ "$yes" -eq 1 ]; then
+    "$bin" "$@" < /dev/null || die "llmgate org install failed; nothing else was changed"
+  elif have_tty; then
+    "$bin" "$@" < "$tty" || die "llmgate org install did not finish; run it again: $bin $*"
+  else
+    say "no terminal to confirm the organisation pack; run: $bin $*"
   fi
 fi
 

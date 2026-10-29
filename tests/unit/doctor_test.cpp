@@ -84,6 +84,25 @@ const suite doctor_suite = [] {
         expect(exit_code(findings) == 0);
     };
 
+    "capability_the_org_check_passes_warns_on_overridden_keys_fails_on_a_bad_pack_and_is_absent_without_one"_test = [] {
+        auto const status_of = [](doctor::facts const& seen) -> std::optional<doctor::status> {
+            auto const findings = doctor::diagnose(seen);
+            auto const found = std::ranges::find(findings, std::string{"org"}, &doctor::finding::check);
+            return found == findings.end() ? std::nullopt : std::optional<doctor::status>{found->status};
+        };
+        doctor::facts good;
+        good.org = {.present = true, .name = "acme", .version = "1.0.0", .source = "git@host:acme/pack.git"};
+        doctor::facts shadowed = good;
+        shadowed.org.overridden = {"network"};
+        doctor::facts broken;
+        broken.org = {.problem = "the installed organisation pack is invalid: x"};
+        auto const warned = doctor::diagnose(shadowed);
+        auto const warning = std::ranges::find(warned, std::string{"org"}, &doctor::finding::check);
+
+        expect(!status_of({}).has_value() && status_of(good) == doctor::status::pass && status_of(shadowed) == doctor::status::warn && status_of(broken) == doctor::status::fail);
+        expect(warning->detail.contains("acme 1.0.0") && warning->detail.contains("network") && warning->remedy.contains("administrator"));
+    };
+
     "capability_the_aws_check_names_where_credentials_come_from_fails_with_a_remedy_and_is_absent_without_a_signing_provider"_test = [] {
         auto const found = [](doctor::facts const& seen) {
             auto const findings = doctor::diagnose(seen);

@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "name": "example-corp",
+  "version": "1.0.0",
+  "config": {
+    "providers": {
+      "bedrock": {
+        "preset": "bedrock",
+        "region": "eu-central-1",
+        "labels": ["example-corp"],
+        "auth": { "kind": "sigv4", "profile": "example-corp" },
+        "models": { "claude-sonnet-5-5": "eu.anthropic.claude-sonnet-4-6-v1:0" }
+      }
+    },
+    "network": { "proxy": "http://proxy.example.com:3128", "no_proxy": ["localhost", "127.0.0.1"] }
+  },
+  "locked": ["network"],
+  "providers_allowed": ["bedrock", "copilot"],
+  "claude": {
+    "deny": ["Read(./.env)", "Bash(curl *)"],
+    "announcements": ["Example Corp: use the company providers only."],
+    "marketplaces": { "example-tools": { "source": "github", "repo": "example-corp/claude-plugins" } },
+    "plugins": { "formatter@example-tools": true }
+  },
+  "recipe": "second-opinion"
+}

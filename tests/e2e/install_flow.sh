@@ -34,6 +34,7 @@ case "\$1" in
   stop) echo stopped >> "$work/stop.marker" ;;
   setup) echo "setup $v" >> "$work/setup.marker" ;;
   init) echo "init $v" >> "$work/init.marker" ;;
+  org) shift; echo "\$*" >> "$work/org.marker" ;;
   *) echo "$usage_line" >&2; exit 2 ;;
 esac
 BIN
@@ -111,6 +112,17 @@ label="a prefix that is not on PATH gets the line to add and no profile is edite
 version=1.1.0
 out=$(run --force --no-init 2>&1)
 check sh -c "echo '$out' | grep -q 'export PATH=' && [ ! -e '$HOME/.zshrc' ] && [ ! -e '$HOME/.bashrc' ] && [ ! -e '$HOME/.profile' ]"
+
+label="--org passes the source, the ref and the yes on to llmgate org install, before init"
+rm -f "$work/org.marker"
+version=1.1.0
+run --force --no-init --yes --org https://git.example/pack.git --org-ref v1.2.0 >/dev/null 2>&1 || true
+check sh -c "grep -qx 'install https://git.example/pack.git --ref v1.2.0 --yes' '$work/org.marker'"
+
+label="--org with --dry-run only says what it would do"
+rm -f "$work/org.marker"
+out=$(run --force --no-init --dry-run --org ./pack 2>&1 || true)
+check sh -c "echo '$out' | grep -q 'would: run llmgate org install ./pack' && [ ! -e '$work/org.marker' ]"
 
 label="uninstall stops the gateway and removes the binaries but keeps configuration"
 mkdir -p "$XDG_CONFIG_HOME/llmgate" "$HOME/.claude" "$HOME/.claude-llmgate"

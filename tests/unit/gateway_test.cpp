@@ -2376,6 +2376,20 @@ const suite gateway_suite = [] {
         expect(gateway::effective_messages_path(wire_protocol::bedrock_messages, "/custom/{model}/go", "a b") == "/custom/a%20b/go");
     };
 
+    "capability_providers_allowed_rejects_a_provider_outside_the_list_and_an_empty_list_allows_all"_test = [] {
+        gateway::config settings;
+        settings.listen = "127.0.0.1:1";
+        settings.providers["a"] = {.base_url = "https://a.example"};
+        settings.providers["b"] = {.base_url = "https://b.example"};
+        settings.routes["other"] = {"a"};
+
+        expect(gateway::config_problem(settings).empty());
+        settings.providers_allowed = {"a"};
+        expect(gateway::config_problem(settings).contains("provider b is not on providers_allowed"));
+        settings.providers_allowed = {"a", "b"};
+        expect(gateway::config_problem(settings).empty());
+    };
+
     "capability_one_bedrock_provider_sends_a_listed_model_through_converse_and_the_rest_through_invoke"_test = [] {
         using gateway::wire_protocol;
         gateway::provider_config bedrock{.protocol = wire_protocol::bedrock_messages, .model_protocols = {{"amazon.nova-pro-v1:0", wire_protocol::bedrock_converse}}};

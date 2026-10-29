@@ -361,10 +361,25 @@ std::string agents_problem(config const& settings) {
     return {};
 }
 
+std::string allowed_problem(config const& settings, std::map<std::string, provider_config> const& providers) {
+    if (settings.providers_allowed.empty()) {
+        return {};
+    }
+    for (auto const& entry : providers) {
+        if (!std::ranges::contains(settings.providers_allowed, entry.first)) {
+            return std::format("provider {} is not on providers_allowed (set by your organisation)", entry.first);
+        }
+    }
+    return {};
+}
+
 std::string config_problem(config const& settings) {
     auto const providers = effective_providers(settings);
     if (providers.empty()) {
         return "configure upstream.base_url or at least one entry in providers";
+    }
+    if (auto problem = allowed_problem(settings, providers); !problem.empty()) {
+        return problem;
     }
     for (auto const& [name, item] : providers) {
         if (auto problem = provider_problem(name, item, settings); !problem.empty()) {
