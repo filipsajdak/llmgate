@@ -1,0 +1,3 @@
+messageStart {}
+messageStop {"stopReason":"end_turn"}
+metadata {}

@@ -1,0 +1,5 @@
+messageStart {"role":"assistant"}
+contentBlockDelta {"contentBlockIndex":0,"delta":{"text":"hi"}}
+contentBlockStop {"contentBlockIndex":0}
+messageStop {"stopReason":"end_turn"}
+metadata {"usage":{"inputTokens":1,"outputTokens":2}}

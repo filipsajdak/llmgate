@@ -42,7 +42,7 @@ struct chatgpt_config {
 using chat_quirks = chat::quirks;
 using bedrock_options = bedrock::options;
 
-enum class wire_protocol { anthropic, openai_responses, openai_chat, bedrock_messages };
+enum class wire_protocol { anthropic, openai_responses, openai_chat, bedrock_messages, bedrock_converse };
 static_assert(reflect::unique_values<wire_protocol>());
 
 constexpr std::size_t preset_url_capacity = 40;
@@ -73,6 +73,7 @@ constexpr std::string_view default_messages_path = "/v1/messages";
 constexpr std::string_view default_responses_path = "/responses";
 constexpr std::string_view default_chat_path = "/chat/completions";
 constexpr std::string_view default_bedrock_path = "/model/{model}/invoke-with-response-stream";
+constexpr std::string_view default_converse_path = "/model/{model}/converse-stream";
 constexpr std::string_view bedrock_key_variable = "AWS_BEARER_TOKEN_BEDROCK";
 
 enum class auth_kind { bearer, header, none, sigv4 };
@@ -103,7 +104,7 @@ struct upstream_config {
     [[= reflect::doc{"Path of the Messages endpoint on the upstream."}]] std::string messages_path = "/v1/messages";
     [[= reflect::doc{"A working default for this kind of provider: copilot, anthropic, chatgpt, openai_chat (a chat-completions server: it sets the protocol and leaves base_url to you), bedrock (AWS Bedrock Claude models: with region it fills base_url and reads the API key from AWS_BEARER_TOKEN_BEDROCK). It fills base_url when that is empty and the protocol when it is left at anthropic; whatever you set yourself wins."}]]
     [[= reflect::example{R"("chatgpt")"}]] [[= reflect::commented]] preset_kind preset = preset_kind::none;
-    [[= reflect::doc{"Wire protocol: anthropic (the Messages API, the default), openai_responses (OpenAI Responses, translated: docs/translation-responses.md), openai_chat (a chat-completions server such as Azure OpenAI or vLLM, translated) or bedrock_messages (Claude on AWS Bedrock). The messages_path default follows the protocol; a {model} in messages_path is replaced by the upstream model name."}]]
+    [[= reflect::doc{"Wire protocol: anthropic (the Messages API, the default), openai_responses (OpenAI Responses, translated), openai_chat (Azure OpenAI, vLLM, translated), bedrock_messages (Claude on Bedrock) or bedrock_converse (other Bedrock models, translated). The messages_path default follows the protocol; {model} in it is the upstream model name."}]]
     wire_protocol protocol = wire_protocol::anthropic;
     [[= reflect::doc{"Extra headers sent to the upstream on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here."}]]
     [[= reflect::example{R"({ "Editor-Version": "vscode/1.99.0", "Copilot-Integration-Id": "vscode-chat" })"}]]
@@ -142,7 +143,7 @@ struct provider_config {
     [[= reflect::doc{"Path of the Messages endpoint on the provider."}]] std::string messages_path = "/v1/messages";
     [[= reflect::doc{"A working default for this kind of provider: copilot, anthropic, chatgpt, openai_chat (a chat-completions server: it sets the protocol and leaves base_url to you). It fills base_url when that is empty and the protocol when it is left at anthropic; whatever you set yourself wins."}]]
     [[= reflect::example{R"("chatgpt")"}]] [[= reflect::commented]] preset_kind preset = preset_kind::none;
-    [[= reflect::doc{"Wire protocol: anthropic (the Messages API, the default), openai_responses (OpenAI Responses, translated: docs/translation-responses.md), openai_chat (a chat-completions server such as Azure OpenAI or vLLM, translated) or bedrock_messages (Claude on AWS Bedrock). The messages_path default follows the protocol; a {model} in messages_path is replaced by the upstream model name."}]]
+    [[= reflect::doc{"Wire protocol: anthropic (the Messages API, the default), openai_responses (OpenAI Responses, translated), openai_chat (Azure OpenAI, vLLM, translated), bedrock_messages (Claude on Bedrock) or bedrock_converse (other Bedrock models, translated). The messages_path default follows the protocol; {model} in it is the upstream model name."}]]
     wire_protocol protocol = wire_protocol::anthropic;
     [[= reflect::doc{"Extra headers sent to the provider on every request. With a copilot login the gateway also sends Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here."}]] std::map<std::string, std::string> headers{};
     [[= reflect::doc{"Limits per upstream model id, as the provider reports them (llmgate models lists them). max_tokens above output_tokens is clamped; the model list carries prompt_tokens and output_tokens."}]]

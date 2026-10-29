@@ -19,10 +19,10 @@
     // yourself wins. One of: none, copilot, anthropic, chatgpt, openai_chat, bedrock.
     // "preset": "chatgpt",
     // Wire protocol: anthropic (the Messages API, the default), openai_responses (OpenAI Responses,
-    // translated: docs/translation-responses.md), openai_chat (a chat-completions server such as Azure
-    // OpenAI or vLLM, translated) or bedrock_messages (Claude on AWS Bedrock). The messages_path default
-    // follows the protocol; a {model} in messages_path is replaced by the upstream model name. One of:
-    // anthropic, openai_responses, openai_chat, bedrock_messages.
+    // translated), openai_chat (Azure OpenAI, vLLM, translated), bedrock_messages (Claude on Bedrock) or
+    // bedrock_converse (other Bedrock models, translated). The messages_path default follows the protocol;
+    // {model} in it is the upstream model name. One of: anthropic, openai_responses, openai_chat,
+    // bedrock_messages, bedrock_converse.
     "protocol": "anthropic",
     // Extra headers sent to the upstream on every request. With a copilot login the gateway also sends
     // Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here.
@@ -47,6 +47,17 @@
     //   // anthropic-beta tokens Claude Code may pass to Bedrock; any other token is dropped and counted. Empty
     //   // means the built-in list of tokens Bedrock documents.
     //   // "betas": ["interleaved-thinking-2025-05-14", "context-management-2025-06-27"],
+    //   // Settings of the Converse operation, used for models listed with protocol bedrock_converse in
+    //   // model_protocols.
+    //   // "converse": {
+    //   //   // Models (upstream names) that take thinking on the Converse operation: Claude's thinking field is
+    //   //   // passed in additionalModelRequestFields. Every other model has thinking, output_config and
+    //   //   // context_management dropped and counted.
+    //   //   // "thinking_models": ["anthropic.claude-sonnet-4-6-v1:0"],
+    //   //   // Remove the cachePoint blocks that Claude Code's cache_control markers become, for a model that
+    //   //   // refuses them.
+    //   //   // "drop_cache_points": false,
+    //   // },
     // },
     // Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to
     // this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a
