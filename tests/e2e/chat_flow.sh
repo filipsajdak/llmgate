@@ -157,6 +157,9 @@ status, events, _ = post(dict(bare, messages=[{"role": "user", "content": "FAKE_
 check("an unparsable chunk is skipped and an error chunk becomes an Anthropic error event", events[-1]["type"] == "error" and events[-1]["error"]["type"] == "rate_limit_error" and events[-1]["error"]["message"] == "overloaded")
 check("the unparsable chunk is counted", get("/llmgate/stats")["ignored_events"].get("unparsed_chunk") == 1)
 
+status, _, text = post(dict(bare, messages=[{"role": "user", "content": "FAKE_400"}]))
+check("an upstream 400 reaches Claude Code with the upstream's own message", status == 400 and json.loads(text)["error"]["type"] == "invalid_request_error" and json.loads(text)["error"]["message"] == "bad field xyz")
+
 limited_status, _, limited = post({"messages": [user]}, model="claude-gpt-fake@limited")
 body = json.loads(limited)
 check("an upstream rate limit reaches Claude Code as an Anthropic rate_limit_error",

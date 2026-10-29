@@ -13,15 +13,16 @@
     // Path of the Messages endpoint on the upstream.
     "messages_path": "/v1/messages",
     // A working default for this kind of provider: copilot, anthropic, chatgpt, openai_chat (a
-    // chat-completions server: it sets the protocol and leaves base_url to you). It fills base_url when
-    // that is empty and the protocol when it is left at anthropic; whatever you set yourself wins. One of:
-    // none, copilot, anthropic, chatgpt, openai_chat.
+    // chat-completions server: it sets the protocol and leaves base_url to you), bedrock (AWS Bedrock
+    // Claude models: with region it fills base_url and reads the API key from AWS_BEARER_TOKEN_BEDROCK).
+    // It fills base_url when that is empty and the protocol when it is left at anthropic; whatever you set
+    // yourself wins. One of: none, copilot, anthropic, chatgpt, openai_chat, bedrock.
     // "preset": "chatgpt",
     // Wire protocol: anthropic (the Messages API, the default), openai_responses (OpenAI Responses,
-    // translated: docs/translation-responses.md) or openai_chat (a chat-completions server such as Azure
-    // OpenAI or vLLM, translated: docs/llmgate-rollout.md). The messages_path default becomes /responses
-    // or /chat/completions; a {model} in messages_path is replaced by the upstream model name. One of:
-    // anthropic, openai_responses, openai_chat.
+    // translated: docs/translation-responses.md), openai_chat (a chat-completions server such as Azure
+    // OpenAI or vLLM, translated) or bedrock_messages (Claude on AWS Bedrock). The messages_path default
+    // follows the protocol; a {model} in messages_path is replaced by the upstream model name. One of:
+    // anthropic, openai_responses, openai_chat, bedrock_messages.
     "protocol": "anthropic",
     // Extra headers sent to the upstream on every request. With a copilot login the gateway also sends
     // Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here.
@@ -37,6 +38,16 @@
     // use_max_completion_tokens, drop_stop_sequences, drop_sampling, drop_reasoning_effort,
     // drop_reasoning_effort_with_tools. Azure OpenAI reasoning models need the first three and the last.
     // "chat": { "use_max_completion_tokens": true, "drop_stop_sequences": true, "drop_sampling": true, "drop_reasoning_effort": false, "drop_reasoning_effort_with_tools": true },
+    // AWS region of a Bedrock provider (preset bedrock): eu-central-1 gives base_url
+    // https://bedrock-runtime.eu-central-1.amazonaws.com.
+    // "region": "eu-central-1",
+    // Settings of a Bedrock provider (protocol bedrock_messages): betas lists the anthropic-beta tokens
+    // passed on.
+    // "bedrock": {
+    //   // anthropic-beta tokens Claude Code may pass to Bedrock; any other token is dropped and counted. Empty
+    //   // means the built-in list of tokens Bedrock documents.
+    //   // "betas": ["interleaved-thinking-2025-05-14", "context-management-2025-06-27"],
+    // },
     // Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to
     // this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a
     // gateway credential. For an Anthropic provider only; refused together with client_key_env or a

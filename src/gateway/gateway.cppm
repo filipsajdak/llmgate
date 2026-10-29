@@ -9,9 +9,11 @@ import llmgate.anthropic;
 import llmgate.async;
 import llmgate.capture;
 import llmgate.claude;
+import llmgate.bedrock_request;
 import llmgate.chat_request;
 import llmgate.chat_stream;
 import llmgate.control;
+import llmgate.eventstream;
 import llmgate.history;
 import llmgate.http;
 import llmgate.httpio;
@@ -45,6 +47,7 @@ constexpr std::string_view default_path_for(wire_protocol const protocol) {
     switch (protocol) {
         case wire_protocol::openai_responses: return default_responses_path;
         case wire_protocol::openai_chat: return default_chat_path;
+        case wire_protocol::bedrock_messages: return default_bedrock_path;
         case wire_protocol::anthropic: break;
     }
     return default_messages_path;
@@ -52,10 +55,31 @@ constexpr std::string_view default_path_for(wire_protocol const protocol) {
 
 constexpr std::string_view model_placeholder = "{model}";
 
+constexpr bool is_unreserved(char const c) {
+    constexpr std::string_view marks = "-._~";
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || marks.contains(c);
+}
+
+constexpr std::string percent_encoded(std::string_view const text) {
+    constexpr std::string_view digits = "0123456789ABCDEF";
+    std::string out;
+    for (char const c : text) {
+        auto const code = static_cast<unsigned char>(c);
+        if (is_unreserved(c)) {
+            out.push_back(c);
+        } else {
+            std::string const escaped{'%', digits[code >> 4], digits[code & 0xF]};
+            out += escaped;
+        }
+    }
+    return out;
+}
+
 constexpr std::string effective_messages_path(wire_protocol const protocol, std::string_view const configured, std::string_view const upstream_model) {
     std::string path{configured == default_messages_path ? default_path_for(protocol) : configured};
-    for (auto at = path.find(model_placeholder); at != std::string::npos; at = path.find(model_placeholder, at + upstream_model.size())) {
-        path.replace(at, model_placeholder.size(), upstream_model);
+    auto const model = percent_encoded(upstream_model);
+    for (auto at = path.find(model_placeholder); at != std::string::npos; at = path.find(model_placeholder, at + model.size())) {
+        path.replace(at, model_placeholder.size(), model);
     }
     return path;
 }
@@ -89,6 +113,18 @@ std::optional<preset_defaults> defaults_of(preset_kind const kind) {
     return found;
 }
 
+void fill_bedrock(provider_config& item) {
+    if (item.preset != preset_kind::bedrock) {
+        return;
+    }
+    if (item.base_url.empty() && !item.region.empty()) {
+        item.base_url = std::format("https://bedrock-runtime.{}.amazonaws.com", item.region);
+    }
+    if (item.auth.env.empty() && item.auth.file.empty() && item.static_token_env.empty()) {
+        item.auth.env = std::string{bedrock_key_variable};
+    }
+}
+
 provider_config with_preset(provider_config item) {
     if (auto const defaults = defaults_of(item.preset)) {
         if (item.base_url.empty()) {
@@ -98,6 +134,7 @@ provider_config with_preset(provider_config item) {
             item.protocol = defaults->protocol;
         }
     }
+    fill_bedrock(item);
     return item;
 }
 
@@ -727,6 +764,8 @@ struct relay_state {
     anthropic::stream_guard guard{};
     std::optional<responses::stream_translator> translator{};
     std::optional<chat::stream_translator> chat_translator{};
+    std::optional<eventstream::decoder> frames{};
+    bool frames_failed = false;
     bool capture = false;
     std::string raw{};
     std::deque<std::string> pending{};
@@ -754,6 +793,23 @@ struct relay_state {
 
     bool translating() const { return translator.has_value() || chat_translator.has_value(); }
 
+    void accept_frame(eventstream::frame const& each) {
+        if (auto const made = eventstream::event_of(each)) {
+            accept({.name = made->name, .data = made->data, .id = {}});
+        }
+    }
+
+    void feed_frames(std::span<std::byte const> const bytes) {
+        if (frames_failed) {
+            return;
+        }
+        if (auto const broken = frames->feed(bytes, [this](eventstream::frame const& each) { accept_frame(each); }); broken != eventstream::failure::none) {
+            frames_failed = true;
+            auto const closing = eventstream::event_of({.message_type = "error", .error_message = std::format("the Bedrock stream is corrupt ({})", reflect::enum_name(broken))});
+            through_guard({.name = closing->name, .data = closing->data, .id = {}});
+        }
+    }
+
     void accept(sse::event const& item) {
         auto const guarded = [this](sse::event const& event) { through_guard(event); };
         if (translator) {
@@ -765,12 +821,33 @@ struct relay_state {
         }
     }
 
-    void on_chunk(std::span<std::byte const> bytes) {
+    void install_translator(request_note& note) {
+        switch (wire) {
+            case wire_protocol::openai_responses: translator.emplace(note.requested); break;
+            case wire_protocol::openai_chat: chat_translator.emplace(note.requested, std::move(note.renamed)); break;
+            case wire_protocol::bedrock_messages: frames.emplace(); break;
+            case wire_protocol::anthropic: break;
+        }
+    }
+
+    void keep_raw(std::span<std::byte const> const bytes) {
         if (capture && streaming && raw.size() < capture::body_limit_bytes) {
             raw.append(reinterpret_cast<char const*>(bytes.data()), bytes.size());
         }
-        if (streaming) {
+    }
+
+    void feed_stream(std::span<std::byte const> const bytes) {
+        if (frames) {
+            feed_frames(bytes);
+        } else {
             parser.feed(bytes, [this](sse::event const& item) { accept(item); });
+        }
+    }
+
+    void on_chunk(std::span<std::byte const> bytes) {
+        keep_raw(bytes);
+        if (streaming) {
+            feed_stream(bytes);
             return;
         }
         if (buffer_limit < buffered.size() + bytes.size()) {
@@ -790,7 +867,11 @@ struct relay_state {
         }
         auto const type = incoming.fields.find("content-type").value_or("");
         auto const success = incoming.status >= http_success_floor && incoming.status < http_success_floor + http_success_span;
-        streaming = success && (type.starts_with("text/event-stream") || (translating() && type.empty()));
+        streaming = success && streams_as(type);
+    }
+
+    bool streams_as(std::string_view const type) const {
+        return type.starts_with("text/event-stream") || type.starts_with("application/vnd.amazon.eventstream") || (translating() && type.empty());
     }
 
     bool unusable_success() const {
@@ -904,6 +985,20 @@ struct built_request {
     std::vector<chat::renamed_name> renamed{};
 };
 
+std::expected<translated_body, attempt_result> to_bedrock_body(std::string const& body, std::string_view const beta_header, bedrock::options const& chosen, stats& counters) {
+    auto done = bedrock::translate_request(body, beta_header, chosen);
+    if (!done) {
+        return std::unexpected{refused(routing::error_reply(400, "invalid_request_error", done.error().message), health::neutral)};
+    }
+    if (!done->client_streams) {
+        return std::unexpected{refused(routing::error_reply(400, "invalid_request_error", "stream must be true for a provider with the bedrock_messages protocol"), health::neutral)};
+    }
+    for (auto const& token : done->dropped_betas) {
+        ++counters.dropped_fields["anthropic-beta:" + token];
+    }
+    return translated_body{.body = std::move(done->body)};
+}
+
 bool translates_errors(wire_protocol const wire, int const status) {
     return wire != wire_protocol::anthropic && status >= http_error_floor;
 }
@@ -912,7 +1007,7 @@ std::string client_error_body(wire_protocol const wire, int const status, std::s
     if (!translates_errors(wire, status)) {
         return body;
     }
-    return wire == wire_protocol::openai_chat ? chat::error_body(status, body) : responses::error_body(status, body);
+    return wire == wire_protocol::openai_responses ? responses::error_body(status, body) : chat::error_body(status, body);
 }
 
 attempt_result delivered(net::result_void client, health const state) {
@@ -1573,6 +1668,9 @@ private:
         if (wire == wire_protocol::openai_chat) {
             return detail::to_chat_body(body, settings.chat, counters_);
         }
+        if (wire == wire_protocol::bedrock_messages) {
+            return detail::to_bedrock_body(body, incoming.head.fields.find("anthropic-beta").value_or(""), settings.bedrock, counters_);
+        }
         if (wire != wire_protocol::openai_responses) {
             return detail::translated_body{.body = std::move(body)};
         }
@@ -1784,11 +1882,7 @@ private:
         detail::relay_state state{.counters = &counters_, .buffer_limit = buffer_limit, .wire = note.wire};
         state.observed.collect_text(note.kind == usage::classifier_kind);
         state.capture = static_cast<bool>(capture_);
-        if (state.wire == wire_protocol::openai_responses) {
-            state.translator.emplace(note.requested);
-        } else if (state.wire == wire_protocol::openai_chat) {
-            state.chat_translator.emplace(note.requested, std::move(note.renamed));
-        }
+        state.install_translator(note);
         auto const drained = co_await pump(upstream, state, out);
         absorb_translator_counts(state);
         auto const& provider = providers_[index].name;
@@ -1892,7 +1986,7 @@ private:
         settle_connection(index, upstream, *state.head);
         auto const fields = routing::downstream_headers(state.head->fields);
         if (detail::translates_errors(state.wire, state.head->status)) {
-            co_return co_await out.send(state.head->status, fields, responses::error_body(state.head->status, state.buffered));
+            co_return co_await out.send(state.head->status, fields, detail::client_error_body(state.wire, state.head->status, state.buffered));
         }
         co_return co_await out.send(state.head->status, fields, state.buffered);
     }
