@@ -103,6 +103,19 @@ Slice 6 is built in three parts: 6a Claude models with an API key, 6b SigV4 cred
 | V8 | The AWS credential is a bearer API key in 6a; SigV4 follows in 6b. |
 | V9 | A `system` message inside the conversation, which Bedrock refuses, is folded in: after a user turn it joins that turn's content blocks, after an assistant turn it becomes a user turn, and before the first turn it joins the system prompt, each with its `cache_control` kept. A request with `stream` false is refused with a named reason, because the invoke operation used here only streams. |
 
+### 6b: SigV4 credentials
+
+| # | Behaviour |
+|---|---|
+| V10 | `auth: { kind: "sigv4" }` signs each upstream request with AWS Signature Version 4 instead of sending a bearer key. `region` (default: the provider's `region`, then `AWS_REGION`, then `AWS_DEFAULT_REGION`) and `service` (default `bedrock`) say what is signed. The `bedrock` preset with `region` and no key in the environment chooses `sigv4`. |
+| V11 | The signature covers the method, the path, the `host`, `x-amz-date` and, when there is one, `x-amz-security-token`, plus the SHA-256 of the body. The canonical path encodes the already encoded path once more (a model id with `:` is signed as `%253A`), as AWS requires for services other than S3. The headers `x-amz-date`, `x-amz-security-token` and `authorization` are added; none is logged. |
+| V12 | The signer is checked against the AWS SigV4 test suite examples (the `get-vanilla` request, key derivation) in `static_assert`s, with SHA-256 and HMAC written as constexpr functions. |
+| V13 | Credentials are found in this order: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` in the environment; then the named profile (`auth.profile`, then `AWS_PROFILE`, then `default`) in `~/.aws/credentials` (or `AWS_SHARED_CREDENTIALS_FILE`); then that profile's `credential_process` in `~/.aws/config` (or `AWS_CONFIG_FILE`). No SSO cache is read (L8): an SSO profile is used through `credential_process = aws configure export-credentials --profile NAME --format process`. |
+| V14 | A `credential_process` is run by argv, never a shell, and its JSON (`AccessKeyId`, `SecretAccessKey`, `SessionToken`, `Expiration`) is cached until one minute before `Expiration` (without an `Expiration`, until the process ends). A failing process, a bad version or a missing key is a named error, and the process output is never printed. |
+| V15 | A 401 or 403 from the upstream drops the cached process credential, so the next request runs the process again. |
+| V16 | `doctor` reports for a `sigv4` provider where the credentials come from (environment, profile, process) and, for a process, whether it ran, never a value. |
+| V17 | A Bedrock API key still wins when `auth.kind` is `bearer`; the two kinds are never mixed on one provider. |
+
 ## Phase 1 slices
 
 | Slice | Content | Gate (fails today) |
