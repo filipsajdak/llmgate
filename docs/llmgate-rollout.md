@@ -132,6 +132,31 @@ Slice 6 is built in three parts: 6a Claude models with an API key, 6b SigV4 cred
 
 Not in 6c, each to be specified with the owner first: image generation (Nova Canvas, Titan) as an agent type, and messages between sessions.
 
+## Org pack (phase 1 slice 7)
+
+A company keeps its llmgate settings in a repository of its own and a colleague applies them with one command. The public repository ships the format, the commands and an example pack; no real company pack lives here. Decisions of 2026-10-30: layered with locked keys, minimal contents (providers and allowed list, Claude Code policy, default recipe, network), pinned source with `org update`, a diff and a yes before anything is applied.
+
+| # | Behaviour |
+|---|---|
+| O1 | A pack is a directory holding `llmgate-org.jsonc` with `schema` (1), `name`, `version` (`MAJOR.MINOR.PATCH`), and the optional sections `config`, `locked`, `providers_allowed`, `claude` and `recipe`. The file is read by reflection into a struct; an unknown key, a wrong type or a bad version is refused with its path. A pack holds no secret: provider entries name the environment variable, file or keychain entry, never a value. |
+| O2 | `config` is a partial llmgate configuration (providers, routes, network, labels, and so on), validated exactly as the user's own configuration. It is a layer of defaults beneath the user's file. |
+| O3 | `locked` lists dotted paths of the configuration (for example `network`, `providers.bedrock.base_url`); the pack's value wins over the user's at each. Every other key is a default the person can change. A locked path that is not in the configuration's shape is refused when the pack is read. Merging replaces scalars and arrays and merges objects key by key. |
+| O4 | `providers_allowed` lists the providers a colleague may use. A provider outside the list, from the pack or from the user's file, makes the configuration invalid with a message naming the provider and the pack. Absent means no restriction. |
+| O5 | `claude` carries Claude Code policy for the llmgate profile: `deny` (permission rules, added to the profile's `permissions.deny`), `announcements` (the profile's `companyAnnouncements`), `marketplaces` (the profile's `extraKnownMarketplaces`, each a `github`, `git`, `url`, `file` or `directory` source) and `plugins` (`enabledPlugins`). These are user-level settings, so they guide and do not enforce: a colleague can edit the profile. |
+| O6 | `recipe` names the recipe `llmgate init` proposes first and `init --yes` applies when the providers meet its needs. |
+| O7 | `llmgate org install SOURCE [--ref REF] [--yes]` takes a directory or a git URL. A git URL needs `--ref` as a tag or a full commit; a branch name is refused because it is not pinned. The repository is cloned by argv with `git` (shallow, hooks disabled, no submodules), the pack file is read, and the clone is discarded: nothing in a pack is ever run. |
+| O8 | Before it applies anything, `org install` prints what will change: providers added or changed, the allowed list, locked paths, deny rules, announcements, marketplaces, plugins, the recipe and network values. It asks for a yes at the terminal. `--yes` skips the question (fleets); with no terminal and no `--yes` it refuses. |
+| O9 | The installed pack is kept at `~/.config/llmgate/org/` as `pack.jsonc` plus `source.json` (source, ref, commit, digest, time) and `applied.json` (the profile entries the pack added). `LLMGATE_ORG_DIR` moves it for tests. |
+| O10 | The configuration the gateway uses is the merge of the pack's `config` (defaults), the user's file and the locked paths from the pack, read each time the configuration loads. The user's file is never rewritten by the pack. `llmgate config show` and `doctor` name the layer a locked value comes from. |
+| O11 | `llmgate org show` prints the pack's name, version, source, commit and what it sets. `llmgate org update [--ref REF] [--yes]` fetches the recorded source again (at `--ref`, or the recorded one), prints the difference against the installed pack and asks as in O8. |
+| O12 | `llmgate org remove [--yes]` deletes the layer and removes exactly the profile entries recorded in `applied.json`, leaving the person's own deny rules, announcements and marketplaces. |
+| O13 | After install, update or remove the profile is written again (as `setup` does) with the pack's policy merged in, and the running gateway is reloaded when there is one. |
+| O14 | `doctor` gets an `org` check: pack present and valid, its source and commit, and a warning that lists any key the user set that a locked path overrides. |
+| O15 | The installer takes `--org SOURCE` and `--org-ref REF`, runs `llmgate org install` after the binary is in place and before `init`, and passes `--yes` on only when it was given `--yes` itself. |
+| O16 | `examples/org-pack/llmgate-org.jsonc` is a synthetic pack for a made-up company, used by the tests and the README. |
+
+Not in slice 7 (phase 2, full pack): pinned llmgate versions and a required-update notice, VS Code settings, budgets and reports defaults, signed packs.
+
 ## Phase 1 slices
 
 | Slice | Content | Gate (fails today) |
