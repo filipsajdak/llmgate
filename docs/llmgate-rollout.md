@@ -157,6 +157,28 @@ A company keeps its llmgate settings in a repository of its own and a colleague 
 
 Not in slice 7 (phase 2, full pack): pinned llmgate versions and a required-update notice, VS Code settings, budgets and reports defaults, signed packs.
 
+## C++26 tour and colleague runs (phase 1 slice 9)
+
+Decisions of 2026-10-30: the tour is a page with a link checker, it covers what the code uses today, what GCC 16.2 cannot do yet, before and after snippets, a reading order and possible improvements; the macOS colleague runs now and the Windows colleague after slice 8; results go into this spec, anonymised.
+
+| # | Behaviour |
+|---|---|
+| G1 | `docs/cpp26-tour.md` has one section per feature. Each says what the feature does for llmgate, shows the C++20 way next to the real code, links the code (`file` plus a symbol that occurs in it) and names the test that proves it. |
+| G2 | The features covered are the ones the code uses: reflection annotations as the schema, enum reflection, `template for`, annotated dispatch with a coverage `static_assert`, `current_function()` layer guard, `#embed`, contracts, constexpr corpora with `static_assert`, `import std` modules, `std::expected`, coroutines on the project's own reactor, ranges, `std::format` and `std::print`, `define_static_string`, `define_aggregate`, `std::function_ref`. |
+| G3 | The tour opens with a reading order: where a newcomer starts (an annotated configuration struct), what to read next, and where each feature shows up on the way. |
+| G4 | A table lists C++26 facilities GCC 16.2 does not provide (`std::hive`, `<linalg>`, trivial relocatability, `std::is_within_lifetime`, `std::add_sat`), the workaround in use, and the probe in `tests/constexpr/capabilities/absent` that must fail to compile today. When GCC gains a facility its probe starts compiling and its test fails with the name of the row to update. |
+| G5 | A section of possible improvements lists facilities GCC 16.2 supports that the code does not use yet (`std::inplace_vector`, `std::flat_map`, `std::generator`, `std::optional<T&>`, pack indexing, `= delete("reason")`, constexpr exceptions, more `std::views::enumerate`, `define_aggregate` for the hand-mirrored legacy provider, generated shell completions from the annotated flags). Each says what it would change, where, and has a probe in `tests/constexpr/capabilities/supported` that compiles today. It is a list of options, not a promise. |
+| G6 | `tools/check_tour.py`, run by `ctest -L lint` and the CI lint job, fails when a link to a repository path does not exist, when a code span right after a link does not occur in that file, when a feature section lacks a code link or a test link, or when a probe the page names is missing. |
+| G7 | `docs/colleague-run.md` is the run sheet: what to prepare, the install and first-run steps a colleague follows without help, the stopwatch points (start, installed, first provider connected, first tool turn, second provider), and what the observer writes down. The acceptance is L13: under 10 minutes to a finished tool turn on two providers, unaided. |
+| G8 | The results are rows in the table below: date, system, minutes to the first tool turn, providers used, what blocked the colleague, and the change that fixed it. No names and no company details. |
+| G9 | The macOS colleague runs as soon as the sheet and a release are ready; the Windows colleague after slice 8. |
+
+Colleague results (anonymised):
+
+| Date | System | Minutes to first tool turn | Providers | What blocked, and the fix |
+|---|---|---|---|---|
+| (none yet) | | | | |
+
 ## Phase 1 slices
 
 | Slice | Content | Gate (fails today) |
