@@ -639,6 +639,8 @@ Real Claude Code requests are much larger than the bench default: in a sample of
 | Comments | None, except where a rule is broken or an exception is made |
 | Modules | `import std` and named modules everywhere |
 
+The C++26 features the code uses, what GCC 16.2 cannot do yet and some options for improving the code are in [docs/cpp26-tour.md](docs/cpp26-tour.md); every link in it is checked by `tools/check_tour.py`.
+
 ## Toolchain findings (GCC 16.2.0)
 
 | Finding | Consequence |

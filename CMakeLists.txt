@@ -414,7 +414,8 @@ set_tests_properties(llmgate_reflection_lint_self_test llmgate_reflection_lint P
 add_test(NAME llmgate_cpp26_lint_self_test COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/cpp26_lint.py --self-test)
 add_test(NAME llmgate_cpp26_lint COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/cpp26_lint.py --strict --root ${CMAKE_CURRENT_SOURCE_DIR} src app tests)
 add_test(NAME llmgate_lint_unittests COMMAND python3 -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/tests/lint)
-set_tests_properties(llmgate_cpp26_lint_self_test llmgate_cpp26_lint llmgate_lint_unittests PROPERTIES LABELS lint)
+add_test(NAME llmgate_tour_links COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_tour.py --root ${CMAKE_CURRENT_SOURCE_DIR})
+set_tests_properties(llmgate_cpp26_lint_self_test llmgate_cpp26_lint llmgate_lint_unittests llmgate_tour_links PROPERTIES LABELS lint)
 
 file(GLOB reflection_capabilities CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/constexpr/capabilities/supported/*.cpp)
 foreach(probe IN LISTS reflection_capabilities)
