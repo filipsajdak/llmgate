@@ -417,6 +417,20 @@ inline int run_and_wait(std::filesystem::path const& program, std::vector<std::s
     return wait_status(child);
 }
 
+inline std::optional<std::filesystem::path> find_program(std::string const& name) {
+    if (name.contains('/')) {
+        return std::filesystem::path{expand_home(name)};
+    }
+    auto const* path = std::getenv("PATH");
+    for (auto const directory : std::views::split(std::string_view{path == nullptr ? "" : path}, ':')) {
+        auto const candidate = std::filesystem::path{std::string_view{directory.begin(), directory.end()}} / name;
+        if (std::error_code ignored; std::filesystem::is_regular_file(candidate, ignored) && ::access(candidate.c_str(), X_OK) == 0) {
+            return candidate;
+        }
+    }
+    return std::nullopt;
+}
+
 inline std::expected<std::string, std::error_code> run_capturing(std::filesystem::path const& program, std::vector<std::string> const& arguments) {
     std::array<int, 2> ends{};
     if (::pipe(ends.data()) != 0) {

@@ -11,7 +11,7 @@ import llmgate.text;
 export namespace llmgate::doctor {
 
 enum class status { pass, warn, fail };
-enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, models, ledger, budget, quota, subagents, agent_targets, model_limits, network, aws };
+enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, models, ledger, budget, quota, subagents, agent_targets, model_limits, network, aws, org };
 static_assert(reflect::unique_values<check>());
 
 enum class port_state { free, ours, foreign };
@@ -62,6 +62,15 @@ struct network_fact {
     bool proxy_answers = true;
 };
 
+struct org_fact {
+    bool present = false;
+    std::string name{};
+    std::string version{};
+    std::string source{};
+    std::string problem{};
+    std::vector<std::string> overridden{};
+};
+
 struct aws_fact {
     std::string provider{};
     std::string source{};
@@ -100,6 +109,7 @@ struct facts {
     std::vector<std::string> unknown_limits{};
     network_fact network{};
     std::vector<aws_fact> aws{};
+    org_fact org{};
 };
 
 }  // namespace llmgate::doctor
@@ -295,6 +305,27 @@ constexpr std::optional<finding> model_limits_finding(facts const& seen) {
     return make(check::model_limits, status::warn, detail, "llmgate models offer PROVIDER MODEL... records the limits the provider reports");
 }
 
+constexpr std::optional<finding> org_finding(facts const& seen) {
+    auto const& pack = seen.org;
+    if (!pack.problem.empty()) {
+        return make(check::org, status::fail, pack.problem, "run llmgate org install SOURCE again, or llmgate org remove");
+    }
+    if (!pack.present) {
+        return std::nullopt;
+    }
+    std::string detail;
+    text::append_all(detail, "organisation pack ", pack.name, " ", pack.version, pack.source.empty() ? "" : " from ", pack.source);
+    if (!pack.overridden.empty()) {
+        std::string keys;
+        for (auto const& key : pack.overridden) {
+            text::append_all(keys, keys.empty() ? "" : ", ", key);
+        }
+        text::append_all(detail, "; your values for ", keys, " are overridden by the pack");
+        return make(check::org, status::warn, detail, "remove those keys from your configuration, or ask your administrator");
+    }
+    return make(check::org, status::pass, detail);
+}
+
 constexpr std::optional<finding> aws_finding(facts const& seen) {
     if (seen.aws.empty()) {
         return std::nullopt;
@@ -472,6 +503,7 @@ constexpr std::vector<finding> diagnose(facts const& seen) {
     detail::add(out, detail::model_limits_finding(seen));
     detail::add(out, detail::network_finding(seen));
     detail::add(out, detail::aws_finding(seen));
+    detail::add(out, detail::org_finding(seen));
     return out;
 }
 

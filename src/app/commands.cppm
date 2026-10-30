@@ -24,6 +24,8 @@ import llmgate.json;
 import llmgate.mod_bundle;
 import llmgate.model_list;
 import llmgate.network;
+import llmgate.org_pack;
+import llmgate.org_store;
 import llmgate.process;
 import llmgate.proxy;
 import llmgate.proof;
@@ -492,7 +494,7 @@ inline outcome ensure_profile(context const& where, bool const dry_run) {
     if (!existing) {
         return std::unexpected{existing.error()};
     }
-    auto merged = claude::with_model_picker(claude::merge_settings(std::move(*existing), where.settings.claude.effort, detail::status_line_command(where)), picker_rows_of(where.settings));
+    auto merged = org::apply_to_settings(claude::with_model_picker(claude::merge_settings(std::move(*existing), where.settings.claude.effort, detail::status_line_command(where)), picker_rows_of(where.settings)), !dry_run);
     if (auto written = detail::write_json(settings_path, merged, dry_run, true); !written) {
         return written;
     }
@@ -1008,6 +1010,22 @@ std::vector<doctor::aws_fact> aws_facts(gateway::config const& settings) {
     return out;
 }
 
+doctor::org_fact org_facts(context const& where) {
+    auto installed = org::read_installed();
+    if (!installed) {
+        return {.problem = installed.error()};
+    }
+    if (!*installed) {
+        return {};
+    }
+    doctor::org_fact fact{.present = true, .name = (*installed)->pack.described.name, .version = (*installed)->pack.described.version, .source = (*installed)->from.source};
+    std::ifstream in{process::expand_home(where.options.config_path)};
+    if (auto user = json::parse(std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}}, {.jsonc = true})) {
+        fact.overridden = org::overridden_keys((*installed)->pack, *user);
+    }
+    return fact;
+}
+
 doctor::facts gather_facts(context const& where) {
     doctor::facts seen;
     seen.config_error = where.config_error;
@@ -1034,6 +1052,7 @@ doctor::facts gather_facts(context const& where) {
     seen.unknown_limits = unknown_limits_of(where.settings);
     seen.network = network_facts(where);
     seen.aws = aws_facts(where.settings);
+    seen.org = org_facts(where);
     return seen;
 }
 

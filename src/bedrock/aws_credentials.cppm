@@ -306,22 +306,9 @@ inline std::string region_of(sources const& from, std::string configured) {
     return configured;
 }
 
-inline std::optional<std::filesystem::path> program_on_path(std::string const& name) {
-    if (name.contains('/')) {
-        return std::filesystem::path{process::expand_home(name)};
-    }
-    auto const* path = std::getenv("PATH");
-    for (auto const directory : std::views::split(std::string_view{path == nullptr ? "" : path}, ':')) {
-        auto const candidate = std::filesystem::path{std::string_view{directory.begin(), directory.end()}} / name;
-        if (std::error_code ignored; std::filesystem::is_regular_file(candidate, ignored)) {
-            return candidate;
-        }
-    }
-    return std::nullopt;
-}
 
 inline std::expected<std::string, std::string> run_credential_process(std::vector<std::string> const& command) {
-    auto const program = program_on_path(command.front());
+    auto const program = process::find_program(command.front());
     if (!program) {
         return std::unexpected{std::format("{} was not found on PATH", command.front())};
     }

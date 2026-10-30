@@ -228,6 +228,7 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `debug` | object | - | Debugging aids that are off by default. |
 | `debug.capture_file` | string | `""` | File that receives one JSON line per request with the request and reply bodies and the headers (credentials replaced by <redacted>), for finding out what a misbehaving model sent. The file holds your conversations: it is created with mode 0600, is off while this is empty, and stops growing at capture_limit_mib. |
 | `debug.capture_limit_mib` | integer | `256` | Size in MiB at which the capture file stops growing. |
+| `providers_allowed` | array of string | `[]` | Providers a person may use; a provider outside the list makes the configuration invalid. An org pack sets it; empty means no restriction. |
 <!-- config-table:end -->
 
 ## Usage ledger and budgets
@@ -429,6 +430,19 @@ The request becomes a Converse request (system, text, images, PDF and other docu
 ### Signing with AWS credentials (SigV4)
 
 Instead of an API key, a provider can sign each request: `"auth": { "kind": "sigv4", "profile": "work" }` with `region`. Credentials come from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`, else from the profile in `~/.aws/credentials`, else from the profile's `credential_process` in `~/.aws/config` (run by argv, cached until a minute before its `Expiration`, run again after a 401 or 403). For SSO use `credential_process = aws configure export-credentials --profile NAME --format process`; llmgate does not read the SSO cache. `llmgate doctor` shows where the credentials come from, never a value. The signer is checked against the AWS signature test-suite example and an independent verifier, and has not yet been run against a real AWS account.
+
+## Organisation pack
+
+A company can keep its llmgate settings in a repository of its own and give colleagues one command:
+
+```sh
+llmgate org install https://git.example.com/it/llmgate-pack.git --ref v1.2.0
+# or while installing:  sh install.sh --org https://git.example.com/it/llmgate-pack.git --org-ref v1.2.0
+```
+
+The pack is a directory with `llmgate-org.jsonc` (see [examples/org-pack](examples/org-pack)): provider entries without secrets and other configuration defaults (`config`), the paths the pack locks (`locked`, for example `network`), the providers a colleague may use (`providers_allowed`), Claude Code policy for the llmgate profile (`claude`: deny rules, an announcement, plugin marketplaces and plugins), and the recipe `llmgate init` proposes first (`recipe`). It is layered beneath the person's own `config.jsonc`: the person can change any default, but a locked path always takes the pack's value, and `llmgate doctor` warns about a value of theirs that a locked path overrides.
+
+`org install` prints what will change and asks for a yes (`--yes` skips the question for fleets). A git URL needs `--ref` as a tag or a full commit, because a branch is not pinned; a pack is only read, never run, and holds no secret. `llmgate org show` prints what is installed, `llmgate org update [--ref REF]` fetches the recorded source again and shows the difference, and `llmgate org remove` takes out exactly the profile entries the pack added. The deny rules, announcements and marketplaces are user-level settings of the llmgate profile: they guide, they do not enforce.
 
 ## The llmgate mod: the route inside Claude Code
 

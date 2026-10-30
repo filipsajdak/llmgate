@@ -18,6 +18,9 @@ import llmgate.copilot;
 import llmgate.discovery;
 import llmgate.model_list;
 import llmgate.offer;
+import llmgate.org_fetch;
+import llmgate.org_pack;
+import llmgate.org_store;
 import llmgate.text;
 import llmgate.gateway;
 import llmgate.httpio;
@@ -48,8 +51,12 @@ std::expected<gateway::config, std::string> load_config(std::string_view const p
     if (!in) {
         return std::unexpected{std::format("cannot read {}", path)};
     }
-    std::string const text{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
-    auto loaded = json::read_text<gateway::config>(text);
+    std::string const written{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+    auto const text = org::effective_text(written);
+    if (!text) {
+        return std::unexpected{std::format("{}: {}", path, text.error())};
+    }
+    auto loaded = json::read_text<gateway::config>(*text);
     if (!loaded) {
         return std::unexpected{std::format("{}: {} ({})", path, loaded.error().message, loaded.error().path)};
     }
@@ -955,12 +962,23 @@ std::vector<recipes::recipe> applicable_recipes(gateway::config const& settings)
     return recipes::all() | std::views::filter([&settings](recipes::recipe const& item) { return recipes::plan(item, settings).missing.empty(); }) | std::ranges::to<std::vector>();
 }
 
+std::string organisation_recipe() {
+    auto const installed = org::read_installed();
+    return installed && *installed ? (*installed)->pack.described.recipe : std::string{};
+}
+
+std::size_t preferred_choice(std::vector<recipes::recipe> const& choices, std::string_view const wanted) {
+    auto const found = std::ranges::find(choices, wanted, &recipes::recipe::id);
+    return found == choices.end() ? 1 : static_cast<std::size_t>(found - choices.begin()) + 1;
+}
+
 std::optional<std::size_t> ask_recipe(std::vector<recipes::recipe> const& choices) {
+    auto const wanted = organisation_recipe();
     std::println("Pick a setup for how the models are used (0 to keep things as they are):");
     for (std::size_t index = 0; index < choices.size(); ++index) {
-        std::println("  {}) {}  {}", index + 1, choices[index].id, choices[index].summary);
+        std::println("  {}) {}  {}{}", index + 1, choices[index].id, choices[index].summary, choices[index].id == wanted ? "  (your organisation's choice)" : "");
     }
-    auto const line = ask_text("Your choice", "1");
+    auto const line = ask_text("Your choice", std::to_string(preferred_choice(choices, wanted)));
     if (!line) {
         return std::nullopt;
     }
@@ -1012,12 +1030,20 @@ int init_interactive(commands::context where) {
     return finish_init(where);
 }
 
-int init_unattended(commands::context where) {
+std::optional<recipes::recipe> unattended_recipe(commands::context const& where) {
     if (!where.options.recipe.empty()) {
-        auto const item = recipes::find(where.options.recipe);
-        if (!item) {
-            return fail(exit_usage, std::format("no recipe named {} (llmgate recipe list)", where.options.recipe));
-        }
+        return recipes::find(where.options.recipe);
+    }
+    auto const wanted = organisation_recipe();
+    auto const item = wanted.empty() ? std::nullopt : recipes::find(wanted);
+    return item && recipes::plan(*item, where.settings).missing.empty() ? item : std::nullopt;
+}
+
+int init_unattended(commands::context where) {
+    if (!where.options.recipe.empty() && !recipes::find(where.options.recipe)) {
+        return fail(exit_usage, std::format("no recipe named {} (llmgate recipe list)", where.options.recipe));
+    }
+    if (auto const item = unattended_recipe(where)) {
         if (apply_recipe(where, *item) != 0) {
             return exit_config;
         }
@@ -1058,6 +1084,214 @@ int statusline_command(commands::context const& where) {
     return commands::run_statusline(where, process::read_all(STDIN_FILENO).value_or(std::string{}));
 }
 
+
+constexpr std::string_view org_usage = "usage: llmgate org install SOURCE [--ref REF] [--yes] | show | update [--ref REF] [--yes] | remove [--yes]";
+
+std::vector<std::string> top_level_keys() {
+    std::vector<std::string> keys;
+    auto const shape = json::to_value(gateway::config{});
+    if (auto const* members = std::get_if<json::object>(&shape.data)) {
+        for (auto const& entry : *members) {
+            keys.push_back(entry.first);
+        }
+    }
+    return keys;
+}
+
+std::string pack_problem(org::loaded const& pack) {
+    auto const keys = top_level_keys();
+    for (auto const& path : pack.described.locked) {
+        auto const first = path.substr(0, path.find('.'));
+        if (!std::ranges::contains(keys, first)) {
+            return std::format("locked path {} does not start with a configuration section", path);
+        }
+    }
+    if (!pack.described.recipe.empty() && !recipes::find(pack.described.recipe)) {
+        return std::format("recipe {} is not a known recipe", pack.described.recipe);
+    }
+    if (auto const check = json::read<gateway::config>(org::effective_config(pack, json::make_object({{"listen", json::make_string("127.0.0.1:1")}}))); !check) {
+        return std::format("config: {} ({})", check.error().message, check.error().path);
+    }
+    return {};
+}
+
+std::string config_problem_with(commands::context const& where, org::loaded const& pack) {
+    std::ifstream in{process::expand_home(where.options.config_path)};
+    auto user = json::parse(std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}}, {.jsonc = true});
+    if (!user) {
+        return {};
+    }
+    auto merged = json::read<gateway::config>(org::effective_config(pack, *user));
+    return merged ? gateway::config_problem(*merged) : std::format("{} ({})", merged.error().message, merged.error().path);
+}
+
+bool confirmed(commands::context const& where, std::string_view const question) {
+    if (where.options.yes) {
+        return true;
+    }
+    if (::isatty(STDIN_FILENO) == 0) {
+        std::println("not applied: no terminal to ask on, add --yes");
+        return false;
+    }
+    return ask_yes_no(question, false).value_or(false);
+}
+
+void print_pack(org::stored const& item) {
+    auto const& named = item.pack.described;
+    std::println("{} {}{}{}", named.name, named.version, item.from.source.empty() ? "" : "  source " + item.from.source,
+                 item.from.commit.empty() ? "" : "  commit " + item.from.commit);
+}
+
+int org_show(commands::context const&) {
+    auto const installed = org::read_installed();
+    if (!installed) {
+        return fail(exit_config, installed.error());
+    }
+    if (!*installed) {
+        std::println("no organisation pack is installed");
+        return 0;
+    }
+    print_pack(**installed);
+    for (auto const& line : org::summary_of((*installed)->pack)) {
+        std::println("  {}", line);
+    }
+    return 0;
+}
+
+void apply_org_change(commands::context const& where) {
+    refresh_picker(where, std::filesystem::path{process::expand_home(where.options.config_path)});
+    if (where.reload_after_edit && commands::run_reload(where) != 0) {
+        std::println("the gateway did not reload (is it running?); it picks the change up when it starts");
+    }
+}
+
+struct acquired {
+    org::fetched from{};
+    org::loaded pack{};
+};
+
+std::expected<acquired, std::string> acquire_pack(std::string_view const source, std::string_view const ref, org::source_kind const kind) {
+    auto fetched = org::fetch(source, ref, kind);
+    if (!fetched) {
+        return std::unexpected{std::move(fetched.error())};
+    }
+    auto pack = org::read_pack(fetched->text);
+    if (!pack) {
+        return std::unexpected{std::move(pack.error())};
+    }
+    if (auto const problem = pack_problem(*pack); !problem.empty()) {
+        return std::unexpected{std::format("the pack is not usable: {}", problem)};
+    }
+    return acquired{.from = std::move(*fetched), .pack = std::move(*pack)};
+}
+
+void print_changes(commands::context const& where, acquired const& item, std::vector<std::string> const& changes) {
+    auto const& named = item.pack.described;
+    std::println("organisation pack {} {}{}", named.name, named.version, item.from.commit.empty() ? "" : " (commit " + item.from.commit + ")");
+    std::println("{}", changes.empty() ? "nothing changes" : "these changes will be applied:");
+    for (auto const& line : changes) {
+        std::println("  {}", line);
+    }
+    if (auto const warning = config_problem_with(where, item.pack); !warning.empty()) {
+        std::println("warning: with this pack your configuration is rejected: {}", warning);
+    }
+}
+
+std::vector<std::string> pending_changes(std::optional<org::stored> const& before, acquired const& item) {
+    return org::difference(before ? org::summary_of(before->pack) : std::vector<std::string>{}, org::summary_of(item.pack));
+}
+
+int persist_pack(commands::context const& where, acquired const& item) {
+    org::source_record const record{.source = item.from.source, .kind = std::string{reflect::enum_name(item.from.kind)}, .ref = item.from.ref, .commit = item.from.commit, .digest = org::digest_of(item.from.text), .installed_at = org::now_stamp()};
+    if (auto const written = org::write_installed(item.from.text, record); !written) {
+        return fail(exit_runtime, written.error());
+    }
+    apply_org_change(where);
+    std::println("installed {} {}", item.pack.described.name, item.pack.described.version);
+    return 0;
+}
+
+int org_install(commands::context const& where, std::string_view const source, std::string_view const ref, org::source_kind const kind) {
+    auto const item = acquire_pack(source, ref, kind);
+    if (!item) {
+        return fail(exit_config, item.error());
+    }
+    auto const before = org::read_installed();
+    if (!before) {
+        return fail(exit_config, before.error());
+    }
+    auto const changes = pending_changes(*before, *item);
+    print_changes(where, *item, changes);
+    if (!confirmed(where, "Apply this pack?")) {
+        return changes.empty() ? 0 : exit_usage;
+    }
+    return persist_pack(where, *item);
+}
+
+int org_update(commands::context const& where) {
+    auto const installed = org::read_installed();
+    if (!installed) {
+        return fail(exit_config, installed.error());
+    }
+    if (!*installed) {
+        return fail(exit_config, "no organisation pack is installed; run llmgate org install SOURCE");
+    }
+    auto const& from = (*installed)->from;
+    auto const ref = where.options.ref.empty() ? from.ref : where.options.ref;
+    return org_install(where, from.source, ref, reflect::enum_from_name<org::source_kind>(from.kind).value_or(org::classify(from.source)));
+}
+
+int org_remove(commands::context const& where) {
+    auto const installed = org::read_installed();
+    if (!installed) {
+        return fail(exit_config, installed.error());
+    }
+    if (!*installed) {
+        std::println("no organisation pack is installed");
+        return 0;
+    }
+    std::println("this removes organisation pack {} {} and the profile entries it added", (*installed)->pack.described.name, (*installed)->pack.described.version);
+    if (!confirmed(where, "Remove it?")) {
+        return exit_usage;
+    }
+    auto const settings_path = std::filesystem::path{process::expand_home(where.settings.claude.profile_dir)} / "settings.json";
+    if (std::ifstream in{settings_path}; in) {
+        auto parsed = json::parse(std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}}, {.jsonc = true});
+        if (parsed && !write_atomically(settings_path, json::write(org::remove_from_settings(std::move(*parsed)), 2) + "\n")) {
+            return fail(exit_runtime, std::format("cannot write {}", settings_path.string()));
+        }
+    }
+    org::remove_installed();
+    apply_org_change(where);
+    std::println("removed");
+    return 0;
+}
+
+enum class org_action { install, show, update, remove };
+
+constexpr std::size_t org_word_count(org_action const action) {
+    return action == org_action::install ? 2 : 1;
+}
+
+std::optional<org_action> org_request(std::vector<std::string> const& words) {
+    auto const action = words.empty() ? std::nullopt : reflect::enum_from_name<org_action>(words.front());
+    return action && words.size() == org_word_count(*action) ? action : std::nullopt;
+}
+
+int org_command(commands::context const& where) {
+    auto const action = org_request(where.options.passthrough);
+    if (!action) {
+        return fail(exit_usage, org_usage);
+    }
+    switch (*action) {
+        case org_action::install: return org_install(where, where.options.passthrough.back(), where.options.ref, org::classify(where.options.passthrough.back()));
+        case org_action::show: return org_show(where);
+        case org_action::update: return org_update(where);
+        case org_action::remove: return org_remove(where);
+    }
+    return fail(exit_usage, org_usage);
+}
+
 using command_handler = int (*)(commands::context const&);
 
 constexpr auto handlers = std::to_array<std::pair<arguments::command, command_handler>>({
@@ -1086,6 +1320,7 @@ constexpr auto handlers = std::to_array<std::pair<arguments::command, command_ha
     {arguments::command::check, &check_command},
     {arguments::command::init, &init_command},
     {arguments::command::mod, &commands::run_mod},
+    {arguments::command::org, &org_command},
     {arguments::command::statusline, &statusline_command},
 });
 

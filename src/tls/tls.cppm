@@ -1,5 +1,6 @@
 module;
 
+#include <arpa/inet.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
@@ -145,6 +146,19 @@ std::string drain_errors() {
     return text;
 }
 
+inline bool is_ip_literal(std::string const& host) {
+    std::array<unsigned char, sizeof(in6_addr)> address{};
+    return inet_pton(AF_INET, host.c_str(), address.data()) == 1 || inet_pton(AF_INET6, host.c_str(), address.data()) == 1;
+}
+
+inline bool verify_host(SSL* const session, std::string const& host) {
+#if OPENSSL_VERSION_MAJOR >= 4
+    return (is_ip_literal(host) ? SSL_set1_ipaddr(session, host.c_str()) : SSL_set1_dnsname(session, host.c_str())) == 1;
+#else
+    return SSL_set1_host(session, host.c_str()) == 1;
+#endif
+}
+
 }  // namespace llmgate::tls::detail
 
 export namespace llmgate::tls {
@@ -212,7 +226,7 @@ public:
         }
         auto* const session = created->session_.get();
         SSL_set_connect_state(session);
-        if (SSL_set_tlsext_host_name(session, host.c_str()) != 1 || SSL_set1_host(session, host.c_str()) != 1) {
+        if (SSL_set_tlsext_host_name(session, host.c_str()) != 1 || !detail::verify_host(session, host)) {
             ERR_clear_error();
             return std::unexpected{make_error_code(errc::connection_failed)};
         }
