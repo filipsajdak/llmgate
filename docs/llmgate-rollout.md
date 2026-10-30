@@ -49,6 +49,7 @@ builds anything, and nobody needs a particular compiler.
 | L14 | Bedrock per model family: Claude models use the invoke-with-response-stream operation with the Messages body, which keeps thinking signatures, `cache_control` and images; other models use Converse, translated. Both share one event-stream decoder and one SigV4 signer. |
 | L15 | This work is not tracked as bets: no bet texts, decision dates or `Bet:` trailers. The phases are an order, not a commitment date. |
 | L16 | Pivot rule for phase 1: if Windows is not passing when the colleague test is due, the test runs on macOS, Linux and WSL, and Windows becomes its own phase after phase 3. |
+| L17 | Windows reactor (2026-10-30, relaxes L3): readiness first. The `async` layer and the streams above it are readiness-based (wait until a socket can be read, then read), so Windows gets a `WSAPoll` reactor behind the same interface. Real IOCP is kept as an option for when measurements ask for it. |
 
 ## Requirements the translators must meet (each gets a test)
 
@@ -271,6 +272,36 @@ The proxy URL parsing, the `no_proxy` matcher and the CONNECT answer parser are 
 | Service | launchd, systemd user unit | a Task Scheduler entry |
 | Launcher | sh | PowerShell |
 | CI | macOS and Linux | `windows-latest` |
+
+## Windows port (phase 1 slice 8)
+
+Decisions of 2026-10-30: three milestones, a `WSAPoll` reactor (L17), an explicit per-user ACL on private files, and an installer that asks before touching PATH or the Task Scheduler. Windows here means native Windows built with MSYS2 UCRT64 GCC 16.2 (X2), not WSL.
+
+The operating-system surface is small and in a few places: sockets in `src/net/net.cppm`, the reactor in `src/async/`, signals in `src/async/shutdown.cppm`, processes and files in `src/core/process.cppm`, a few calls in `src/app/commands.cppm` and the terminal prompt in `app/llmgate.cpp`. The logic above them does not change.
+
+| # | Behaviour |
+|---|---|
+| WIN1 | The platform differences live in implementation units chosen by CMake (`*_posix.cpp`, `*_windows.cpp`) behind the existing module interfaces, not in `#ifdef`s through the logic. Windows builds statically (runtime and OpenSSL), so the binary needs only system DLLs. |
+| WIN2 | `net` uses Winsock2 on Windows: one `WSAStartup`, `closesocket`, `ioctlsocket(FIONBIO)`, `WSAGetLastError` mapped to the same `std::error_code` values the POSIX build returns. Nothing above `net::byte_stream` changes. |
+| WIN3 | `reactor_wsapoll.cpp` implements the reactor with `WSAPoll` over the registered sockets, a timer queue, and a loopback socket pair to wake it from another thread. The reactor's unit tests (`async_test`) pass unchanged. |
+| WIN4 | `Ctrl+C`, `Ctrl+Break` and console close (`SetConsoleCtrlHandler`) raise the same stop signal the POSIX build raises with SIGINT and SIGTERM. |
+| WIN5 | `process` uses `CreateProcessW` (arguments quoted by the Windows rules, environment block built from the caller's): run and wait, capture output through anonymous pipes, and start detached (`DETACHED_PROCESS`, new process group, output to the log). `llmgate claude` cannot replace itself, so it runs `claude.exe` as a child inside a job object, forwards the exit code and ends the child with itself. A program is found on `PATH` with `PATHEXT`. `llmgate stop` asks the gateway to exit through its authenticated control endpoint instead of sending a signal. |
+| WIN6 | Atomic writes use a temporary file and `MoveFileExW` with replace. Files that hold secrets, tokens, the identity key or the ledger are created with a protected DACL that grants only the current user; `doctor` reports a file whose ACL grants anyone else, as it reports a loose mode today. A reparse point is refused where the POSIX build refuses a symlink. |
+| WIN7 | Configuration is in `%APPDATA%\llmgate`, state in `%LOCALAPPDATA%\llmgate`, and `~` expands to the user profile. `XDG_CONFIG_HOME` and `XDG_STATE_HOME` are honoured when set, which keeps the tests portable. |
+| WIN8 | The secret prompt turns echo off with `SetConsoleMode`; virtual terminal processing is enabled so the existing colour and status text work; "is this a terminal" uses `GetConsoleMode`. |
+| WIN9 | `llmgate setup --service` registers a per-user Task Scheduler task named `llmgate` that starts the gateway at logon (`schtasks`, limited rights, no administrator), and `setup --service --remove` deletes it. There is no Windows service. |
+| WIN10 | With `network.system_roots` the Windows build reads the ROOT certificate store through the CryptoAPI and adds those certificates to the trusted roots. The organisation pack uses `git.exe` from `PATH`. |
+| WIN11 | `install/install.ps1` mirrors `install.sh`: `-Version`, `-Prefix` (default `%LOCALAPPDATA%\Programs\llmgate`), `-DryRun`, `-Uninstall`, `-Purge`, `-Force`, `-Yes`, `-NoInit`, `-WithClaude`, `-Org`, `-OrgRef`, a download checked against `SHA256SUMS.txt` with `Get-FileHash`, the previous binary kept, and a log under `%LOCALAPPDATA%\llmgate`. It asks before adding the install folder to the user `PATH` (the registry, never the machine `PATH`), before registering the Task Scheduler task, and before running Claude Code's official installer; with no terminal and no `-Yes` it prints the commands instead. |
+| WIN12 | `release.yml` builds `llmgate-VERSION-windows-x86_64.zip` with a check that the executable imports only system DLLs, adds it to `SHA256SUMS.txt` and attests it like the other archives. The binary is unsigned (L12), so SmartScreen may warn; the installer downloads with `Invoke-WebRequest`, which does not mark the file as from the internet. |
+| WIN13 | The `windows` workflow builds the whole tree and runs the unit, constexpr and lint tests on `windows-latest` under MSYS2; the shell-based end-to-end flows run under MSYS2's `sh` where they can and a listed few are skipped with their reason. The installer is smoke-tested against a local fake release. |
+
+Milestones, each its own pull request:
+
+| Milestone | Content | Gate |
+|---|---|---|
+| 8a | WIN1 to WIN4, WIN6 to WIN8: the whole tree builds on Windows and the unit, constexpr and lint tests pass | `windows` workflow green on the full build |
+| 8b | WIN5, WIN9, WIN10, WIN11: `llmgate claude`, `setup --service`, certificate roots and `install.ps1` work | installer smoke test and the end-to-end flows that apply, green on `windows-latest` |
+| 8c | WIN12, WIN13 complete: the release zip, then the Windows colleague run | a tag produces the zip; one Windows colleague run recorded |
 
 ## Built (phase 1)
 
