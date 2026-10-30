@@ -53,6 +53,14 @@ int write_everything(int const fd, char const* data, size_t size) noexcept {
     return 0;
 }
 
+std::string temporary_path(char const* const target) {
+    std::string const path{target};
+    auto const slash = path.find_last_of('/');
+    std::string const directory = slash == std::string::npos ? std::string{"."} : path.substr(0, slash);
+    std::string const name = slash == std::string::npos ? path : path.substr(slash + 1);
+    return directory + "/." + name + "." + std::to_string(::getpid()) + ".tmp";
+}
+
 int prepare_pipe_end(int const descriptor) noexcept {
     if (::fcntl(descriptor, F_SETFD, FD_CLOEXEC) < 0 || ::fcntl(descriptor, F_SETFL, ::fcntl(descriptor, F_GETFL, 0) | O_NONBLOCK) < 0) {
         return errno;
@@ -330,11 +338,7 @@ char path_list_separator() noexcept {
 }
 
 int write_file_atomic(char const* const target, char const* const data, size_t const size, unsigned const mode) noexcept {
-    std::string const path{target};
-    auto const slash = path.find_last_of('/');
-    std::string const directory = slash == std::string::npos ? std::string{"."} : path.substr(0, slash);
-    std::string const name = slash == std::string::npos ? path : path.substr(slash + 1);
-    std::string const temporary = directory + "/." + name + "." + std::to_string(::getpid()) + ".tmp";
+    auto const temporary = temporary_path(target);
     auto const descriptor = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, static_cast<mode_t>(mode));
     if (descriptor < 0) {
         return errno;

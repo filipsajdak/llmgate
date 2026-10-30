@@ -181,29 +181,37 @@ async::task<result_void> send_all(async::reactor& reactor, int const fd, std::sp
     co_return result_void{};
 }
 
-async::task<std::expected<unique_fd, std::error_code>> connect_candidate(async::reactor& reactor,
-                                                                         addrinfo const& candidate,
-                                                                         idle_limit const timeout) {
+std::expected<unique_fd, std::error_code> open_candidate_socket(addrinfo const& candidate) {
     auto socket = adopt(static_cast<int>(::socket(candidate.ai_family, candidate.ai_socktype, candidate.ai_protocol)));
     if (!socket) {
-        co_return std::unexpected{last_error()};
+        return std::unexpected{last_error()};
     }
     if (auto const error = prepare_tcp_socket(raw(socket))) {
-        co_return std::unexpected{error};
+        return std::unexpected{error};
     }
     if (is_loopback(candidate)) {
         platform::fail_fast_connect(raw(socket));
     }
-    if (::connect(raw(socket), candidate.ai_addr, candidate.ai_addrlen) == 0) {
+    return socket;
+}
+
+async::task<std::expected<unique_fd, std::error_code>> connect_candidate(async::reactor& reactor,
+                                                                         addrinfo const& candidate,
+                                                                         idle_limit const timeout) {
+    auto socket = open_candidate_socket(candidate);
+    if (!socket) {
+        co_return std::unexpected{socket.error()};
+    }
+    if (::connect(raw(*socket), candidate.ai_addr, candidate.ai_addrlen) == 0) {
         co_return socket;
     }
     if (!platform::in_progress(platform::socket_error()) && !platform::would_block(platform::socket_error())) {
         co_return std::unexpected{last_error()};
     }
-    if (auto const error = co_await reactor.writable(raw(socket), timeout)) {
+    if (auto const error = co_await reactor.writable(raw(*socket), timeout)) {
         co_return std::unexpected{error};
     }
-    if (auto const pending = platform::pending_socket_error(raw(socket)); pending != 0) {
+    if (auto const pending = platform::pending_socket_error(raw(*socket)); pending != 0) {
         co_return std::unexpected{std::error_code{pending, std::system_category()}};
     }
     co_return socket;
