@@ -16,6 +16,10 @@ find_package(OpenSSL 3.5 REQUIRED)
 add_library(llmgate_flags INTERFACE)
 target_compile_options(llmgate_flags INTERFACE
   -std=c++26 -freflection -fcontracts -Wall -Wextra -Werror)
+if(WIN32)
+  target_link_options(llmgate_flags INTERFACE -Wl,--allow-multiple-definition)
+  target_link_libraries(llmgate_flags INTERFACE stdc++exp)
+endif()
 
 FetchContent_Declare(ut
   GIT_REPOSITORY https://github.com/boost-ext/ut.git
@@ -39,6 +43,20 @@ set(LLHTTP_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(LLHTTP_BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(llhttp)
 
+if(WIN32)
+  set(LLMGATE_PLATFORM_SOURCES src/platform/windows/windows.cpp)
+  set(LLMGATE_PLATFORM_DIR ${CMAKE_CURRENT_LIST_DIR}/src/platform/windows)
+else()
+  set(LLMGATE_PLATFORM_SOURCES src/platform/posix/posix.cpp)
+  set(LLMGATE_PLATFORM_DIR ${CMAKE_CURRENT_LIST_DIR}/src/platform/posix)
+endif()
+add_library(llmgate_platform STATIC ${LLMGATE_PLATFORM_SOURCES})
+target_include_directories(llmgate_platform PUBLIC ${CMAKE_CURRENT_LIST_DIR}/src/platform ${LLMGATE_PLATFORM_DIR})
+target_link_libraries(llmgate_platform PUBLIC llmgate_flags)
+if(WIN32)
+  target_link_libraries(llmgate_platform PUBLIC ws2_32 crypt32 advapi32)
+endif()
+
 function(llmgate_module name)
   cmake_parse_arguments(ARG "" "" "INTERFACE;SOURCES;LIBS" ${ARGN})
   add_library(${name})
@@ -46,18 +64,20 @@ function(llmgate_module name)
   if(ARG_SOURCES)
     target_sources(${name} PRIVATE ${ARG_SOURCES})
   endif()
-  target_link_libraries(${name} PUBLIC llmgate_flags llmgate_contracts ${ARG_LIBS})
+  target_link_libraries(${name} PUBLIC llmgate_flags llmgate_contracts llmgate_platform ${ARG_LIBS})
 endfunction()
 
 add_library(llmgate_contracts STATIC src/core/contract_violation.cpp)
 target_link_libraries(llmgate_contracts PUBLIC llmgate_flags)
 
-llmgate_module(llmgate_reflect INTERFACE src/reflect/enum.cppm)
+llmgate_module(llmgate_reflect INTERFACE src/reflect/enum.cppm SOURCES src/reflect/category.cpp)
 llmgate_module(llmgate_role INTERFACE src/reflect/role.cppm LIBS llmgate_reflect)
 llmgate_module(llmgate_members INTERFACE src/reflect/members.cppm)
 llmgate_module(llmgate_doc INTERFACE src/reflect/doc.cppm)
 if(APPLE)
   set(LLMGATE_REACTOR src/async/reactor_kqueue.cpp)
+elseif(WIN32)
+  set(LLMGATE_REACTOR src/async/reactor_wsapoll.cpp)
 else()
   set(LLMGATE_REACTOR src/async/reactor_epoll.cpp)
 endif()
@@ -139,9 +159,15 @@ llmgate_module(llmgate_copilot INTERFACE src/gateway/copilot.cppm SOURCES src/ga
 
 enable_testing()
 
+set(LLMGATE_POSIX_ONLY_TESTS shutdown_test process_test)
+
 function(llmgate_test name label)
+  if(WIN32 AND name IN_LIST LLMGATE_POSIX_ONLY_TESTS)
+    return()
+  endif()
   add_executable(${name} tests/${label}/${name}.cpp)
-  target_link_libraries(${name} PRIVATE Boost::ut llmgate_contracts ${ARGN})
+  target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_LIST_DIR}/tests/support)
+  target_link_libraries(${name} PRIVATE Boost::ut llmgate_contracts llmgate_platform ${ARGN})
   add_test(NAME ${name} COMMAND ${name})
   set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT 60)
 endfunction()
@@ -208,7 +234,7 @@ target_link_libraries(llmgate_chaos PUBLIC llmgate_flags llmgate_contracts llmga
 
 add_library(llmgate_scenarios)
 target_sources(llmgate_scenarios PUBLIC FILE_SET CXX_MODULES BASE_DIRS tests/support FILES tests/support/scenarios.cppm)
-target_include_directories(llmgate_scenarios PRIVATE tests)
+target_include_directories(llmgate_scenarios PRIVATE tests tests/support)
 target_link_libraries(llmgate_scenarios PUBLIC llmgate_flags llmgate_contracts llmgate_chaos llmgate_httpio llmgate_net llmgate_tls
   OpenSSL::SSL OpenSSL::Crypto)
 
@@ -416,6 +442,7 @@ add_test(NAME llmgate_cpp26_lint COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/too
 add_test(NAME llmgate_lint_unittests COMMAND python3 -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/tests/lint)
 add_test(NAME llmgate_tour_links COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_tour.py --root ${CMAKE_CURRENT_SOURCE_DIR})
 set_tests_properties(llmgate_cpp26_lint_self_test llmgate_cpp26_lint llmgate_lint_unittests llmgate_tour_links PROPERTIES LABELS lint)
+set_tests_properties(llmgate_reflection_lint_self_test llmgate_reflection_lint llmgate_cpp26_lint_self_test llmgate_cpp26_lint llmgate_lint_unittests llmgate_tour_links llmgate_readme_compat_matrix_is_generated PROPERTIES ENVIRONMENT PYTHONUTF8=1)
 
 file(GLOB reflection_capabilities CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/constexpr/capabilities/supported/*.cpp)
 foreach(probe IN LISTS reflection_capabilities)

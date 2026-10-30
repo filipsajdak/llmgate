@@ -1,4 +1,4 @@
-#include <unistd.h>
+#include "test_io.h"
 
 #include <boost/ut.hpp>
 
@@ -27,15 +27,16 @@ int recording_runner(std::filesystem::path const&, std::vector<std::string> cons
 }
 
 struct sandbox {
-    std::filesystem::path root = std::filesystem::temp_directory_path() / std::format("llmgate-commands-{}", ::getpid());
+    std::filesystem::path root = std::filesystem::temp_directory_path() / std::format("llmgate-commands-{}", llmgate::platform::current_process_id());
 
     sandbox() {
         std::filesystem::remove_all(root);
         std::filesystem::create_directories(root / "home");
-        ::setenv("HOME", (root / "home").c_str(), 1);
-        ::setenv("XDG_STATE_HOME", (root / "state").c_str(), 1);
-        ::setenv("XDG_CONFIG_HOME", (root / "config").c_str(), 1);
-        ::unsetenv(key_variable.data());
+        test_io::set_env("HOME", (root / "home").string().c_str());
+        test_io::set_env("USERPROFILE", (root / "home").string().c_str());
+        test_io::set_env("XDG_STATE_HOME", (root / "state").string().c_str());
+        test_io::set_env("XDG_CONFIG_HOME", (root / "config").string().c_str());
+        test_io::unset_env(key_variable.data());
         runs = 0;
         answer = 0;
     }
@@ -182,10 +183,10 @@ const suite commands_suite = [] {
         sandbox box;
         gateway::config settings;
         settings.client_key_env = key_variable;
-        ::setenv(key_variable.data(), "secret-key", 1);
+        test_io::set_env(key_variable.data(), "secret-key");
 
         auto const policy = commands::make_policy(settings, "0.0.0.0", 9480);
-        ::unsetenv(key_variable.data());
+        test_io::unset_env(key_variable.data());
 
         expect(policy.has_value());
         expect(policy->client_key == "secret-key");
@@ -196,10 +197,10 @@ const suite commands_suite = [] {
         gateway::config settings;
         settings.providers["anthropic"] = {.base_url = "https://api.anthropic.com", .forward_credentials = true};
         settings.client_key_env = key_variable;
-        ::setenv(key_variable.data(), "secret-key", 1);
+        test_io::set_env(key_variable.data(), "secret-key");
 
         auto const policy = commands::make_policy(settings, "127.0.0.1", 9480);
-        ::unsetenv(key_variable.data());
+        test_io::unset_env(key_variable.data());
 
         expect(!policy.has_value());
         expect(policy.error().contains("anthropic") && policy.error().contains("client_key_env"));
@@ -210,10 +211,10 @@ const suite commands_suite = [] {
         gateway::config settings;
         settings.providers["anthropic"] = {.base_url = "https://api.anthropic.com", .forward_credentials = true};
         settings.client_key_env = key_variable;
-        ::setenv(key_variable.data(), "secret-key", 1);
+        test_io::set_env(key_variable.data(), "secret-key");
 
         auto const policy = commands::make_policy(settings, "0.0.0.0", 9480);
-        ::unsetenv(key_variable.data());
+        test_io::unset_env(key_variable.data());
 
         expect(!policy.has_value());
         expect(policy.error().contains("anthropic"));
@@ -318,7 +319,9 @@ const suite commands_suite = [] {
         auto const loaded = commands::read_overrides();
 
         expect(loaded.global == pins.global);
-        expect((std::filesystem::status(commands::overrides_file()).permissions() & (std::filesystem::perms::group_all | std::filesystem::perms::others_all)) == std::filesystem::perms::none);
+        unsigned mode = 0;
+        llmgate::platform::file_mode(commands::overrides_file().string().c_str(), &mode);
+        expect(mode == 0600);
     };
 
     "limit_a_missing_or_damaged_overrides_file_reads_as_no_overrides"_test = [] {
@@ -342,7 +345,9 @@ const suite commands_suite = [] {
         std::ifstream in{path};
         std::string text{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
         expect(text == "one\ntwo\n");
-        expect((std::filesystem::status(path).permissions() & (std::filesystem::perms::group_all | std::filesystem::perms::others_all)) == std::filesystem::perms::none);
+        unsigned mode = 0;
+        llmgate::platform::file_mode(path.string().c_str(), &mode);
+        expect(mode == 0600);
     };
 
     "limit_the_capture_sink_stops_at_its_limit_and_never_writes_half_a_line"_test = [] {

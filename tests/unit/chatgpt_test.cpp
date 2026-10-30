@@ -1,5 +1,4 @@
-#include <sys/stat.h>
-#include <unistd.h>
+#include "test_io.h"
 
 #include <boost/ut.hpp>
 
@@ -79,7 +78,7 @@ struct world {
     world()
         : listener{std::move(*net::listener::bind(loop, std::string{loopback}, 0))},
           tls_context{std::move(*tls::client_context::make(tls::group_policy::classical_only))},
-          directory{std::filesystem::temp_directory_path() / std::format("llmgate-chatgpt-{}-{}", ::getpid(), reinterpret_cast<std::uintptr_t>(this))} {
+          directory{std::filesystem::temp_directory_path() / std::format("llmgate-chatgpt-{}-{}", llmgate::platform::current_process_id(), reinterpret_cast<std::uintptr_t>(this))} {
         settings = {.token_file = (directory / "token.json").string(), .issuer = std::format("http://127.0.0.1:{}", listener.port())};
         loop.spawn(httpio::serve(listener, auth, httpio::limits{}));
     }
@@ -228,8 +227,8 @@ const suite chatgpt_suite = [] {
 
         expect(saved.has_value() && saved->access_token == "at-1" && saved->refresh_token == "rt-1" && saved->client_id == "issued_1" && saved->host_id == "urn:uuid:h");
         expect(saved->expires_at == start_time + 3600);
-        struct stat info{};
-        expect(::stat(w.settings.token_file.c_str(), &info) == 0 && (info.st_mode & 0777) == 0600);
+        unsigned mode = 0;
+        expect(llmgate::platform::file_mode(w.settings.token_file.c_str(), &mode) == 0 && mode == 0600);
         auto again = w.credential();
         expect(w.loop.run(bearer_text(again)) == "at-1" && w.auth.refreshes == 1);
     };
@@ -334,8 +333,8 @@ const suite chatgpt_suite = [] {
         expect(oauth::code_challenge(verifier) == query_of(run.url, "code_challenge"));
         auto const saved = chatgpt::load_tokens(w.settings.token_file);
         expect(saved.has_value() && saved->client_id == "issued_9" && saved->access_token == "at-1" && saved->refresh_token == "rt-1" && saved->host_id == query_of(run.url, "ext_agent_host_id"));
-        struct stat info{};
-        expect(::stat(w.settings.token_file.c_str(), &info) == 0 && (info.st_mode & 0777) == 0600);
+        unsigned mode = 0;
+        expect(llmgate::platform::file_mode(w.settings.token_file.c_str(), &mode) == 0 && mode == 0600);
     };
 
     "capability_a_returning_user_reuses_the_issued_client_and_host_ids_without_a_new_registration"_test = [] {

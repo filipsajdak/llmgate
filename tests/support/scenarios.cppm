@@ -1,9 +1,7 @@
 module;
 
-#include <fcntl.h>
-#include <sys/socket.h>
-
 #include "support/self_signed.hpp"
+#include "test_io.h"
 
 export module llmgate.scenarios;
 
@@ -34,11 +32,10 @@ using chaos_tcp = chaos::stream<net::tcp_stream>;
 
 std::array<net::unique_fd, 2> tiny_socket_pair() {
     std::array<int, 2> fds{};
-    ::socketpair(AF_UNIX, SOCK_STREAM, 0, fds.data());
+    test_io::open_pair(fds.data());
     for (auto const fd : fds) {
-        ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
-        ::setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &tiny_socket_buffer, sizeof tiny_socket_buffer);
-        ::setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &tiny_socket_buffer, sizeof tiny_socket_buffer);
+        test_io::make_nonblocking(fd);
+        test_io::set_buffers(fd, tiny_socket_buffer);
     }
     return {net::adopt(fds[0]), net::adopt(fds[1])};
 }

@@ -1,2 +1,4 @@
 # path|rule|text fragment of the first matching line|reason. Debt entries start with 'pending:' and name the tier that removes them; anything else is a justified exception. A path ending in / covers the directory.
 src/core/contract_violation.cpp|legacy-io|std::fprintf(stderr|a violation handler must not allocate or throw: std::println formats into a std::string first, and the violation may be an allocation failure; fprintf writes straight to the stream
+src/platform/|std-include|#include <|the platform layer is plain translation units behind a C-typed interface (src/platform/platform.h); they never import std, so standard headers cannot clash with the module
+src/platform/|legacy-io|std::fprintf(stderr|replace_process reports why the program could not start just before the process exits; the translation unit does not import std, and a failure to start must not allocate through a formatter

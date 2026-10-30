@@ -1,6 +1,6 @@
 module;
 
-#include <arpa/inet.h>
+#include "sockets.h"
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>

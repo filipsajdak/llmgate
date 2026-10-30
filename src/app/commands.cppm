@@ -2,12 +2,10 @@ module;
 
 #include <meta>
 
-#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 
-#include <sys/stat.h>
-#include <unistd.h>
+#include "platform.h"
 
 export module llmgate.commands;
 
@@ -315,13 +313,13 @@ std::filesystem::path pid_file() {
     return state_directory() / std::string{state_pid_name};
 }
 
-std::optional<pid_t> recorded_pid() {
+std::optional<process::process_id> recorded_pid() {
     auto const text = read_file(pid_file());
     int pid = 0;
     if (!text || std::from_chars(text->data(), text->data() + text->size(), pid).ec != std::errc{} || pid <= 0) {
         return std::nullopt;
     }
-    return static_cast<pid_t>(pid);
+    return static_cast<process::process_id>(pid);
 }
 
 std::filesystem::path identity_file() {
@@ -362,7 +360,7 @@ service_unit service_unit_for(context const& where) {
 }
 
 outcome load_service(context const& where, std::filesystem::path const& unit) {
-    auto const domain = std::format("gui/{}", ::getuid());
+    auto const domain = std::format("gui/{}", platform::current_user_id());
     (void)run_words(where, "/bin/launchctl", {"bootout", domain, unit.string()});
     if (run_words(where, "/bin/launchctl", {"bootstrap", domain, unit.string()}) != 0) {
         return std::unexpected{"launchctl could not load the service; load it with: launchctl bootstrap " + domain + " " + unit.string()};
@@ -737,11 +735,11 @@ inline int run_mod(context const& where) {
 
 namespace llmgate::commands::detail {
 doctor::file_fact file_fact_of(std::filesystem::path const& path) {
-    struct stat info{};
-    if (::stat(path.c_str(), &info) != 0) {
+    unsigned mode = 0;
+    if (platform::file_mode(path.string().c_str(), &mode) != 0) {
         return {.path = path.string()};
     }
-    return {.path = path.string(), .exists = true, .mode = static_cast<unsigned>(info.st_mode & 0777)};
+    return {.path = path.string(), .exists = true, .mode = mode};
 }
 
 bool can_write(std::filesystem::path path) {
@@ -749,7 +747,7 @@ bool can_write(std::filesystem::path path) {
     while (!path.empty() && !std::filesystem::exists(path, ignored)) {
         path = path.parent_path();
     }
-    return !path.empty() && ::access(path.c_str(), W_OK) == 0;
+    return !path.empty() && platform::can_write_path(path.string().c_str());
 }
 
 doctor::settings_state profile_state(context const& where) {
@@ -1253,7 +1251,7 @@ inline int run_status(context const& where) {
 }
 
 inline void release_pid_file() {
-    if (auto const recorded = detail::recorded_pid(); recorded && *recorded == ::getpid()) {
+    if (auto const recorded = detail::recorded_pid(); recorded && *recorded == platform::current_process_id()) {
         std::error_code ignored;
         std::filesystem::remove(detail::pid_file(), ignored);
     }
@@ -1266,7 +1264,7 @@ inline int run_stop(context const& where) {
         return exit_failure;
     }
     std::error_code ignored;
-    if (::kill(*pid, SIGTERM) != 0) {
+    if (platform::stop_process(*pid) != 0) {
         std::filesystem::remove(detail::pid_file(), ignored);
         std::println("the recorded gateway was not running");
         return exit_failure;

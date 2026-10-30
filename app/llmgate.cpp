@@ -1,8 +1,9 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include <termios.h>
 #include <unistd.h>
+
+#include "platform.h"
 
 import std;
 import llmgate.arguments;
@@ -434,15 +435,11 @@ int edit_command(commands::context const& where) {
 }
 
 std::string read_secret_line(std::string_view const name) {
-    bool const interactive = ::isatty(STDIN_FILENO) != 0;
-    termios saved{};
+    bool const interactive = platform::stdin_is_terminal();
     if (interactive) {
         std::print(stderr, "Secret for {} (hidden, Enter to finish): ", name);
         std::fflush(stderr);
-        ::tcgetattr(STDIN_FILENO, &saved);
-        termios hidden = saved;
-        hidden.c_lflag &= ~static_cast<tcflag_t>(ECHO);
-        ::tcsetattr(STDIN_FILENO, TCSANOW, &hidden);
+        platform::disable_stdin_echo();
     }
     std::string line;
     char c = 0;
@@ -450,7 +447,7 @@ std::string read_secret_line(std::string_view const name) {
         line.push_back(c);
     }
     if (interactive) {
-        ::tcsetattr(STDIN_FILENO, TCSANOW, &saved);
+        platform::restore_stdin_echo();
         std::println(stderr, "");
     }
     line.erase(std::ranges::find(line, '\r'), line.end());
@@ -1129,7 +1126,7 @@ bool confirmed(commands::context const& where, std::string_view const question) 
     if (where.options.yes) {
         return true;
     }
-    if (::isatty(STDIN_FILENO) == 0) {
+    if (!platform::stdin_is_terminal()) {
         std::println("not applied: no terminal to ask on, add --yes");
         return false;
     }

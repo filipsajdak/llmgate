@@ -104,7 +104,7 @@ const suite tls_suite = [] {
         auto const progress = connection->handshake();
 
         expect(!progress.has_value());
-        expect(progress.error() == errc::handshake_failed);
+        expect(progress.error() == errc::handshake_failed) << progress.error().message() << " / " << progress.error().category().name() << " / " << progress.error().value();
         expect(!connection->diagnostic().empty());
     };
 

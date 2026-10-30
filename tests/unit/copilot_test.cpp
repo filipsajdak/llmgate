@@ -1,4 +1,4 @@
-#include <sys/stat.h>
+#include "test_io.h"
 
 #include <boost/ut.hpp>
 
@@ -104,7 +104,7 @@ struct world {
     explicit world(std::optional<std::string> const stored_token = "gho_stored")
         : github_listener{std::move(*net::listener::bind(loop, std::string{loopback}, 0))},
           tls_context{std::move(*tls::client_context::make(tls::group_policy::classical_only))},
-          directory{std::filesystem::temp_directory_path() / std::format("llmgate-copilot-{}-{}", ::getpid(), reinterpret_cast<std::uintptr_t>(this))},
+          directory{std::filesystem::temp_directory_path() / std::format("llmgate-copilot-{}-{}", llmgate::platform::current_process_id(), reinterpret_cast<std::uintptr_t>(this))},
           now{system_clock::time_point{seconds{2'000'000'000}}} {
         github.expires_at = unix_seconds(now) + lifetime;
         settings = {.token_file = (directory / "token.json").string(),
@@ -197,12 +197,12 @@ const suite copilot_suite = [] {
         world w{std::nullopt};
 
         auto const saved = copilot::save_oauth_token(w.settings.token_file, "gho_secret");
-        struct stat info {};
-        ::stat(w.settings.token_file.c_str(), &info);
+        unsigned mode = 0;
+        llmgate::platform::file_mode(w.settings.token_file.c_str(), &mode);
 
         expect(saved.has_value());
         expect(copilot::load_oauth_token(w.settings.token_file).value() == "gho_secret");
-        expect((info.st_mode & 0777) == 0600);
+        expect(mode == 0600);
     };
 
     "capability_the_token_file_keeps_its_text_and_escapes_the_token"_test = [] {
@@ -223,7 +223,11 @@ const suite copilot_suite = [] {
             std::ofstream out{victim};
             out << "precious";
         }
-        std::filesystem::create_symlink(victim, w.settings.token_file);
+        std::error_code no_link;
+        std::filesystem::create_symlink(victim, w.settings.token_file, no_link);
+        if (no_link) {
+            return;
+        }
 
         auto const saved = copilot::save_oauth_token(w.settings.token_file, "gho_new");
         std::ifstream in{victim};
@@ -240,11 +244,11 @@ const suite copilot_suite = [] {
         w.settings.token_file = (w.directory / "nested" / "token.json").string();
 
         auto const saved = copilot::save_oauth_token(w.settings.token_file, "gho_x");
-        struct stat info {};
-        ::stat((w.directory / "nested").c_str(), &info);
+        unsigned mode = 0;
+        llmgate::platform::file_mode((w.directory / "nested").string().c_str(), &mode);
 
         expect(saved.has_value());
-        expect((info.st_mode & 0777) == 0700);
+        expect(mode == 0700);
     };
 
     "limit_no_temporary_file_is_left_behind_after_a_save"_test = [] {

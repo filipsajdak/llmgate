@@ -153,6 +153,7 @@ struct pending_op {
     interest what = interest::readable;
     bool has_timer = false;
     bool fired = false;
+    std::chrono::steady_clock::time_point deadline{};
 };
 
 class waiter_table {
@@ -165,18 +166,22 @@ public:
             release(op->fd, op->what, op);
             return false;
         }
+        armed_.push_back(op);
         return true;
     }
 
     void release_all(pending_op const* const op) noexcept {
         release(op->fd, op->what, op);
         release(op->other_fd, interest::readable, op);
+        std::erase(armed_, op);
     }
 
     pending_op* find(int const fd, interest const what) const noexcept {
         auto const found = table_.find(key{fd, what});
         return found == table_.end() ? nullptr : found->second;
     }
+
+    std::vector<pending_op*> const& armed() const noexcept { return armed_; }
 
 private:
     using key = std::pair<int, interest>;
@@ -193,6 +198,7 @@ private:
     }
 
     std::map<key, pending_op*> table_;
+    std::vector<pending_op*> armed_;
 };
 
 }  // namespace llmgate::async::detail
