@@ -98,6 +98,7 @@ struct options {
     [[= flag{"--progress"}]] [[= applies_to{command::login}]] bool progress = false;
     [[= flag{"--vscode"}]] [[= applies_to{command::env, command::setup}]] [[= operand{"FILE"}]] std::optional<std::string> vscode{};
     [[= flag{"--service"}]] [[= applies_to{command::setup}]] bool service = false;
+    [[= flag{"--remove"}]] [[= applies_to{command::setup}]] bool remove = false;
     [[= flag{"--dry-run"}]] [[= applies_to{command::setup}]] bool dry_run = false;
     [[= flag{"--offline"}]] [[= applies_to{command::doctor}]] bool offline = false;
     [[= flag{"--days"}]] [[= operand{"N"}]] [[= applies_to{command::usage}]] [[= limits{1, longest_report_days}]] unsigned days = default_days;

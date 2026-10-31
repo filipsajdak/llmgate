@@ -406,6 +406,47 @@ WantedBy=default.target
                        unit_quoted(binary), unit_quoted(config_path));
 }
 
+inline std::string task_scheduler_xml(std::string_view const binary, std::string_view const config_path, std::string_view const user) {
+    return std::format(R"(<?xml version="1.0" encoding="UTF-8"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>llmgate, a gateway for Claude Code</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{2}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>{2}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+    <Hidden>true</Hidden>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{0}</Command>
+      <Arguments>--config "{1}" serve</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+)",
+                       xml_escaped(binary), xml_escaped(config_path), xml_escaped(user));
+}
+
 static_assert(shell_quote("it's") == R"('it'\''s')");
 static_assert(decimal(180000) == "180000" && decimal(-5) == "-5");
 static_assert(environment(launch_config{}, "http://127.0.0.1:9480/anthropic", "", "/p").size() == 18);

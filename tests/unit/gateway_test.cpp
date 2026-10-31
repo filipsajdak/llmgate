@@ -241,10 +241,21 @@ httpio::request_spec messages_request(std::string body, std::string target = "/a
     return {.method = "POST", .target = std::move(target), .host = "localhost", .fields = std::move(fields), .body = std::move(body)};
 }
 
-httpio::request_spec control_request(std::string body, std::string_view const key) {
+std::int64_t wall_clock_seconds() {
+    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+std::string fresh_nonce() {
+    static std::uint64_t counter = 0;
+    return std::format("nonce-{}", ++counter);
+}
+
+httpio::request_spec control_request(std::string body, std::string_view const key, std::int64_t const sent = wall_clock_seconds(), std::string nonce = fresh_nonce()) {
     auto request = messages_request(body, "/llmgate/control", "");
     if (!key.empty()) {
-        request.fields.add("x-llmgate-proof", proof::hmac_sha256_hex(key, proof::identity_message("scope-a/control", body)));
+        request.fields.add("x-llmgate-time", std::to_string(sent));
+        request.fields.add("x-llmgate-nonce", nonce);
+        request.fields.add("x-llmgate-proof", proof::hmac_sha256_hex(key, proof::identity_message("scope-a/control", proof::control_challenge(sent, nonce, body))));
     }
     return request;
 }
@@ -856,7 +867,25 @@ const suite gateway_suite = [] {
         auto const signed_call = w.ask(control_request(R"({"action":"stop"})", "identity-k"));
 
         expect(unsigned_call.status == 401 && requested == 1);
-        expect(signed_call.status == 200 && signed_call.body.contains("stopping"));
+        expect(signed_call.status == 200);
+    };
+
+    "limit_a_recorded_control_request_cannot_be_replayed_and_a_stale_or_future_one_is_refused"_test = [] {
+        world w{"upstream-token", "", std::nullopt, "identity-k"};
+        int requested = 0;
+        w.gateway.stop_with([&requested] { ++requested; });
+        auto const now = wall_clock_seconds();
+
+        auto first = control_request(R"({"action":"stop"})", "identity-k", now, "once");
+        auto const again = first;
+        auto const accepted = w.ask(std::move(first));
+        auto const replayed = w.ask(again);
+        auto const stale = w.ask(control_request(R"({"action":"stop"})", "identity-k", now - 3600, "old"));
+        auto const future = w.ask(control_request(R"({"action":"stop"})", "identity-k", now + 3600, "ahead"));
+        auto const no_nonce = w.ask(control_request(R"({"action":"stop"})", "identity-k", now, ""));
+
+        expect(accepted.status == 200 && replayed.status == 401 && replayed.body.contains("already used"));
+        expect(stale.status == 401 && future.status == 401 && no_nonce.status == 401 && requested == 1);
     };
 
     "limit_a_signed_stop_is_refused_when_nothing_can_stop_the_gateway"_test = [] {

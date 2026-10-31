@@ -146,20 +146,12 @@ constexpr std::string_view certificate_marker = "BEGIN CERTIFICATE";
 constexpr int proxy_probe_ms = 1500;
 
 std::string system_roots_pem() {
-#if defined(__APPLE__)
     static std::string const cached = [] {
         std::string out;
-        for (auto const* keychain : {"/System/Library/Keychains/SystemRootCertificates.keychain", "/Library/Keychains/System.keychain"}) {
-            if (auto const exported = process::run_capturing("/usr/bin/security", {"find-certificate", "-a", "-p", keychain})) {
-                out += *exported;
-            }
-        }
+        platform::export_system_roots(&out, +[](void* const context, char const* const bytes, std::size_t const size) { static_cast<std::string*>(context)->append(bytes, size); });
         return out;
     }();
     return cached;
-#else
-    return {};
-#endif
 }
 
 std::expected<std::string, std::string> trust_pem(gateway::network_config const& chosen) {
@@ -367,6 +359,42 @@ outcome load_service(context const& where, std::filesystem::path const& unit) {
     }
     return {};
 }
+
+outcome unload_service(context const& where, std::filesystem::path const& unit) {
+    (void)run_words(where, "/bin/launchctl", {"bootout", std::format("gui/{}", platform::current_user_id()), unit.string()});
+    return {};
+}
+#elif defined(_WIN32)
+constexpr std::string_view task_name = "llmgate";
+
+std::filesystem::path schtasks() {
+    return process::find_in_path("schtasks.exe").value_or("schtasks.exe");
+}
+
+std::string windows_user() {
+    auto const* domain = std::getenv("USERDOMAIN");
+    auto const* name = std::getenv("USERNAME");
+    return name == nullptr ? std::string{} : (domain == nullptr ? std::string{name} : std::format("{}\\{}", domain, name));
+}
+
+service_unit service_unit_for(context const& where) {
+    return {.path = config_directory() / "llmgate-task.xml",
+            .text = claude::task_scheduler_xml(where.binary.string(), process::expand_home(where.options.config_path), windows_user())};
+}
+
+outcome load_service(context const& where, std::filesystem::path const& unit) {
+    bool const registered = run_words(where, schtasks(), {"/Create", "/TN", task_name, "/XML", unit.string(), "/F"}) == 0;
+    if (!registered || run_words(where, schtasks(), {"/Run", "/TN", task_name}) != 0) {
+        return std::unexpected{"Task Scheduler could not register or start the task; register it with: schtasks /Create /TN llmgate /XML " + unit.string() + " /F"};
+    }
+    return {};
+}
+
+outcome unload_service(context const& where, std::filesystem::path const&) {
+    (void)run_words(where, schtasks(), {"/End", "/TN", task_name});
+    (void)run_words(where, schtasks(), {"/Delete", "/TN", task_name, "/F"});
+    return {};
+}
 #else
 service_unit service_unit_for(context const& where) {
     return {.path = config_directory() / "systemd" / "user" / "llmgate.service",
@@ -380,6 +408,12 @@ outcome load_service(context const& where, std::filesystem::path const&) {
     if (!started) {
         return std::unexpected{"systemctl could not start the service; start it with: systemctl --user enable --now llmgate.service"};
     }
+    return {};
+}
+
+outcome unload_service(context const& where, std::filesystem::path const&) {
+    auto const systemctl = process::find_in_path("systemctl").value_or("systemctl");
+    (void)run_words(where, systemctl, {"--user", "disable", "--now", "llmgate.service"});
     return {};
 }
 #endif
@@ -405,6 +439,19 @@ outcome install_service(context const& where, bool const dry_run) {
         return loaded;
     }
     std::println("service started");
+    return {};
+}
+
+outcome remove_service(context const& where) {
+    auto const unit = service_unit_for(where);
+    if (where.options.dry_run) {
+        std::println("would remove {}", unit.path.string());
+        return {};
+    }
+    (void)unload_service(where, unit.path);
+    std::error_code ignored;
+    std::filesystem::remove(unit.path, ignored);
+    std::println("service removed");
     return {};
 }
 
@@ -635,7 +682,7 @@ outcome install_requested_service(context const& where) {
     if (!where.options.service) {
         return {};
     }
-    return install_service(where, where.options.dry_run);
+    return where.options.remove ? remove_service(where) : install_service(where, where.options.dry_run);
 }
 
 outcome run_setup_steps(context const& where, claude::environment_list const& list) {
@@ -1137,6 +1184,8 @@ struct control_call {
     std::string body;
 };
 
+constexpr std::size_t nonce_bytes = 16;
+
 inline std::expected<control_call, std::string> sign_control_call(context const& where, std::string body) {
     auto const address = detail::address_of(where.settings);
     if (!address) {
@@ -1146,8 +1195,15 @@ inline std::expected<control_call, std::string> sign_control_call(context const&
     if (!key) {
         return std::unexpected{key.error()};
     }
+    auto nonce = proof::random_hex(nonce_bytes);
+    if (!nonce) {
+        return std::unexpected{"cannot generate a nonce: " + nonce.error().message()};
+    }
+    auto const sent = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     auto headers = detail::key_headers(where.settings);
-    headers.emplace_back("x-llmgate-proof", proof::hmac_sha256_hex(*key, proof::identity_message(std::format("{}:{}/control", address->host, address->port), body)));
+    headers.emplace_back("x-llmgate-time", std::to_string(sent));
+    headers.emplace_back("x-llmgate-nonce", *nonce);
+    headers.emplace_back("x-llmgate-proof", proof::hmac_sha256_hex(*key, proof::identity_message(std::format("{}:{}/control", address->host, address->port), proof::control_challenge(sent, *nonce, body))));
     return control_call{.address = *address, .headers = std::move(headers), .body = std::move(body)};
 }
 
