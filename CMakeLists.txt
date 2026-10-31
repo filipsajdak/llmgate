@@ -159,7 +159,7 @@ llmgate_module(llmgate_copilot INTERFACE src/gateway/copilot.cppm SOURCES src/ga
 
 enable_testing()
 
-set(LLMGATE_POSIX_ONLY_TESTS shutdown_test process_test)
+set(LLMGATE_POSIX_ONLY_TESTS)
 
 function(llmgate_test name label)
   if(WIN32 AND name IN_LIST LLMGATE_POSIX_ONLY_TESTS)
