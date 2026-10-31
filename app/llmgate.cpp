@@ -344,19 +344,21 @@ commands::model_lister provider_lister(commands::dial_settings dial) {
     };
 }
 
+std::string slurp(std::filesystem::path const& path) {
+    std::ifstream in{path};
+    return std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+}
+
+std::string write_failure;
+
 bool write_atomically(std::filesystem::path const& target, std::string_view const text) {
-    auto const temporary = std::filesystem::path{target}.concat(".new");
-    {
-        std::ofstream out{temporary, std::ios::binary | std::ios::trunc};
-        out << text;
-        if (!out) {
-            return false;
-        }
-    }
     std::error_code failed;
-    std::filesystem::permissions(temporary, std::filesystem::status(target, failed).permissions(), failed);
-    std::filesystem::rename(temporary, target, failed);
-    return !failed;
+    constexpr auto kept_bits = std::filesystem::perms::mask;
+    auto const existing = std::filesystem::status(target, failed).permissions() & kept_bits;
+    auto const mode = static_cast<mode_t>(existing);
+    auto const written = process::write_file_atomic(target, text, mode, false);
+    write_failure = written ? std::string{} : written.error().message();
+    return written.has_value();
 }
 
 std::expected<std::string, std::string> offers_of_options(arguments::options const& chosen) {
@@ -413,8 +415,7 @@ int edit_command(commands::context const& where) {
         return fail(exit_usage, planned.error());
     }
     auto const path = std::filesystem::path{process::expand_home(chosen.config_path)};
-    std::ifstream in{path};
-    std::string const text{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+    auto const text = slurp(path);
     auto const edited = config_edit::apply(text, *planned);
     if (!edited) {
         return fail(exit_config, edited.error());
@@ -425,7 +426,7 @@ int edit_command(commands::context const& where) {
         return 0;
     }
     if (!write_atomically(path, edited->text)) {
-        return fail(exit_runtime, std::format("cannot write {}", path.string()));
+        return fail(exit_runtime, std::format("cannot write {}: {}", path.string(), write_failure));
     }
     std::println("written to {}", path.string());
     refresh_picker(where, path);
@@ -522,8 +523,7 @@ std::expected<std::string, std::string> edited_text(std::string text, std::vecto
 
 int commit_edits(commands::context const& where, std::vector<config_edit::change> const& edits) {
     auto const path = std::filesystem::path{process::expand_home(where.options.config_path)};
-    std::ifstream in{path};
-    std::string const before{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+    auto const before = slurp(path);
     auto const text = edited_text(before, edits);
     if (!text) {
         return fail(exit_config, text.error());
@@ -534,7 +534,7 @@ int commit_edits(commands::context const& where, std::vector<config_edit::change
         return 0;
     }
     if (!write_atomically(path, *text)) {
-        return fail(exit_runtime, std::format("cannot write {}", path.string()));
+        return fail(exit_runtime, std::format("cannot write {}: {}", path.string(), write_failure));
     }
     std::println("written to {}", path.string());
     refresh_picker(where, path);
