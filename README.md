@@ -645,6 +645,12 @@ The C++26 features the code uses, what GCC 16.2 cannot do yet and some options f
 
 | Finding | Consequence |
 |---|---|
+| On Windows (MSYS2 UCRT64 GCC 16.2) `std::print` fails to link with undefined `std::__open_terminal` and `std::__write_to_terminal` | The build links `stdc++exp` |
+| On mingw GCC 16.2 a function-local static or inline-variable instantiated from a module is emitted once per translation unit that uses it, and the linker reports multiple definitions | The build passes `-Wl,--allow-multiple-definition`; the one object whose identity matters, the `std::error_category` of an error enum, is interned by qualified name in `reflect::detail::interned_category`, so `error_code == enum` holds across translation units |
+| On Windows, including OpenSSL's headers (which pull in `windows.h` and the intrinsics) before `import std` makes GCC report conflicting language linkage for `_mm_set_epi64x` | Every global module fragment that includes a Windows or OpenSSL header includes `sockets.h` first, which includes `<x86intrin.h>` before `<windows.h>` |
+| On Windows a connect to a closed loopback port keeps retrying the SYN for about two seconds | `fail_fast_connect` turns SYN retransmission off for loopback destinations (`SIO_TCP_INITIAL_RTO`) |
+| On Windows closing a socket with unread data resets the connection and can discard a reply the peer has not read yet | `close_socket` shuts down the send side and drains what is already buffered before closing |
+| On Windows the standard streams translate `\n` to `\r\n`, so generated files differ from the committed ones | The runtime setup puts stdin, stdout and stderr in binary mode |
 | Any translation unit that includes stdexec crashes the compiler (`__query.hpp`, also on stdexec main) or fails (`__meta.hpp:288`) when modules are enabled | stdexec is not used; the async layer is coroutines |
 | An inline function with contracts exported from a module leaves `__tu_has_violation` undefined at link time | Put contracts on the non-inline declaration and the body in an implementation unit |
 | libstdc++ 16.2 has no default `handle_contract_violation` | `src/core/contract_violation.cpp` defines it |

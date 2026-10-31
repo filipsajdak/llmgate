@@ -1,8 +1,4 @@
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include "test_io.h"
 
 #include <boost/ut.hpp>
 
@@ -77,14 +73,14 @@ async::task<std::size_t> read_after_peer_closes(async::reactor& loop, net::liste
 struct socket_pair {
     std::array<int, 2> fds{};
     socket_pair() {
-        ::socketpair(AF_UNIX, SOCK_STREAM, 0, fds.data());
+        test_io::open_pair(fds.data());
         for (auto const fd : fds) {
-            ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+            test_io::make_nonblocking(fd);
         }
     }
     ~socket_pair() {
-        ::close(fds[0]);
-        ::close(fds[1]);
+        test_io::close_fd(fds[0]);
+        test_io::close_fd(fds[1]);
     }
 };
 
@@ -108,9 +104,9 @@ async::task<watched_read> read_while_watching_client(async::reactor& loop, net::
     auto accepted = co_await server.accept();
     socket_pair upstream_pair;
     if (upstream_replies) {
-        ::write(upstream_pair.fds[1], "z", 1);
+        test_io::write_fd(upstream_pair.fds[1], "z", 1);
     }
-    net::tcp_stream upstream{loop, net::adopt(::dup(upstream_pair.fds[0]))};
+    net::tcp_stream upstream{loop, net::adopt(test_io::duplicate_fd(upstream_pair.fds[0]))};
     std::array<std::byte, 1> buffer{};
     auto const started = std::chrono::steady_clock::now();
     auto const received = co_await upstream.read_some(buffer, {.idle = long_wait, .watch = accepted->descriptor()});
@@ -142,11 +138,7 @@ const suite net_suite = [] {
         auto server = net::listener::bind(loop, std::string{loopback}, 0);
         auto pair = loop.run(connect_pair(loop, *server));
 
-        auto const nodelay = [](int const fd) {
-            int value = 0;
-            socklen_t size = sizeof value;
-            return ::getsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, &size) == 0 && value != 0;
-        };
+        auto const nodelay = [](int const fd) { return test_io::nodelay_enabled(fd); };
 
         expect(nodelay(pair.client.descriptor()));
         expect(nodelay(pair.accepted.descriptor()));

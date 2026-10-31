@@ -122,10 +122,17 @@ public:
     }
 };
 
+namespace detail {
+
+std::error_category const& interned_category(char const* key, std::error_category const* (*make)());
+
+}  // namespace detail
+
 template <class E>
     requires std::is_enum_v<E>
 std::error_code make_code(E const value) noexcept {
-    static enum_category<E> const category;
+    static constexpr char const* key = std::define_static_string(without_module(std::meta::display_string_of(^^E)));
+    auto const& category = detail::interned_category(key, +[]() -> std::error_category const* { return new enum_category<E>; });
     return {static_cast<int>(value), category};
 }
 

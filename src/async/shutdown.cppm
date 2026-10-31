@@ -1,10 +1,6 @@
 module;
 
-#include <cerrno>
-#include <csignal>
-
-#include <fcntl.h>
-#include <unistd.h>
+#include "platform.h"
 
 export module llmgate.shutdown;
 
@@ -15,8 +11,6 @@ export namespace llmgate::shutdown {
 
 constexpr async::duration default_drain = std::chrono::seconds{10};
 constexpr int second_signal_status = 130;
-constexpr std::array<int, 2> handled_signals{SIGINT, SIGTERM};
-
 }  // namespace llmgate::shutdown
 
 namespace llmgate::shutdown::detail {
@@ -27,26 +21,12 @@ inline std::atomic<int> signals_seen{0};
 static_assert(std::atomic<int>::is_always_lock_free);
 
 void on_signal(int const) noexcept {
-    auto const saved = errno;
     if (signals_seen.fetch_add(1) >= 1) {
-        ::_exit(second_signal_status);
+        platform::exit_immediately(second_signal_status);
     }
     if (auto const descriptor = notify_descriptor.load(); descriptor >= 0) {
-        char const byte = 1;
-        (void)::write(descriptor, &byte, 1);
+        platform::signal_wake(descriptor);
     }
-    errno = saved;
-}
-
-std::error_code last_error() noexcept {
-    return {errno, std::system_category()};
-}
-
-std::error_code prepare(int const descriptor) noexcept {
-    if (::fcntl(descriptor, F_SETFD, FD_CLOEXEC) < 0 || ::fcntl(descriptor, F_SETFL, ::fcntl(descriptor, F_GETFL, 0) | O_NONBLOCK) < 0) {
-        return last_error();
-    }
-    return {};
 }
 
 }  // namespace llmgate::shutdown::detail
@@ -56,17 +36,11 @@ export namespace llmgate::shutdown {
 class stop_signal {
 public:
     static std::expected<stop_signal, std::error_code> make() {
-        std::array<int, 2> ends{};
-        if (::pipe(ends.data()) < 0) {
-            return std::unexpected{detail::last_error()};
+        auto const channel = platform::open_wake_channel();
+        if (channel.error != 0) {
+            return std::unexpected{std::error_code{channel.error, std::system_category()}};
         }
-        stop_signal made{ends[0], ends[1]};
-        for (auto const descriptor : ends) {
-            if (auto const failure = detail::prepare(descriptor)) {
-                return std::unexpected{failure};
-            }
-        }
-        return made;
+        return stop_signal{channel.read_end, channel.write_end};
     }
 
     stop_signal(stop_signal&& other) noexcept
@@ -78,37 +52,21 @@ public:
     ~stop_signal() {
         uninstall();
         for (auto const descriptor : {read_, write_}) {
-            if (descriptor >= 0) {
-                ::close(descriptor);
-            }
+            platform::close_wake_end(descriptor);
         }
     }
 
     int descriptor() const noexcept { return read_; }
 
-    void request() noexcept {
-        char const byte = 1;
-        (void)::write(write_, &byte, 1);
-    }
+    void request() noexcept { platform::signal_wake(write_); }
 
-    void acknowledge() noexcept {
-        std::array<char, 16> sink;
-        while (::read(read_, sink.data(), sink.size()) > 0) {
-        }
-    }
+    void acknowledge() noexcept { platform::clear_wake(read_); }
 
     std::error_code install() noexcept {
         detail::signals_seen.store(0);
         detail::notify_descriptor.store(write_);
-        struct sigaction action{};
-        action.sa_handler = &detail::on_signal;
-        action.sa_flags = SA_RESTART;
-        for (auto const number : handled_signals) {
-            if (::sigaction(number, &action, nullptr) < 0) {
-                auto const failure = detail::last_error();
-                uninstall();
-                return failure;
-            }
+        if (auto const failure = platform::install_stop_handler(&detail::on_signal)) {
+            return {failure, std::system_category()};
         }
         installed_ = true;
         return {};
@@ -122,11 +80,7 @@ private:
             return;
         }
         detail::notify_descriptor.store(-1);
-        struct sigaction restore{};
-        restore.sa_handler = SIG_DFL;
-        for (auto const number : handled_signals) {
-            ::sigaction(number, &restore, nullptr);
-        }
+        platform::remove_stop_handler();
     }
 
     int read_;

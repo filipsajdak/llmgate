@@ -1,5 +1,4 @@
-#include <sys/socket.h>
-#include <unistd.h>
+#include "test_io.h"
 
 #include <boost/ut.hpp>
 
@@ -18,10 +17,10 @@ constexpr duration long_wait{5000};
 
 struct socket_pair {
     std::array<int, 2> fds{};
-    socket_pair() { ::socketpair(AF_UNIX, SOCK_STREAM, 0, fds.data()); }
+    socket_pair() { test_io::open_pair(fds.data()); }
     ~socket_pair() {
-        ::close(fds[0]);
-        ::close(fds[1]);
+        test_io::close_fd(fds[0]);
+        test_io::close_fd(fds[1]);
     }
 };
 
@@ -39,7 +38,7 @@ task<std::string> read_after_ready(reactor& loop, int const fd) {
     auto const ready = co_await loop.readable(fd);
     std::string received(4, '\0');
     if (!ready) {
-        ::read(fd, received.data(), received.size());
+        test_io::read_fd(fd, received.data(), received.size());
     }
     co_return received;
 }
@@ -139,7 +138,7 @@ const suite async_suite = [] {
     "capability_readable_resumes_after_the_peer_writes"_test = [] {
         reactor loop;
         socket_pair pair;
-        ::write(pair.fds[1], "ping", 4);
+        test_io::write_fd(pair.fds[1], "ping", 4);
 
         expect(loop.run(read_after_ready(loop, pair.fds[0])) == "ping");
     };
@@ -163,7 +162,7 @@ const suite async_suite = [] {
     "capability_readable_beats_its_timeout_and_the_timer_is_disarmed"_test = [] {
         reactor loop;
         socket_pair pair;
-        ::write(pair.fds[1], "x", 1);
+        test_io::write_fd(pair.fds[1], "x", 1);
 
         auto const outcome = loop.run(wait_then_idle(loop, pair.fds[0], long_wait, 2 * short_wait));
 
@@ -183,7 +182,7 @@ const suite async_suite = [] {
         reactor loop;
         socket_pair pair;
         (void)loop.run(wait_readable_for(loop, pair.fds[0], short_wait));
-        ::write(pair.fds[1], "x", 1);
+        test_io::write_fd(pair.fds[1], "x", 1);
 
         expect(!loop.run(wait_readable_for(loop, pair.fds[0], long_wait)));
     };
@@ -192,7 +191,7 @@ const suite async_suite = [] {
         reactor loop;
         socket_pair first;
         socket_pair second;
-        ::write(first.fds[1], "x", 1);
+        test_io::write_fd(first.fds[1], "x", 1);
 
         auto const outcome = loop.run(race_two(loop, first.fds[0], second.fds[0], long_wait));
 
@@ -204,7 +203,7 @@ const suite async_suite = [] {
         reactor loop;
         socket_pair first;
         socket_pair second;
-        ::write(second.fds[1], "x", 1);
+        test_io::write_fd(second.fds[1], "x", 1);
 
         auto const outcome = loop.run(race_two(loop, first.fds[0], second.fds[0], long_wait));
 
@@ -227,9 +226,9 @@ const suite async_suite = [] {
         reactor loop;
         socket_pair first;
         socket_pair second;
-        ::write(first.fds[1], "x", 1);
+        test_io::write_fd(first.fds[1], "x", 1);
         (void)loop.run(race_two(loop, first.fds[0], second.fds[0], long_wait));
-        ::write(second.fds[1], "y", 1);
+        test_io::write_fd(second.fds[1], "y", 1);
 
         auto const outcome = loop.run(race_two(loop, first.fds[0], second.fds[0], long_wait));
 
@@ -241,7 +240,7 @@ const suite async_suite = [] {
         socket_pair first;
 
         auto const failed = loop.run(race_two(loop, first.fds[0], unopened_descriptor, long_wait));
-        ::write(first.fds[1], "x", 1);
+        test_io::write_fd(first.fds[1], "x", 1);
         auto const later = loop.run(wait_readable_for(loop, first.fds[0], long_wait));
 
         expect(static_cast<bool>(failed.error));
@@ -255,7 +254,7 @@ const suite async_suite = [] {
         loop.spawn(record_readable(loop, pair.fds[0], log, "first"));
 
         auto const second = loop.run(wait_readable_for(loop, pair.fds[0], long_wait));
-        ::write(pair.fds[1], "x", 1);
+        test_io::write_fd(pair.fds[1], "x", 1);
         loop.run(loop.sleep(short_wait));
 
         expect(second == std::errc::device_or_resource_busy);
@@ -269,7 +268,7 @@ const suite async_suite = [] {
         loop.spawn(record_readable(loop, pair.fds[0], log, "reader"));
         loop.spawn(record_writable(loop, pair.fds[0], log, "writer"));
         loop.run(loop.sleep(short_wait));
-        ::write(pair.fds[1], "x", 1);
+        test_io::write_fd(pair.fds[1], "x", 1);
         loop.run(loop.sleep(short_wait));
 
         expect(log == std::vector<std::string>{"writer:ready", "reader:ready"});
@@ -278,12 +277,12 @@ const suite async_suite = [] {
     "limit_a_waiter_that_finishes_frees_its_claim_for_the_next_one"_test = [] {
         reactor loop;
         socket_pair pair;
-        ::write(pair.fds[1], "x", 1);
+        test_io::write_fd(pair.fds[1], "x", 1);
 
         auto const first = loop.run(wait_readable_for(loop, pair.fds[0], long_wait));
         std::array<char, 1> drain{};
-        ::read(pair.fds[0], drain.data(), 1);
-        ::write(pair.fds[1], "y", 1);
+        test_io::read_fd(pair.fds[0], drain.data(), 1);
+        test_io::write_fd(pair.fds[1], "y", 1);
         auto const second = loop.run(wait_readable_for(loop, pair.fds[0], long_wait));
 
         expect(!first);

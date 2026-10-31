@@ -1,6 +1,6 @@
 module;
 
-#include <unistd.h>
+#include "platform.h"
 
 export module llmgate.org_fetch;
 
@@ -144,7 +144,7 @@ inline std::expected<fetched, std::string> from_git(std::string_view const url, 
     if (!commit) {
         return std::unexpected{commit.error()};
     }
-    auto const target = std::filesystem::temp_directory_path() / std::format("llmgate-org-{}-{}", ::getpid(), std::chrono::steady_clock::now().time_since_epoch().count());
+    auto const target = std::filesystem::temp_directory_path() / std::format("llmgate-org-{}-{}", platform::current_process_id(), std::chrono::steady_clock::now().time_since_epoch().count());
     auto pinned = fetch_pinned(runner, target, url, ref, *commit);
     auto result = pinned ? from_directory(target, url) : std::unexpected{pinned.error()};
     if (result) {

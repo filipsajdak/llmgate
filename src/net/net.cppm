@@ -1,15 +1,9 @@
 module;
 
-#include <cerrno>
 #include <cstdio>
 
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include "platform.h"
+#include "sockets.h"
 
 export module llmgate.net;
 
@@ -41,7 +35,7 @@ struct fd_handle {
 
 struct fd_closer {
     using pointer = fd_handle;
-    void operator()(fd_handle const handle) const noexcept { ::close(handle.value); }
+    void operator()(fd_handle const handle) const noexcept { platform::close_socket(handle.value); }
 };
 
 using unique_fd = std::unique_ptr<int, fd_closer>;
@@ -66,11 +60,6 @@ namespace llmgate::net::detail {
 
 constexpr std::size_t receive_buffer_bytes = 16384;
 constexpr int listen_backlog = 128;
-#ifdef MSG_NOSIGNAL
-constexpr int send_flags = MSG_NOSIGNAL;
-#else
-constexpr int send_flags = 0;
-#endif
 
 [[noreturn]] void abort_destroyed_while_busy(std::string_view const what) noexcept {
     std::println(stderr, "llmgate: {} destroyed while an operation was still pending", what);
@@ -82,7 +71,7 @@ struct addrinfo_deleter {
 };
 
 std::error_code last_error() noexcept {
-    return {errno, std::system_category()};
+    return {platform::socket_error(), std::system_category()};
 }
 
 addrinfo stream_hints() noexcept {
@@ -93,28 +82,34 @@ addrinfo stream_hints() noexcept {
 }
 
 bool would_block(int const error) noexcept {
-    return error == EAGAIN || error == EWOULDBLOCK;
+    return platform::would_block(error);
 }
 
 std::error_code prepare_tcp_socket(int const fd) noexcept {
-    auto const flags = ::fcntl(fd, F_GETFL, 0);
-    if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
-        return last_error();
+    if (auto const failure = platform::tune_tcp_socket(fd)) {
+        return {failure, std::system_category()};
     }
-    int const enabled = 1;
-    ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &enabled, sizeof enabled);
-#ifdef SO_NOSIGPIPE
-    ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof enabled);
-#endif
     return {};
+}
+
+bool is_loopback(addrinfo const& candidate) noexcept {
+    if (candidate.ai_family == AF_INET) {
+        auto const* const address = reinterpret_cast<sockaddr_in const*>(candidate.ai_addr);
+        return (ntohl(address->sin_addr.s_addr) >> 24) == 127;
+    }
+    if (candidate.ai_family == AF_INET6) {
+        auto const* const address = reinterpret_cast<sockaddr_in6 const*>(candidate.ai_addr);
+        return IN6_IS_ADDR_LOOPBACK(&address->sin6_addr) != 0;
+    }
+    return false;
 }
 
 enum class watched_peer { quiet, speaking, gone };
 
 watched_peer inspect(int const watch) noexcept {
-    char probe = 0;
-    auto const peeked = ::recv(watch, &probe, 1, MSG_PEEK);
-    if (peeked == 0 || (peeked < 0 && !would_block(errno) && errno != EINTR)) {
+    auto const peeked = platform::peek_byte(watch, false);
+    auto const error = platform::socket_error();
+    if (peeked == 0 || (peeked < 0 && !would_block(error) && !platform::interrupted(error))) {
         return watched_peer::gone;
     }
     return peeked > 0 ? watched_peer::speaking : watched_peer::quiet;
@@ -154,14 +149,14 @@ async::task<result_size> receive_some(async::reactor& reactor, int const fd, std
                                       read_options const options) {
     auto watch = options.watch;
     for (;;) {
-        auto const received = ::recv(fd, into.data(), into.size(), 0);
+        auto const received = platform::receive_bytes(fd, into.data(), into.size());
         if (received >= 0) {
             co_return static_cast<std::size_t>(received);
         }
-        if (errno == EINTR) {
+        if (platform::interrupted(platform::socket_error())) {
             continue;
         }
-        if (!would_block(errno)) {
+        if (!would_block(platform::socket_error())) {
             co_return std::unexpected{last_error()};
         }
         if (auto const waited = co_await await_data(reactor, fd, options.idle, watch); !waited) {
@@ -172,43 +167,51 @@ async::task<result_size> receive_some(async::reactor& reactor, int const fd, std
 
 async::task<result_void> send_all(async::reactor& reactor, int const fd, std::span<std::byte const> remaining) {
     while (!remaining.empty()) {
-        auto const sent = ::send(fd, remaining.data(), remaining.size(), send_flags);
+        auto const sent = platform::send_bytes(fd, remaining.data(), remaining.size());
         if (sent >= 0) {
             remaining = remaining.subspan(static_cast<std::size_t>(sent));
-        } else if (would_block(errno)) {
+        } else if (would_block(platform::socket_error())) {
             if (auto const error = co_await reactor.writable(fd)) {
                 co_return std::unexpected{error};
             }
-        } else if (errno != EINTR) {
+        } else if (!platform::interrupted(platform::socket_error())) {
             co_return std::unexpected{last_error()};
         }
     }
     co_return result_void{};
 }
 
+std::expected<unique_fd, std::error_code> open_candidate_socket(addrinfo const& candidate) {
+    auto socket = adopt(static_cast<int>(::socket(candidate.ai_family, candidate.ai_socktype, candidate.ai_protocol)));
+    if (!socket) {
+        return std::unexpected{last_error()};
+    }
+    if (auto const error = prepare_tcp_socket(raw(socket))) {
+        return std::unexpected{error};
+    }
+    if (is_loopback(candidate)) {
+        platform::fail_fast_connect(raw(socket));
+    }
+    return socket;
+}
+
 async::task<std::expected<unique_fd, std::error_code>> connect_candidate(async::reactor& reactor,
                                                                          addrinfo const& candidate,
                                                                          idle_limit const timeout) {
-    auto socket = adopt(::socket(candidate.ai_family, candidate.ai_socktype, candidate.ai_protocol));
+    auto socket = open_candidate_socket(candidate);
     if (!socket) {
-        co_return std::unexpected{last_error()};
+        co_return std::unexpected{socket.error()};
     }
-    if (auto const error = prepare_tcp_socket(raw(socket))) {
-        co_return std::unexpected{error};
-    }
-    if (::connect(raw(socket), candidate.ai_addr, candidate.ai_addrlen) == 0) {
+    if (::connect(raw(*socket), candidate.ai_addr, candidate.ai_addrlen) == 0) {
         co_return socket;
     }
-    if (errno != EINPROGRESS) {
+    if (!platform::in_progress(platform::socket_error()) && !platform::would_block(platform::socket_error())) {
         co_return std::unexpected{last_error()};
     }
-    if (auto const error = co_await reactor.writable(raw(socket), timeout)) {
+    if (auto const error = co_await reactor.writable(raw(*socket), timeout)) {
         co_return std::unexpected{error};
     }
-    int pending = 0;
-    socklen_t length = sizeof pending;
-    ::getsockopt(raw(socket), SOL_SOCKET, SO_ERROR, &pending, &length);
-    if (pending != 0) {
+    if (auto const pending = platform::pending_socket_error(raw(*socket)); pending != 0) {
         co_return std::unexpected{std::error_code{pending, std::system_category()}};
     }
     co_return socket;
@@ -325,12 +328,11 @@ public:
         if (::inet_pton(AF_INET, address.c_str(), &local.sin_addr) != 1) {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
-        auto socket = adopt(::socket(AF_INET, SOCK_STREAM, 0));
+        auto socket = adopt(static_cast<int>(::socket(AF_INET, SOCK_STREAM, 0)));
         if (!socket) {
             return std::unexpected{detail::last_error()};
         }
-        int const enabled = 1;
-        ::setsockopt(raw(socket), SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof enabled);
+        platform::allow_address_reuse(raw(socket));
         if (auto const error = detail::prepare_tcp_socket(raw(socket))) {
             return std::unexpected{error};
         }
@@ -346,17 +348,17 @@ public:
 
     async::task<std::expected<tcp_stream, std::error_code>> accept(int const stop_descriptor = -1) {
         for (;;) {
-            auto client = adopt(::accept(raw(socket_), nullptr, nullptr));
+            auto client = adopt(static_cast<int>(::accept(raw(socket_), nullptr, nullptr)));
             if (client) {
                 if (auto const error = detail::prepare_tcp_socket(raw(client))) {
                     co_return std::unexpected{error};
                 }
                 co_return tcp_stream{*reactor_, std::move(client)};
             }
-            if (errno == EINTR) {
+            if (platform::interrupted(platform::socket_error())) {
                 continue;
             }
-            if (!detail::would_block(errno)) {
+            if (!detail::would_block(platform::socket_error())) {
                 co_return std::unexpected{detail::last_error()};
             }
             auto const waited = co_await reactor_->readable_or_other(raw(socket_), stop_descriptor);
@@ -619,8 +621,7 @@ private:
     };
 
     static bool peer_is_quiet(int const fd) noexcept {
-        char probe = 0;
-        return ::recv(fd, &probe, 1, MSG_PEEK | MSG_DONTWAIT) < 0 && detail::would_block(errno);
+        return platform::peek_byte(fd, true) < 0 && detail::would_block(platform::socket_error());
     }
 
     pool_limits limits_;

@@ -5,8 +5,21 @@ on:
     branches: ["feat/rollout-*"]
     paths:
       - ".github/workflows/windows.yml"
-      - "src/reflect/**"
-      - "src/json/**"
+      - "CMakeLists.txt"
+      - "src/**"
+      - "app/**"
+      - "tests/**"
+      - "tools/**"
+      - "cmake/**"
+  pull_request:
+    paths:
+      - ".github/workflows/windows.yml"
+      - "CMakeLists.txt"
+      - "src/**"
+      - "app/**"
+      - "tests/**"
+      - "tools/**"
+      - "cmake/**"
   workflow_dispatch:
 
 permissions:
@@ -17,8 +30,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  foundations:
-    timeout-minutes: 60
+  windows:
+    timeout-minutes: 90
     runs-on: windows-latest
     defaults:
       run:
@@ -31,11 +44,14 @@ jobs:
           update: true
           install: >-
             git
+            diffutils
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-python
       - run: g++ --version && cmake --version && openssl version
       - run: cmake -S . -B build/windows -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_COMPILER=g++
-      - run: cmake --build build/windows --target reflect_enum_test json_test json_writer_test lenient_test jsonscan_test
-      - run: ctest --test-dir build/windows --output-on-failure -R "reflect_enum_test|json_test|json_writer_test|lenient_test|jsonscan_test"
+      - run: cmake --build build/windows
+      - name: unit, constexpr, lint and regression tests
+        run: ctest --test-dir build/windows -j2 --timeout 120 --output-on-failure -LE "e2e"

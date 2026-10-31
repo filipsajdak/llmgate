@@ -213,7 +213,7 @@ const suite httpio_suite = [] {
 
         auto const answer = loop.run(raw_exchange(loop, *server, handler, wire, {.max_head_bytes = small_head_limit}));
 
-        expect(answer.starts_with("HTTP/1.1 431"));
+        expect(answer.starts_with("HTTP/1.1 431")) << answer;
     };
 
     "limit_garbage_is_answered_with_400"_test = [] {
@@ -223,7 +223,7 @@ const suite httpio_suite = [] {
 
         auto const answer = loop.run(raw_exchange(loop, *server, handler, "\x01 not http\r\n\r\n", {}));
 
-        expect(answer.starts_with("HTTP/1.1 400"));
+        expect(answer.starts_with("HTTP/1.1 400")) << answer;
     };
 
     "limit_a_failing_handler_before_any_reply_is_answered_with_500"_test = [] {

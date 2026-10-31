@@ -1,30 +1,19 @@
 module;
 
 #include <cerrno>
-#include <cstdio>
 #include <cstdlib>
-#include <csignal>
 #include <cstring>
 #include <meta>
 
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <spawn.h>
-#include <sys/socket.h>
-#include <sys/wait.h>
 #include <unistd.h>
-#if defined(__APPLE__)
-#include <mach-o/dyld.h>
-#endif
+
+#include "platform.h"
+#include "sockets.h"
 
 export module llmgate.process;
 
 import std;
 import llmgate.text;
-
-extern "C" char** environ;
 
 namespace llmgate::commands {}
 
@@ -56,6 +45,8 @@ struct http_result {
     int status;
     std::string body;
 };
+
+using process_id = platform::process_id;
 
 inline std::error_code errno_error() {
     return {errno, std::system_category()};
@@ -90,14 +81,14 @@ inline std::expected<std::string, std::error_code> read_all(int const fd) {
 
 struct argument_vector {
     std::vector<std::string> storage;
-    std::vector<char*> pointers;
+    std::vector<char const*> pointers;
 };
 
 inline argument_vector make_argv(std::filesystem::path const& program, std::vector<std::string> const& arguments) {
     std::vector<std::string> storage;
     storage.emplace_back(program.string());
     storage.insert(storage.end(), arguments.begin(), arguments.end());
-    auto pointers = std::ranges::to<std::vector<char*>>(storage | std::views::transform([](std::string& item) { return item.data(); }));
+    auto pointers = std::ranges::to<std::vector<char const*>>(storage | std::views::transform([](std::string const& item) { return item.c_str(); }));
     pointers.push_back(nullptr);
     return {.storage = std::move(storage), .pointers = std::move(pointers)};
 }
@@ -106,58 +97,53 @@ inline std::string expand_home(std::string_view const path) {
     if (!path.starts_with("~/")) {
         return std::string{path};
     }
-    auto const* home = std::getenv("HOME");
+    auto const* home = platform::home_directory();
     return (home == nullptr ? std::string{} : std::string{home}) + std::string{path.substr(1)};
 }
 
 inline std::optional<std::filesystem::path> current_executable() {
-#if defined(__APPLE__)
-    std::uint32_t size = 0;
-    _NSGetExecutablePath(nullptr, &size);
-    std::string buffer(size, '\0');
-    if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
+    std::array<char, 4096> buffer{};
+    auto const length = platform::executable_path(buffer.data(), buffer.size());
+    if (length == 0) {
         return std::nullopt;
     }
-    std::error_code error;
-    auto resolved = std::filesystem::canonical(buffer.c_str(), error);
-    return error ? std::nullopt : std::optional{std::move(resolved)};
-#else
-    std::error_code error;
-    auto resolved = std::filesystem::read_symlink("/proc/self/exe", error);
-    return error ? std::nullopt : std::optional{std::move(resolved)};
-#endif
+    return std::filesystem::path{std::string_view{buffer.data(), length}};
+}
+
+inline std::optional<std::filesystem::path> search_path(std::string_view const name) {
+    auto const* search = std::getenv("PATH");
+    std::array<char, 4096> resolved{};
+    for (auto const directory : std::string_view{search == nullptr ? "" : search} | std::views::split(platform::path_list_separator())) {
+        auto const candidate = (std::filesystem::path{std::string_view{directory}} / name).string();
+        if (platform::resolve_executable(candidate.c_str(), resolved.data(), resolved.size())) {
+            return std::filesystem::path{resolved.data()};
+        }
+    }
+    return std::nullopt;
 }
 
 inline std::optional<std::filesystem::path> find_in_path(std::string_view const name) {
     if (name.contains('/')) {
         return std::filesystem::exists(name) ? std::optional{std::filesystem::path{name}} : std::nullopt;
     }
-    auto const* search = std::getenv("PATH");
-    for (auto const directory : std::string_view{search == nullptr ? "" : search} | std::views::split(':')) {
-        std::filesystem::path candidate = std::filesystem::path{std::string_view{directory}} / name;
-        if (::access(candidate.c_str(), X_OK) == 0 && std::filesystem::is_regular_file(candidate)) {
-            return candidate;
-        }
-    }
-    return std::nullopt;
+    return search_path(name);
 }
 
 }  // namespace llmgate::process
 
 namespace llmgate::process::detail {
 
-bool wait_for(int const fd, short const events, std::chrono::steady_clock::time_point const deadline) {
+bool wait_for(int const fd, bool const for_write, std::chrono::steady_clock::time_point const deadline) {
     for (;;) {
         auto const remaining = std::chrono::duration_cast<milliseconds>(deadline - std::chrono::steady_clock::now());
         if (remaining.count() <= 0) {
             return false;
         }
-        pollfd watch{.fd = fd, .events = events, .revents = 0};
-        auto const ready = ::poll(&watch, 1, static_cast<int>(remaining.count()));
+        auto const ready = platform::wait_socket(fd, for_write, static_cast<int>(remaining.count()));
         if (ready > 0) {
             return true;
         }
-        if (ready == 0 || errno != EINTR) {
+        if (ready == 0 || !platform::interrupted(platform::socket_error())) {
             return false;
         }
     }
@@ -167,7 +153,7 @@ struct descriptor {
     int fd;
     ~descriptor() {
         if (fd >= 0) {
-            ::close(fd);
+            platform::close_socket(fd);
         }
     }
 };
@@ -186,40 +172,36 @@ std::optional<sockaddr_in> ipv4_address(std::string_view const host, std::uint16
 }
 
 int nonblocking_socket() {
-    int const fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    int const fd = static_cast<int>(::socket(AF_INET, SOCK_STREAM, 0));
     if (fd >= 0) {
-        ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+        platform::set_nonblocking(fd);
     }
     return fd;
 }
 
 bool connect_completed(int const fd, std::chrono::steady_clock::time_point const deadline) {
-    int pending = 0;
-    socklen_t length = sizeof pending;
-    return wait_for(fd, POLLOUT, deadline) && ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &pending, &length) >= 0 && pending == 0;
+    return wait_for(fd, true, deadline) && platform::pending_socket_error(fd) == 0;
 }
 
 bool connect_by(int const fd, sockaddr_in const& remote, std::chrono::steady_clock::time_point const deadline) {
     if (::connect(fd, reinterpret_cast<sockaddr const*>(&remote), sizeof remote) == 0) {
         return true;
     }
-    return errno == EINPROGRESS && connect_completed(fd, deadline);
+    auto const error = platform::socket_error();
+    return (platform::in_progress(error) || platform::would_block(error)) && connect_completed(fd, deadline);
 }
 
-bool would_block() {
-    return errno == EAGAIN || errno == EWOULDBLOCK;
-}
-
-bool retry_after(int const fd, short const events, std::chrono::steady_clock::time_point const deadline) {
-    return errno == EINTR || (would_block() && wait_for(fd, events, deadline));
+bool retry_after(int const fd, bool const for_write, std::chrono::steady_clock::time_point const deadline) {
+    auto const error = platform::socket_error();
+    return platform::interrupted(error) || (platform::would_block(error) && wait_for(fd, for_write, deadline));
 }
 
 bool send_all(int const fd, std::string_view pending, std::chrono::steady_clock::time_point const deadline) {
     while (!pending.empty()) {
-        auto const sent = ::send(fd, pending.data(), pending.size(), 0);
+        auto const sent = platform::send_bytes(fd, pending.data(), pending.size());
         if (sent > 0) {
             pending.remove_prefix(static_cast<std::size_t>(sent));
-        } else if (sent < 0 && retry_after(fd, POLLOUT, deadline)) {
+        } else if (sent < 0 && retry_after(fd, true, deadline)) {
             continue;
         } else {
             return false;
@@ -232,12 +214,12 @@ std::optional<std::string> receive_all(int const fd, std::chrono::steady_clock::
     std::string answer;
     std::array<char, 4096> buffer{};
     for (;;) {
-        auto const received = ::recv(fd, buffer.data(), buffer.size(), 0);
+        auto const received = platform::receive_bytes(fd, buffer.data(), buffer.size());
         if (received > 0) {
             answer.append(buffer.data(), static_cast<std::size_t>(received));
         } else if (received == 0) {
             return answer;
-        } else if (!retry_after(fd, POLLIN, deadline)) {
+        } else if (!retry_after(fd, false, deadline)) {
             return std::nullopt;
         }
     }
@@ -275,36 +257,19 @@ std::optional<http_result> parse_response(std::string_view const answer) {
     return http_result{.status = *status, .body = std::string{answer.substr(split + 4)}};
 }
 
-std::expected<void, std::error_code> as_result(std::error_code const error) {
-    return error ? std::expected<void, std::error_code>{std::unexpected{error}} : std::expected<void, std::error_code>{};
-}
-
 void prepare_directory(std::filesystem::path const& directory, bool const private_parent) {
     std::error_code failure;
     if (std::filesystem::create_directories(directory, failure) && private_parent) {
-        std::filesystem::permissions(directory, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, failure);
+        platform::make_directory_private(directory.string().c_str());
     }
 }
 
-std::error_code write_synced(int const fd, std::string_view const text) {
-    auto error = write_all(fd, text);
-    if (!error && ::fsync(fd) < 0) {
-        error = errno_error();
-    }
-    ::close(fd);
-    return error;
+void collect_output(void* const context, char const* const bytes, std::size_t const size) {
+    static_cast<std::string*>(context)->append(bytes, size);
 }
 
-std::error_code write_and_rename(int const fd, std::string_view const text, std::filesystem::path const& temporary,
-                                 std::filesystem::path const& target) {
-    auto error = write_synced(fd, text);
-    if (!error && ::rename(temporary.c_str(), target.c_str()) < 0) {
-        error = errno_error();
-    }
-    if (error) {
-        ::unlink(temporary.c_str());
-    }
-    return error;
+std::expected<void, std::error_code> from_code(int const code) {
+    return code == 0 ? std::expected<void, std::error_code>{} : std::expected<void, std::error_code>{std::unexpected{std::error_code{code, std::system_category()}}};
 }
 
 }  // namespace llmgate::process::detail
@@ -353,24 +318,14 @@ inline bool gateway_alive(std::string_view const host, std::uint16_t const port)
 }
 
 template <std::meta::info Caller = std::meta::current_function()>
-std::expected<pid_t, std::error_code> start_detached(std::filesystem::path const& program, std::vector<std::string> const& arguments,
-                                                    std::filesystem::path const& log_file) {
+std::expected<process_id, std::error_code> start_detached(std::filesystem::path const& program, std::vector<std::string> const& arguments,
+                                                         std::filesystem::path const& log_file) {
     static_assert(detail::may_spawn(Caller), "start_detached may only be called from llmgate::commands (src/app) or from code outside llmgate");
     std::error_code ignored;
     std::filesystem::create_directories(log_file.parent_path(), ignored);
-    posix_spawn_file_actions_t actions;
-    posix_spawn_file_actions_init(&actions);
-    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
-    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, log_file.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0600);
-    posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO, STDERR_FILENO);
-    posix_spawnattr_t attributes;
-    posix_spawnattr_init(&attributes);
-    posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID);
     auto argv = make_argv(program, arguments);
-    pid_t child = 0;
-    auto const result = ::posix_spawn(&child, program.c_str(), &actions, &attributes, argv.pointers.data(), environ);
-    posix_spawn_file_actions_destroy(&actions);
-    posix_spawnattr_destroy(&attributes);
+    process_id child = 0;
+    auto const result = platform::start_detached_process(program.string().c_str(), argv.pointers.data(), log_file.string().c_str(), &child);
     if (result != 0) {
         return std::unexpected{std::error_code{result, std::system_category()}};
     }
@@ -378,88 +333,40 @@ std::expected<pid_t, std::error_code> start_detached(std::filesystem::path const
 }
 
 inline std::expected<void, std::error_code> write_file_atomic(std::filesystem::path const& target, std::string_view const text,
-                                                              mode_t const mode, bool const private_parent) {
-    auto const directory = target.parent_path();
-    detail::prepare_directory(directory, private_parent);
-    auto const temporary = directory / std::format(".{}.{}.tmp", target.filename().string(), ::getpid());
-    auto const descriptor = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode);
-    if (descriptor < 0) {
-        return std::unexpected{errno_error()};
-    }
-    return detail::as_result(detail::write_and_rename(descriptor, text, temporary, target));
+                                                              unsigned const mode, bool const private_parent) {
+    detail::prepare_directory(target.parent_path(), private_parent);
+    return detail::from_code(platform::write_file_atomic(target.string().c_str(), text.data(), text.size(), mode));
 }
 
-inline std::expected<void, std::error_code> append_file(std::filesystem::path const& target, std::string_view const text, mode_t const mode,
+inline std::expected<void, std::error_code> append_file(std::filesystem::path const& target, std::string_view const text, unsigned const mode,
                                                         bool const private_parent) {
     detail::prepare_directory(target.parent_path(), private_parent);
-    auto const descriptor = ::open(target.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC, mode);
-    if (descriptor < 0) {
-        return std::unexpected{errno_error()};
-    }
-    auto const error = write_all(descriptor, text);
-    ::close(descriptor);
-    return detail::as_result(error);
-}
-
-inline int wait_status(pid_t const child) {
-    int status = 0;
-    while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {
-    }
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    return detail::from_code(platform::append_to_file(target.string().c_str(), text.data(), text.size(), mode));
 }
 
 inline int run_and_wait(std::filesystem::path const& program, std::vector<std::string> const& arguments) {
     auto argv = make_argv(program, arguments);
-    pid_t child = 0;
-    if (::posix_spawn(&child, program.c_str(), nullptr, nullptr, argv.pointers.data(), environ) != 0) {
-        return -1;
-    }
-    return wait_status(child);
+    return platform::run_process(program.string().c_str(), argv.pointers.data());
 }
 
 inline std::optional<std::filesystem::path> find_program(std::string const& name) {
     if (name.contains('/')) {
         return std::filesystem::path{expand_home(name)};
     }
-    auto const* path = std::getenv("PATH");
-    for (auto const directory : std::views::split(std::string_view{path == nullptr ? "" : path}, ':')) {
-        auto const candidate = std::filesystem::path{std::string_view{directory.begin(), directory.end()}} / name;
-        if (std::error_code ignored; std::filesystem::is_regular_file(candidate, ignored) && ::access(candidate.c_str(), X_OK) == 0) {
-            return candidate;
-        }
-    }
-    return std::nullopt;
+    return search_path(name);
 }
 
 inline std::expected<std::string, std::error_code> run_capturing(std::filesystem::path const& program, std::vector<std::string> const& arguments) {
-    std::array<int, 2> ends{};
-    if (::pipe(ends.data()) != 0) {
-        return std::unexpected{errno_error()};
-    }
-    posix_spawn_file_actions_t actions;
-    posix_spawn_file_actions_init(&actions);
-    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
-    posix_spawn_file_actions_adddup2(&actions, ends[1], STDOUT_FILENO);
-    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
-    posix_spawn_file_actions_addclose(&actions, ends[0]);
-    posix_spawn_file_actions_addclose(&actions, ends[1]);
     auto argv = make_argv(program, arguments);
-    pid_t child = 0;
-    auto const result = ::posix_spawn(&child, program.c_str(), &actions, nullptr, argv.pointers.data(), environ);
-    posix_spawn_file_actions_destroy(&actions);
-    ::close(ends[1]);
-    if (result != 0) {
-        ::close(ends[0]);
-        return std::unexpected{std::error_code{result, std::system_category()}};
+    std::string text;
+    if (auto const failure = platform::capture_process(program.string().c_str(), argv.pointers.data(), &text, &detail::collect_output); failure != 0) {
+        return std::unexpected{std::error_code{failure, std::system_category()}};
     }
-    auto text = read_all(ends[0]);
-    ::close(ends[0]);
-    wait_status(child);
     return text;
 }
 
-inline bool process_running(pid_t const pid) noexcept {
-    return ::kill(pid, 0) == 0 || errno == EPERM;
+inline bool process_running(process_id const pid) noexcept {
+    return platform::process_alive(pid);
 }
 
 template <std::invocable Condition>
@@ -476,7 +383,7 @@ bool wait_until(Condition&& condition, milliseconds const limit, milliseconds co
 
 inline void apply_environment(std::vector<text::name_value> const& environment) {
     for (auto const& [name, value] : environment) {
-        ::setenv(name.c_str(), value.c_str(), 1);
+        platform::set_environment_variable(name.c_str(), value.c_str());
     }
 }
 
@@ -484,9 +391,7 @@ inline void apply_environment(std::vector<text::name_value> const& environment) 
                                       std::vector<text::name_value> const& environment) {
     apply_environment(environment);
     auto argv = make_argv(program, arguments);
-    ::execv(program.c_str(), argv.pointers.data());
-    std::println(stderr, "llmgate: cannot run {}: {}", program.string(), std::strerror(errno));
-    std::_Exit(127);
+    platform::replace_process(program.string().c_str(), argv.pointers.data());
 }
 
 }  // namespace llmgate::process
