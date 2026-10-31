@@ -4,7 +4,7 @@ PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
 root=$(cd "$(dirname "$0")/../.." && pwd)
 binary=${1:-$root/build/host/llmgate}
-work=$(mktemp -d)
+work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 export LLMGATE_NO_BROWSER=1
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
 mkdir -p "$HOME"

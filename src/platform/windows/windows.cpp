@@ -656,6 +656,9 @@ void set_environment_variable(char const* const name, char const* const value) n
 }
 
 char const* home_directory() noexcept {
+    if (auto const* home = std::getenv("HOME"); home != nullptr && *home != '\0') {
+        return home;
+    }
     if (auto const* profile = std::getenv("USERPROFILE")) {
         return profile;
     }

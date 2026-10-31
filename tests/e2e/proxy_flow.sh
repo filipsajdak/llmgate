@@ -3,7 +3,7 @@ set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 binary=${1:-$root/build/host/llmgate}
 pki=$root/tests/e2e/pki
-work=$(mktemp -d)
+work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
 mkdir -p "$HOME"
 failures=0
