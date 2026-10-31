@@ -11,6 +11,7 @@ on:
       - "tests/**"
       - "tools/**"
       - "cmake/**"
+      - "install/**"
   pull_request:
     paths:
       - ".github/workflows/windows.yml"
@@ -20,6 +21,7 @@ on:
       - "tests/**"
       - "tools/**"
       - "cmake/**"
+      - "install/**"
   workflow_dispatch:
 
 permissions:
@@ -55,3 +57,8 @@ jobs:
       - run: cmake --build build/windows
       - name: unit, constexpr, lint and regression tests
         run: ctest --test-dir build/windows -j2 --timeout 120 --output-on-failure -LE "e2e"
+      - name: installer smoke test
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/install/smoke.ps1 -Binary "$(cygpath -w "$PWD/build/windows/llmgate.exe")"
+      - name: end-to-end flows
+        continue-on-error: true
+        run: ctest --test-dir build/windows -j1 --timeout 300 --output-on-failure -L "e2e"
