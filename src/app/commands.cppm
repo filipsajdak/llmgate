@@ -1159,6 +1159,19 @@ inline std::expected<control_call, std::string> prepare_control_call(context con
     return sign_control_call(where, std::move(*body));
 }
 
+inline std::string stop_body() {
+    return json::write(json::to_value(control::command{.action = std::string{control::stop_action}}));
+}
+
+inline bool ask_to_stop(context const& where) {
+    auto const call = sign_control_call(where, stop_body());
+    if (!call || !gateway_verified(call->address)) {
+        return false;
+    }
+    auto const answer = process::http_post(call->address.host, call->address.port, "/llmgate/control", call->headers, call->body, statusline_limit * 5);
+    return answer && answer->status == 200;
+}
+
 inline std::string reload_body() {
     return json::write(json::to_value(control::command{.action = std::string{control::reload_action}}));
 }
@@ -1264,14 +1277,14 @@ inline int run_stop(context const& where) {
         return exit_failure;
     }
     std::error_code ignored;
-    if (platform::stop_process(*pid) != 0) {
+    if (!ask_to_stop(where) && platform::stop_process(*pid) != 0) {
         std::filesystem::remove(detail::pid_file(), ignored);
         std::println("the recorded gateway was not running");
         return exit_failure;
     }
     auto const limit = where.settings.time.drain + stop_margin;
     if (!process::wait_until([&pid] { return !process::process_running(*pid); }, limit, stop_step)) {
-        std::println("the gateway has not stopped after {} s; it is still finishing requests (a second SIGTERM stops it at once)",
+        std::println("the gateway has not stopped after {} s; it is still finishing requests",
                      std::chrono::duration_cast<std::chrono::seconds>(limit).count());
         return exit_failure;
     }

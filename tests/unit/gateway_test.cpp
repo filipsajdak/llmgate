@@ -847,6 +847,24 @@ const suite gateway_suite = [] {
         expect(after.contains("claude-opus-v2@default") && after.contains("claude-extra-1@extra") && !after.contains("claude-opus-upstream@default")) << after;
     };
 
+    "capability_a_signed_stop_asks_the_serving_loop_to_end_and_an_unsigned_one_does_not"_test = [] {
+        world w{"upstream-token", "", std::nullopt, "identity-k"};
+        int requested = 0;
+        w.gateway.stop_with([&requested] { ++requested; });
+
+        auto const unsigned_call = w.ask(control_request(R"({"action":"stop"})", "wrong-key"));
+        auto const signed_call = w.ask(control_request(R"({"action":"stop"})", "identity-k"));
+
+        expect(unsigned_call.status == 401 && requested == 1);
+        expect(signed_call.status == 200 && signed_call.body.contains("stopping"));
+    };
+
+    "limit_a_signed_stop_is_refused_when_nothing_can_stop_the_gateway"_test = [] {
+        world w{"upstream-token", "", std::nullopt, "identity-k"};
+
+        expect(w.ask(control_request(R"({"action":"stop"})", "identity-k")).status == 409);
+    };
+
     "limit_a_reload_that_fails_validation_or_moves_the_listen_address_keeps_the_running_config"_test = [] {
         world w{"upstream-token", "", std::nullopt, "identity-k"};
         auto invalid = world::settings(w.upstream_listener.port(), {});

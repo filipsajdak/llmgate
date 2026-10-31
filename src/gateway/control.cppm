@@ -164,6 +164,7 @@ constexpr std::string pin_problem(pin const& wanted, std::span<target const> con
 }
 
 constexpr std::string_view reload_action = "reload";
+constexpr std::string_view stop_action = "stop";
 
 struct command {
     std::string action{};

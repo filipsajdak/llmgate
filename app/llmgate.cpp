@@ -174,6 +174,7 @@ int serve_on(async::reactor& loop, gateway::config const& settings, std::string 
     if (!stop || stop->install()) {
         return fail(exit_runtime, "cannot install the stop signal handlers");
     }
+    proxy.stop_with([&stop] { stop->request(); });
     std::println("llmgate listening on {}:{}", host, listening.port());
     std::fflush(stdout);
     report_abandoned(loop.run(httpio::serve_until(listening, proxy, httpio::limits{}, stop->descriptor(), settings.time.drain)), settings.time.drain);

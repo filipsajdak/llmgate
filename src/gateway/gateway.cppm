@@ -1199,6 +1199,7 @@ public:
         : proxy{loop, std::move(settings), std::move(access), single(credentials), tls_context} {}
 
     void reload_with(reload_source source) { reload_source_ = std::move(source); }
+    void stop_with(std::function<void()> request) { stop_request_ = std::move(request); }
     void use_overrides(control::overrides book) { overrides_ = std::move(book); }
     void capture_with(std::function<void(std::string const&)> sink) { capture_ = std::move(sink); }
     void persist_overrides_with(std::function<void(control::overrides const&)> sink) { persist_overrides_ = std::move(sink); }
@@ -1359,6 +1360,14 @@ private:
         return {.status = 200, .body = R"({"status":"ok"})"};
     }
 
+    routing::reply_body stop() {
+        if (!stop_request_) {
+            return routing::error_reply(409, "api_error", "this gateway cannot be stopped from here");
+        }
+        stop_request_();
+        return {.status = 200, .body = R"({"status":"stopping"})"};
+    }
+
     routing::reply_body apply_control(httpio::request const& incoming) {
         if (access_.identity_key.empty()) {
             return routing::error_reply(403, "permission_error", "the control endpoint needs an identity key");
@@ -1370,6 +1379,8 @@ private:
         }
         if (auto const asked = json::read_text<control::command>(incoming.body); asked && asked->action == control::reload_action) {
             return reload();
+        } else if (asked && asked->action == control::stop_action) {
+            return stop();
         }
         auto changed = overrides_;
         if (auto problem = control::apply(changed, incoming.body, targets_); !problem.empty()) {
@@ -2105,6 +2116,7 @@ private:
     static_credential missing_{std::string{}};
     std::deque<detail::provider_runtime> providers_;
     reload_source reload_source_;
+    std::function<void()> stop_request_;
     std::vector<selection::role_route> routes_;
     std::vector<control::target> targets_;
     control::overrides overrides_;
