@@ -3,7 +3,7 @@ set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 binary=${1:-$root/build/host/llmgate}
 binary=$(cd "$(dirname "$binary")" && pwd)/$(basename "$binary")
-work=$(mktemp -d)
+work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 trap 'rm -rf "$work"' EXIT
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config" LLMGATE_ORG_DIR="$work/org"
 mkdir -p "$HOME"

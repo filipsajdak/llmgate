@@ -21,7 +21,7 @@ case $host in
     copilot_base=${LLMGATE_COPILOT_BASE_URL:-https://api.githubcopilot.com} ;;
 esac
 
-work=$(mktemp -d)
+work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 chmod 700 "$work"
 token_file=${LLMGATE_TOKEN_FILE:-$work/copilot-token.json}
 case $(cd "$(dirname "$token_file")" 2>/dev/null && pwd)/ in

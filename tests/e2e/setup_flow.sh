@@ -3,7 +3,7 @@ set -eu
 PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
 binary=${1:?usage: setup_flow.sh <llmgate binary>}
-work=$(mktemp -d)
+work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
 mkdir -p "$HOME"
 trap '"$binary" --config "$work/llmgate.jsonc" stop >/dev/null 2>&1 || true; rm -rf "$work"' EXIT

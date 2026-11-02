@@ -384,6 +384,19 @@ int make_directory_private(char const* const path) noexcept {
     return ::chmod(path, owner_only_directory) == 0 ? 0 : errno;
 }
 
+int export_system_roots(void* const context, output_sink const sink) noexcept {
+#if defined(__APPLE__)
+    for (auto const* keychain : {"/System/Library/Keychains/SystemRootCertificates.keychain", "/Library/Keychains/System.keychain"}) {
+        char const* const argv[] = {"/usr/bin/security", "find-certificate", "-a", "-p", keychain, nullptr};
+        capture_process("/usr/bin/security", argv, context, sink);
+    }
+#else
+    (void)context;
+    (void)sink;
+#endif
+    return 0;
+}
+
 long current_user_id() noexcept {
     return static_cast<long>(::getuid());
 }

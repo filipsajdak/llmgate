@@ -4,7 +4,7 @@ PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
 root=$(cd "$(dirname "$0")/.." && cd .. && pwd)
 binary=${1:-$root/build/host/llmgate}
-work=$(mktemp -d)
+work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 trap 'kill $tool_pid $gateway_pid 2>/dev/null || true; wait 2>/dev/null || true; rm -rf "$work"' EXIT
 
 FAKE_REQUIRE_AUTHORIZATION="Bearer fake-bedrock-key" FAKE_TOOL_COMMAND="echo converse-ran" python3 "$root/tests/e2e/fake_bedrock.py" "$work/tool.port" "$work/tool.log" tool &

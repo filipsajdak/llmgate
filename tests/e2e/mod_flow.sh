@@ -5,7 +5,7 @@ export PYTHONPATH
 root=$(cd "$(dirname "$0")/../.." && pwd)
 binary=${1:?usage: mod_flow.sh <llmgate binary>}
 command -v claude > /dev/null 2>&1 || { echo "skip: claude is not installed"; exit 77; }
-work=$(mktemp -d)
+work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
 mkdir -p "$HOME"
 failures=0

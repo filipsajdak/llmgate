@@ -55,6 +55,7 @@ int append_to_file(char const* target, char const* data, size_t size, unsigned m
 int file_mode(char const* path, unsigned* mode) noexcept;
 bool can_write_path(char const* path) noexcept;
 int make_directory_private(char const* path) noexcept;
+int export_system_roots(void* context, output_sink sink) noexcept;
 
 long current_user_id() noexcept;
 long current_process_id() noexcept;

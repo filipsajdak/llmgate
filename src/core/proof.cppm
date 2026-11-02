@@ -37,6 +37,38 @@ constexpr std::string identity_message(std::string_view const scope, std::string
     return message;
 }
 
+constexpr std::int64_t control_window_seconds = 60;
+constexpr std::size_t longest_nonce = 64;
+constexpr std::size_t most_remembered_nonces = 4096;
+
+constexpr std::string control_challenge(std::int64_t const sent, std::string_view const nonce, std::string_view const body) {
+    std::array<char, 24> digits{};
+    auto const end = std::to_chars(digits.data(), digits.data() + digits.size(), sent).ptr;
+    std::string message{digits.data(), end};
+    message += '|';
+    message += nonce;
+    message += '|';
+    message += body;
+    return message;
+}
+
+class replay_guard {
+public:
+    bool admit(std::string_view const nonce, std::int64_t const sent, std::int64_t const now) {
+        if (nonce.empty() || nonce.size() > longest_nonce || sent < now - control_window_seconds || sent > now + control_window_seconds) {
+            return false;
+        }
+        std::erase_if(seen_, [now](auto const& entry) { return entry.second < now - control_window_seconds; });
+        if (seen_.size() >= most_remembered_nonces) {
+            return false;
+        }
+        return seen_.emplace(std::string{nonce}, sent).second;
+    }
+
+private:
+    std::map<std::string, std::int64_t, std::less<>> seen_;
+};
+
 inline std::array<unsigned char, sha256_bytes> sha256(std::string_view const data) {
     std::array<unsigned char, sha256_bytes> digest{};
     unsigned int length = 0;

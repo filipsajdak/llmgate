@@ -167,6 +167,14 @@ const suite claude_suite = [] {
         expect(unit.contains(R"(ExecStart="/bin/llmgate" --config "/c.jsonc" serve)") && unit.contains("Restart=on-failure"));
     };
 
+    "capability_the_task_scheduler_definition_runs_serve_at_logon_for_the_user_without_elevation"_test = [] {
+        auto const task = claude::task_scheduler_xml("C:\\Users\\a&b\\llmgate.exe", "C:\\Users\\a&b\\c.jsonc", "PC\\a&b");
+
+        expect(task.contains("<Command>C:\\Users\\a&amp;b\\llmgate.exe</Command>") && task.contains(R"(<Arguments>--config "C:\Users\a&amp;b\c.jsonc" serve</Arguments>)"));
+        expect(task.contains("<LogonTrigger>") && task.contains("<UserId>PC\\a&amp;b</UserId>") && task.contains("<RunLevel>LeastPrivilege</RunLevel>"));
+        expect(task.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>") && !task.contains("a&b"));
+    };
+
     "defect_service_files_escape_paths_that_would_break_the_file"_test = [] {
         auto const plist = claude::launchd_plist("dev.llmgate", "/a&b/<llmgate>", "/c.jsonc", "/l.log");
         auto const unit = claude::systemd_unit("/my apps/50%/\"x\"", "/$HOME/c.jsonc");

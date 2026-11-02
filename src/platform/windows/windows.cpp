@@ -9,6 +9,7 @@
 #include <io.h>
 #include <process.h>
 #include <sddl.h>
+#include <wincrypt.h>
 
 #include <atomic>
 #include <cstdio>
@@ -655,6 +656,9 @@ void set_environment_variable(char const* const name, char const* const value) n
 }
 
 char const* home_directory() noexcept {
+    if (auto const* home = std::getenv("HOME"); home != nullptr && *home != '\0') {
+        return home;
+    }
     if (auto const* profile = std::getenv("USERPROFILE")) {
         return profile;
     }
@@ -754,6 +758,27 @@ int make_directory_private(char const* const path) noexcept {
                    ERROR_SUCCESS
                ? 0
                : last_win_error();
+}
+
+int export_system_roots(void* const context, output_sink const sink) noexcept {
+    HCERTSTORE const store = CertOpenSystemStoreW(0, L"ROOT");
+    if (store == nullptr) {
+        return last_win_error();
+    }
+    PCCERT_CONTEXT certificate = nullptr;
+    while ((certificate = CertEnumCertificatesInStore(store, certificate)) != nullptr) {
+        DWORD length = 0;
+        constexpr DWORD format = CRYPT_STRING_BASE64HEADER | CRYPT_STRING_NOCR;
+        if (!CryptBinaryToStringA(certificate->pbCertEncoded, certificate->cbCertEncoded, format, nullptr, &length) || length == 0) {
+            continue;
+        }
+        std::string pem(length, '\0');
+        if (CryptBinaryToStringA(certificate->pbCertEncoded, certificate->cbCertEncoded, format, pem.data(), &length)) {
+            sink(context, pem.data(), length);
+        }
+    }
+    CertCloseStore(store, 0);
+    return 0;
 }
 
 long current_user_id() noexcept {

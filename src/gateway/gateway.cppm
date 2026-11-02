@@ -1199,6 +1199,7 @@ public:
         : proxy{loop, std::move(settings), std::move(access), single(credentials), tls_context} {}
 
     void reload_with(reload_source source) { reload_source_ = std::move(source); }
+    void stop_with(std::function<void()> request) { stop_request_ = std::move(request); }
     void use_overrides(control::overrides book) { overrides_ = std::move(book); }
     void capture_with(std::function<void(std::string const&)> sink) { capture_ = std::move(sink); }
     void persist_overrides_with(std::function<void(control::overrides const&)> sink) { persist_overrides_ = std::move(sink); }
@@ -1359,17 +1360,42 @@ private:
         return {.status = 200, .body = R"({"status":"ok"})"};
     }
 
-    routing::reply_body apply_control(httpio::request const& incoming) {
+    routing::reply_body stop() {
+        if (!stop_request_) {
+            return routing::error_reply(409, "api_error", "this gateway cannot be stopped from here");
+        }
+        stop_request_();
+        return {.status = 200, .body = R"({"status":"stopping"})"};
+    }
+
+    std::optional<routing::reply_body> refuse_control(httpio::request const& incoming) {
         if (access_.identity_key.empty()) {
             return routing::error_reply(403, "permission_error", "the control endpoint needs an identity key");
         }
         auto const sent = incoming.head.fields.find("x-llmgate-proof").value_or("");
-        auto const expected = proof::hmac_sha256_hex(access_.identity_key, proof::identity_message(std::format("{}/control", access_.identity_scope), incoming.body));
+        auto const nonce = std::string{incoming.head.fields.find("x-llmgate-nonce").value_or("")};
+        std::int64_t when = 0;
+        auto const stamp = incoming.head.fields.find("x-llmgate-time").value_or("");
+        std::from_chars(stamp.data(), stamp.data() + stamp.size(), when);
+        auto const expected = proof::hmac_sha256_hex(access_.identity_key,
+                                                      proof::identity_message(std::format("{}/control", access_.identity_scope), proof::control_challenge(when, nonce, incoming.body)));
         if (!routing::secrets_equal(sent, expected)) {
             return routing::error_reply(401, "authentication_error", "invalid or missing control proof");
         }
+        if (!replays_.admit(nonce, when, clock_())) {
+            return routing::error_reply(401, "authentication_error", "the control request is stale or was already used");
+        }
+        return std::nullopt;
+    }
+
+    routing::reply_body apply_control(httpio::request const& incoming) {
+        if (auto refused = refuse_control(incoming)) {
+            return std::move(*refused);
+        }
         if (auto const asked = json::read_text<control::command>(incoming.body); asked && asked->action == control::reload_action) {
             return reload();
+        } else if (asked && asked->action == control::stop_action) {
+            return stop();
         }
         auto changed = overrides_;
         if (auto problem = control::apply(changed, incoming.body, targets_); !problem.empty()) {
@@ -2105,6 +2131,8 @@ private:
     static_credential missing_{std::string{}};
     std::deque<detail::provider_runtime> providers_;
     reload_source reload_source_;
+    std::function<void()> stop_request_;
+    proof::replay_guard replays_;
     std::vector<selection::role_route> routes_;
     std::vector<control::target> targets_;
     control::overrides overrides_;

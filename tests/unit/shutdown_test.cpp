@@ -146,15 +146,19 @@ async::task<trace> real_signal_stops_the_loop(async::reactor& loop) {
     auto stop = shutdown::stop_signal::make();
     slow_handler handler{.loop = &loop, .delay = async::duration{0}, .record = &record};
     (void)stop->install();
+#if defined(_WIN32)
+    stop->request();
+#else
     std::raise(SIGTERM);
+#endif
     co_await run_server(*server, handler, *stop, long_drain, record);
     co_return record;
 }
 
 bool default_disposition(int const number) {
-    struct sigaction current{};
-    ::sigaction(number, nullptr, &current);
-    return current.sa_handler == SIG_DFL;
+    auto const previous = std::signal(number, SIG_DFL);
+    std::signal(number, previous);
+    return previous == SIG_DFL;
 }
 
 const suite shutdown_suite = [] {

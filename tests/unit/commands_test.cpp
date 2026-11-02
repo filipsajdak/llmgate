@@ -53,7 +53,7 @@ struct sandbox {
 
     bool unit_written() const {
         return std::filesystem::exists(root / "home" / "Library" / "LaunchAgents" / "dev.llmgate.plist") ||
-               std::filesystem::exists(root / "config" / "systemd" / "user" / "llmgate.service");
+               std::filesystem::exists(root / "config" / "systemd" / "user" / "llmgate.service") || std::filesystem::exists(root / "config" / "llmgate-task.xml");
     }
 };
 
@@ -75,6 +75,20 @@ const suite commands_suite = [] {
         expect(runs >= 1_i);
         expect(std::filesystem::exists(box.root / "profile" / "settings.json"));
         expect(std::filesystem::exists(box.root / "profile" / "commands" / "gateway.md"));
+    };
+
+    "capability_setup_with_service_and_remove_unloads_the_service_and_deletes_its_unit"_test = [] {
+        sandbox box;
+        auto where = box.context();
+        where.options.service = true;
+        commands::run_setup(where);
+        auto const installed = box.unit_written();
+        runs = 0;
+        where.options.remove = true;
+
+        expect(commands::run_setup(where) == 0_i);
+
+        expect(installed && !box.unit_written() && runs >= 1_i);
     };
 
     "limit_setup_reports_a_service_that_cannot_be_loaded_and_exits_non_zero"_test = [] {

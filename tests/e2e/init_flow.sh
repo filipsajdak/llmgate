@@ -2,7 +2,7 @@
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 binary=${1:-$root/build/host/llmgate}
-work=$(mktemp -d)
+work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 export XDG_STATE_HOME="$work/state"
 trap 'kill $upstream_pid 2>/dev/null || true; wait 2>/dev/null || true; rm -rf "$work"' EXIT
 failures=0

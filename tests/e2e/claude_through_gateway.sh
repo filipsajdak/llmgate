@@ -13,7 +13,7 @@ if [ "$defect" = tool ]; then
   tool_flags="--allowedTools Bash"
   expected="Tool finished: all good"
 fi
-work=$(mktemp -d)
+work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 trap 'kill $upstream_pid $gateway_pid 2>/dev/null || true; rm -rf "$work"' EXIT
 
 python3 "$root/tests/e2e/fake_anthropic.py" "$work/upstream.port" "$work/upstream.log" "$defect" &
