@@ -6,7 +6,7 @@ namespace llmgate::reflect::detail {
 
 std::error_category const& interned_category(char const* const key, std::error_category const* (*make)()) {
     static std::mutex guard;
-    static std::map<std::string, std::error_category const*, std::less<>> known;
+    static auto& known = *new std::map<std::string, std::error_category const*, std::less<>>;
     std::lock_guard const lock{guard};
     auto found = known.find(std::string_view{key});
     if (found == known.end()) {
