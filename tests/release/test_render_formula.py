@@ -32,6 +32,11 @@ class RenderFormula(unittest.TestCase):
         with self.assertRaises(ValueError):
             render_formula.render(SUMS, "v9.9.9")
 
+    def test_limit_a_windows_archive_in_the_sums_does_not_reach_the_formula(self):
+        text = render_formula.render(SUMS + f"{DIGEST_B}  llmgate-1.2.3-windows-x86_64.zip\n", "v1.2.3")
+        self.assertNotIn("windows", text)
+        self.assertEqual(text, render_formula.render(SUMS, "v1.2.3"))
+
     def test_limit_a_malformed_digest_is_ignored(self):
         with self.assertRaises(ValueError):
             render_formula.render("zz  llmgate-1.2.3-darwin-arm64.tar.gz\n", "v1.2.3")

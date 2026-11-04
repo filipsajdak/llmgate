@@ -10,7 +10,20 @@ name="llmgate-$version-$os-$arch"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/$name" "$out"
-cp "$bin" "$stage/$name/llmgate"
+if [ "$os" = windows ]; then
+  cp "$bin" "$stage/$name/llmgate.exe"
+else
+  cp "$bin" "$stage/$name/llmgate"
+fi
 cp "$root/LICENSE" "$root/README.md" "$stage/$name/"
-tar -C "$stage" -czf "$out/$name.tar.gz" "$name"
-echo "$out/$name.tar.gz"
+if [ "$os" = windows ]; then
+  python3 -I -c 'import pathlib, sys, zipfile
+stage, name, target = sys.argv[1:]
+with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+    for path in sorted(pathlib.Path(stage, name).iterdir()):
+        archive.write(path, f"{name}/{path.name}")' "$stage" "$name" "$out/$name.zip"
+  echo "$out/$name.zip"
+else
+  tar -C "$stage" -czf "$out/$name.tar.gz" "$name"
+  echo "$out/$name.tar.gz"
+fi
