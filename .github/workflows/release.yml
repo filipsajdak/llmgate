@@ -85,8 +85,62 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
+  windows:
+    needs: prepare
+    timeout-minutes: 90
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: msys2 {0}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            diffutils
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-python
+      - run: cmake --preset release-windows -DLLMGATE_VERSION="$VERSION"
+      - run: cmake --build --preset release-windows
+      - run: tools/check_relocatable.sh build/release-windows/llmgate.exe
+      - name: Run outside the build environment
+        shell: cmd
+        run: |
+          set PATH=%SystemRoot%\System32;%SystemRoot%
+          build\release-windows\llmgate.exe --version > version.txt
+          type version.txt
+      - run: test "$(cat version.txt | tr -d '\r')" = "llmgate $VERSION"
+      - run: tools/package_release.sh build/release-windows/llmgate.exe windows x86_64 "$VERSION" dist
+      - name: Install the archive with install.ps1
+        shell: powershell
+        run: |
+          $env:Path = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
+          $d = Join-Path $env:RUNNER_TEMP 'release-check'
+          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          $zip = Get-ChildItem dist -Filter 'llmgate-*.zip' | Select-Object -First 1
+          Copy-Item $zip.FullName $d
+          $hash = (Get-FileHash -Algorithm SHA256 $zip.FullName).Hash.ToLowerInvariant()
+          "$hash  $($zip.Name)" | Set-Content (Join-Path $d 'SHA256SUMS.txt')
+          & install/install.ps1 -Version $env:VERSION -BaseUrl $d -Prefix (Join-Path $d 'prefix') -NoInit -NoService -Yes
+          & (Join-Path $d 'prefix\llmgate.exe') --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: llmgate-windows-x86_64
+          path: dist/*.zip
+          if-no-files-found: error
+
   publish:
-    needs: [prepare, macos, linux]
+    needs: [prepare, macos, linux, windows]
     timeout-minutes: 15
     runs-on: ubuntu-24.04
     permissions:
@@ -106,7 +160,7 @@ jobs:
       - name: Checksums and Homebrew formula
         run: |
           cd dist
-          sha256sum llmgate-*.tar.gz > SHA256SUMS.txt
+          sha256sum llmgate-*.tar.gz llmgate-*.zip > SHA256SUMS.txt
           cat SHA256SUMS.txt
           cd ..
           python3 tools/render_formula.py dist/SHA256SUMS.txt "v$VERSION" > dist/llmgate.rb
