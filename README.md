@@ -2,7 +2,7 @@
 
 A gateway that lets Claude Code use any provider, account and model: GitHub Copilot (github.com or an enterprise host), a ChatGPT plan (Codex models), an Anthropic account or key held by Claude Code itself, any service that speaks the Anthropic Messages API with a key or none, and OpenAI chat-completions servers (Azure OpenAI, vLLM, Grok). It routes by role, class and signal with fallback, keeps a usage ledger and a scorecard, and nothing is dropped silently. AWS Bedrock is planned and not built yet. C++26 with static reflection, Apache-2.0.
 
-Status: the first release is `v0.1.0`. Verified with the real Claude Code CLI against a scripted upstream (`tests/e2e/claude_through_gateway.sh`) and through the compatibility scenarios on real GitHub Copilot and ChatGPT Plus accounts; the macOS and Linux binaries are built in CI for arm64 and x86-64, native Windows x86-64 is built in CI as a zip (run `install/install.ps1`). Your first run needs your own sign-in: `llmgate init` walks through it.
+Status: the latest release is `v0.2.0`. Verified with the real Claude Code CLI against a scripted upstream (`tests/e2e/claude_through_gateway.sh`) and through the compatibility scenarios on real GitHub Copilot and ChatGPT Plus accounts; the macOS and Linux binaries are built in CI for arm64 and x86-64, and native Windows x86-64 is built in CI as a zip (run `install/install.ps1`). Your first run needs your own sign-in: `llmgate init` walks through it.
 
 ## Install from a release
 
