@@ -2,15 +2,23 @@
 
 A gateway that lets Claude Code use any provider, account and model: GitHub Copilot (github.com or an enterprise host), a ChatGPT plan (Codex models), an Anthropic account or key held by Claude Code itself, any service that speaks the Anthropic Messages API with a key or none, and OpenAI chat-completions servers (Azure OpenAI, vLLM, Grok). It routes by role, class and signal with fallback, keeps a usage ledger and a scorecard, and nothing is dropped silently. AWS Bedrock is planned and not built yet. C++26 with static reflection, Apache-2.0.
 
-Status: the first release is `v0.1.0`. Verified with the real Claude Code CLI against a scripted upstream (`tests/e2e/claude_through_gateway.sh`) and through the compatibility scenarios on real GitHub Copilot and ChatGPT Plus accounts; the macOS and Linux binaries are built in CI for arm64 and x86-64, native Windows is not built yet (use WSL). Your first run needs your own sign-in: `llmgate init` walks through it.
+Status: the first release is `v0.1.0`. Verified with the real Claude Code CLI against a scripted upstream (`tests/e2e/claude_through_gateway.sh`) and through the compatibility scenarios on real GitHub Copilot and ChatGPT Plus accounts; the macOS and Linux binaries are built in CI for arm64 and x86-64, native Windows x86-64 is built in CI as a zip (run `install/install.ps1`). Your first run needs your own sign-in: `llmgate init` walks through it.
 
 ## Install from a release
 
-Needs a published release (see the repository's Releases page). The binaries depend on nothing outside the system: macOS arm64 and x86-64, Linux x86-64 and arm64 (Windows through WSL for now).
+Needs a published release (see the repository's Releases page). The binaries depend on nothing outside the system: macOS arm64 and x86-64, Linux x86-64 and arm64, and Windows x86-64 (system DLLs only).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/filipsajdak/llmgate/main/install/install.sh | sh
 ```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/filipsajdak/llmgate/main/install/install.ps1 | iex
+```
+
+It downloads `llmgate-VERSION-windows-x86_64.zip`, checks it against `SHA256SUMS.txt`, installs into `%LOCALAPPDATA%\Programs\llmgate` and asks before adding that folder to your user PATH, registering a Task Scheduler task that starts the gateway at logon, and running Claude Code's installer. Options: `-Version`, `-Prefix`, `-DryRun`, `-Uninstall`, `-Purge`, `-Force`, `-Yes`, `-NoInit`, `-NoService`, `-WithClaude`, `-Org`, `-OrgRef`; `-Help` lists them. The binary is unsigned, so SmartScreen may warn.
 
 The script downloads the archive for your system, checks it against the release's `SHA256SUMS.txt`, installs `llmgate` into `~/.local/bin` (the old binary stays as `llmgate.previous`), offers Claude Code's official installer if `claude` is missing, and runs `llmgate init`. It never edits a shell profile. `--dry-run` prints every step and changes nothing; `--version X.Y.Z`, `--prefix DIR`, `--no-init`, `--with-claude`, `--force` adjust it; `--uninstall` removes the binary and `--uninstall --purge` also removes llmgate's configuration, state and profiles (never `~/.claude`). `sh install/install.sh --help` lists everything. The steps are specified in [docs/llmgate-rollout.md](docs/llmgate-rollout.md).
 
@@ -31,10 +39,10 @@ llmgate claude         # starts the gateway if it is down, then runs Claude Code
 | `llmgate mod` | Writes the mod that ships inside the binary to `~/.local/share/llmgate/mod/DIGEST` (only what differs) and prints that directory, the one `llmgate claude` passes as `--plugin-dir`; use it to load the mod elsewhere: `claude --plugin-dir "$(llmgate mod)"`. Fails when `claude.mod` is `false` |
 | `llmgate claude [args]` | Sets the environment Claude Code needs, starts the gateway on demand (detached, logging to `~/.local/state/llmgate/gateway.log`, never killing anything) and runs `claude` |
 | `llmgate setup [--dry-run]` | Creates or updates the profile: private deny rules for `.env` files, secrets, the gateway config directory and `~/.claude`, `effortLevel` if unset, and the status line. Existing settings are merged, never overwritten; a `settings.json` that is not plain JSON is refused untouched |
-| `llmgate setup --service` | Also installs a launchd agent (macOS) or systemd user unit (Linux) that keeps the gateway running |
+| `llmgate setup --service` | Also installs a launchd agent (macOS), systemd user unit (Linux) or per-user Task Scheduler task (Windows) that keeps the gateway running; `--remove` takes it away |
 | `llmgate setup --vscode FILE` | Merges `claudeCode.environmentVariables` and `claudeCode.disableLoginPrompt` into a VS Code settings file (plain JSON only) |
 | `llmgate env [--json\|--vscode]` | Prints the environment as shell exports, JSON or a VS Code settings snippet |
-| `llmgate status` / `llmgate stop` | Shows whether the gateway is up and its counters; `stop` sends SIGTERM to a gateway that `llmgate claude` started and waits until it has exited |
+| `llmgate status` / `llmgate stop` | Shows whether the gateway is up and its counters; `stop` asks the gateway to exit through its signed control endpoint (falling back to SIGTERM) and waits until it has exited |
 | `llmgate usage [--days N] [--json]` | Per-day, per-model token report from the usage ledger, with the budget standing; works without the gateway running |
 | `llmgate doctor [--offline] [--json]` | Checks the setup and prints PASS, WARN or FAIL per check with a one-line remedy; exits non-zero on any FAIL. No secret is printed. `--offline` skips the GitHub calls |
 | `llmgate quota [--json]` | GitHub Copilot plan and quota: remaining of total per allowance and the reset date |
