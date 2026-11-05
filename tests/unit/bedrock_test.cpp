@@ -109,6 +109,38 @@ suite<"bedrock_request"> request_tests = [] {
         expect(std::get<js::array>(js::at(without, {"system"})->data).size() == 1_u && std::get<js::array>(js::at(without, {"messages"})->data).size() == 1_u);
     };
 
+    "capability_the_vertex_dialect_sets_its_version_drops_context_management_and_counts_it"_test = [] {
+        auto const done = br::translate_request(R"({"model":"m","stream":true,"context_management":{"edits":[]},"max_tokens":5,"messages":[]})", "", {},
+                                                {.version = br::vertex_anthropic_version, .drop_context_management = true});
+        auto const body = parsed(done->body);
+
+        expect(text_of(body, {"anthropic_version"}) == "vertex-2023-10-16" && js::at(body, {"context_management"}) == nullptr && js::at(body, {"model"}) == nullptr);
+        expect(done->dropped_fields == std::vector<std::string>{"context_management"});
+    };
+
+    "capability_the_vertex_dialect_keeps_the_stream_flag_and_the_bedrock_dialect_drops_it"_test = [] {
+        auto const vertex = br::translate_request(R"({"model":"m","stream":true,"messages":[]})", "", {}, {.version = br::vertex_anthropic_version, .keep_stream = true});
+        auto const bedrock = translated_of(R"({"model":"m","stream":true,"messages":[]})");
+
+        expect(js::at(parsed(vertex->body), {"stream"}) != nullptr && vertex->client_streams);
+        expect(js::at(parsed(bedrock.body), {"stream"}) == nullptr && bedrock.client_streams);
+    };
+
+    "capability_the_bedrock_dialect_keeps_context_management_and_forced_tool_choice"_test = [] {
+        auto const body = parsed(translated_of(R"({"model":"m","stream":true,"context_management":{"edits":[]},"tool_choice":{"type":"any"},"messages":[]})").body);
+
+        expect(js::at(body, {"context_management"}) != nullptr && text_of(body, {"tool_choice", "type"}) == "any");
+    };
+
+    "capability_a_forced_tool_choice_becomes_auto_only_when_the_dialect_asks_and_auto_is_left_alone"_test = [] {
+        constexpr br::dialect asking{.version = br::vertex_anthropic_version, .auto_tool_choice = true};
+        auto const forced = br::translate_request(R"({"stream":true,"tool_choice":{"type":"tool","name":"x"},"messages":[]})", "", {}, asking);
+        auto const plain = br::translate_request(R"({"stream":true,"tool_choice":{"type":"auto"},"messages":[]})", "", {}, asking);
+
+        expect(text_of(parsed(forced->body), {"tool_choice", "type"}) == "auto" && forced->dropped_fields == std::vector<std::string>{"tool_choice"});
+        expect(plain->dropped_fields.empty() && text_of(parsed(plain->body), {"tool_choice", "type"}) == "auto");
+    };
+
     "limit_a_body_that_is_not_a_json_object_is_refused"_test = [] {
         expect(!br::translate_request("[]", "", {}).has_value() && !br::translate_request("{", "", {}).has_value());
     };
