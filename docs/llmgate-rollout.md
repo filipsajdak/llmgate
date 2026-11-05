@@ -273,6 +273,37 @@ The proxy URL parsing, the `no_proxy` matcher and the CONNECT answer parser are 
 | Launcher | sh | PowerShell |
 | CI | macOS and Linux | `windows-latest` |
 
+## Vertex (phase 1 slice 10)
+
+Decisions of 2026-11-05: a static bearer key first (a gcloud token command and a service-account file come later), a preset with overrides, an allowlist for `anthropic-beta` tokens and a dropped, counted `context_management`. The company gateway's Vertex endpoint serves Claude models over `:rawPredict` and `:streamRawPredict`, which is also Google's own shape for Claude on Vertex AI.
+
+Live findings, 2026-11-05, through the company endpoint with a Claude model and invented prompts (one request each):
+
+| Probe | Answer |
+|---|---|
+| plain request, `anthropic_version: "vertex-2023-10-16"`, no `model` | 200, a Messages answer with `usage` including cache fields |
+| `:streamRawPredict` with `stream: true` | 200, ordinary SSE (`event:` and `data:` lines, `ping`), not an event stream |
+| `stream` in the body | accepted, and it is what decides: `:streamRawPredict` without it answers one JSON message, `:rawPredict` with it answers a `vertex_event` stream |
+| `model` in the body | 400 `model: Extra inputs are not permitted` |
+| no `anthropic_version` | 400 `anthropic_version: Field required` |
+| a `system` message after an assistant turn | 400 (the same rule as Bedrock, so V9's fold applies) |
+| `context_management` | 400 `Extra inputs are not permitted` (Bedrock accepts it) |
+| `cache_control` on a system block, `thinking: adaptive`, `output_config.effort`, `metadata` | 200 |
+| `tool_choice` `any` or `tool` | 400 `not supported for this model`; `auto` and no choice work, and a tool call answers `tool_use` |
+| the 13 `anthropic_beta` tokens Bedrock documents | all 200 |
+| `advisor-tool-2026-03-01`, `prompt-caching-2024-07-31`, `extended-cache-ttl-2025-04-11` | 400 `Unexpected value(s) ... for the anthropic_beta parameter` |
+
+| # | Behaviour |
+|---|---|
+| VT1 | `protocol: vertex_messages` sends a Claude request to a Vertex `:streamRawPredict` operation. Its default `messages_path` is `/v1/projects/{project}/locations/{region}/publishers/anthropic/models/{model}:streamRawPredict`, with the model percent-encoded as in V1. |
+| VT2 | `preset: vertex` with `project` and `region` (for example `europe-west1`, or `global`) fills `base_url` as `https://REGION-aiplatform.googleapis.com` (`https://aiplatform.googleapis.com` for `global`) and the protocol. `base_url` and `messages_path` override both, which is how a company gateway is configured. The key is read from `VERTEX_API_KEY` unless `auth` or `static_token_env` says otherwise and is sent as `Authorization: Bearer`. |
+| VT3 | The body is the client's with `model` removed (`stream` stays: it decides whether the answer streams), `anthropic_version` set to `vertex-2023-10-16` when absent, `context_management` removed and counted by name, and the `anthropic-beta` header tokens moved into an `anthropic_beta` array. Only tokens in `vertex.betas` (default: the built-in list of the 13 tokens above) are kept; any other is dropped and counted. |
+| VT4 | A `system` message inside the conversation is folded as in V9. A `tool_choice` of `any` or `tool` is passed on unchanged: the model's refusal reaches Claude Code in the upstream's words, and `vertex.drop_forced_tool_choice` turns it into `auto` for a model that refuses it. |
+| VT5 | A streamed request goes to `:streamRawPredict` and its answer is Anthropic SSE, passed through the existing Messages path with its guard and usage reader. A request that does not stream (Claude Code's title and classifier calls in `-p` runs) goes to `:rawPredict` and its JSON message is passed through whole. |
+| VT6 | A non-2xx answer is the upstream's Anthropic error body and passes through with its status. |
+| VT7 | `doctor` checks that a `vertex` provider has a project (unless `messages_path` is set), a region and a key, and never prints the key. |
+| VT8 | Tested with a scripted Vertex server (`tests/e2e/vertex_flow.sh`, `fake_vertex.py`) that checks the path, the bearer key, the body shape and the 400s above, and by one live headless Claude Code turn with a Bash tool call through the company endpoint (2026-11-05: the preset with `region` and `project` built the path, the turn ended with the tool result `vertex-live-ok` in two turns, 22,408 tokens written to and 11,113 read from the cache). The first live attempt failed because the first version refused non-streamed requests, which `claude -p` sends; `rawPredict` is the fix. |
+
 ## Windows port (phase 1 slice 8)
 
 Decisions of 2026-10-30: three milestones, a `WSAPoll` reactor (L17), an explicit per-user ACL on private files, and an installer that asks before touching PATH or the Task Scheduler. Windows here means native Windows built with MSYS2 UCRT64 GCC 16.2 (X2), not WSL.
@@ -323,4 +354,5 @@ Milestones, each its own pull request:
 | 8b | Windows process, service, trust and installer (WIN5, WIN9 to WIN11): `llmgate stop` through the signed control endpoint with a timestamp and one-time nonce (replay-proof), `setup --service` and `--remove` through Task Scheduler (`claude::task_scheduler_xml`), `platform::export_system_roots` (CryptoAPI ROOT store, macOS keychain behind the same call), `install/install.ps1` with `tests/install/smoke.ps1`, `process_test` and `shutdown_test` on Windows, `HOME` honoured, and eight shell e2e flows green under MSYS2. It found that config edits kept the file open while replacing it, which Windows refuses. Not run by a person: Task Scheduler registration and the CryptoAPI export on a real desktop. |
 | 8c | Windows release zip (WIN12): preset `release-windows` (static OpenSSL, `-static`), `tools/check_relocatable.sh` lists the imported DLLs and refuses any outside a system set, the exe runs with only the Windows directories on `PATH`, `install.ps1` installs the zip, and the publish job checksums and attests it with the other archives; the formula ignores it. A branch trial ([run 41911707590](https://github.com/filipsajdak/llmgate/actions/runs/41911707590)) produced all five archives, `SHA256SUMS.txt` and `llmgate.rb`, and `gh attestation verify` accepts the zip. It also found that the static macOS link needs `-liconv` with GCC 16.2, now fixed. Not done: a tag release and the Windows colleague run. |
 | 1 (v0.2.0) | `v0.2.0` is published ([release](https://github.com/filipsajdak/llmgate/releases/tag/v0.2.0), run [41927847918](https://github.com/filipsajdak/llmgate/actions/runs/41927847918)): five archives (macOS arm64 and x86-64, Linux x86-64 and arm64, Windows x86-64 zip), `SHA256SUMS.txt`, `llmgate.rb`, attestations. Installed from the real URLs on macOS arm64 in a throwaway home (checksum ok, only system libraries, `doctor --offline` runs). The tap carries the 0.2.0 formula; `brew install` on this Mac is refused until the tap is trusted (`brew trust filipsajdak/llmgate`), a Homebrew policy and not a formula defect, so the install check is still open. Not run by a person: the Windows zip and `install.ps1` on a desktop, macOS x86-64, Linux x86-64. |
+| 10 | Vertex (VT1 to VT8): `protocol vertex_messages` and `preset vertex` with `region`, `project` and `vertex` options, the dialect of `llmgate.bedrock_request` (version, context_management dropped, forced tool_choice to auto on request, `stream` kept), `:streamRawPredict` or `:rawPredict` by whether the client streams, `tests/e2e/vertex_flow.sh`. Live check on 2026-11-05 through the company endpoint with Claude Sonnet 5.5: a headless Claude Code turn with a Bash tool call finished. Not tried: Google's own endpoint, a gcloud token command or a service-account file. |
 | 9 | C++26 tour and colleague runs (G1 to G9): `docs/cpp26-tour.md` with a link and symbol gate (`tools/check_tour.py`, `ctest -L lint`, CI lint job), absent and supported capability probes for the facilities it names, `docs/colleague-run.md`. The macOS colleague run is still to do: it needs the person's name and a release; the Windows run waits for slice 8. |
