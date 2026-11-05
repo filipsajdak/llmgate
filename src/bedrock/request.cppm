@@ -9,6 +9,14 @@ import llmgate.text;
 export namespace llmgate::bedrock {
 
 constexpr std::string_view anthropic_version = "bedrock-2023-05-31";
+constexpr std::string_view vertex_anthropic_version = "vertex-2023-10-16";
+
+struct dialect {
+    std::string_view version = anthropic_version;
+    bool drop_context_management = false;
+    bool auto_tool_choice = false;
+    bool keep_stream = false;
+};
 
 constexpr auto documented_betas = std::to_array<std::string_view>(
     {"computer-use-2024-10-22", "computer-use-2025-01-24", "computer-use-2025-11-24", "token-efficient-tools-2025-02-19", "interleaved-thinking-2025-05-14", "output-128k-2025-02-19",
@@ -19,6 +27,7 @@ struct translated {
     std::string body{};
     bool client_streams = false;
     std::vector<std::string> dropped_betas{};
+    std::vector<std::string> dropped_fields{};
 };
 
 struct refusal {
@@ -53,8 +62,8 @@ constexpr bool allowed(std::string_view const token, options const& chosen) {
     return std::ranges::contains(chosen.betas, token);
 }
 
-constexpr bool carried_in_the_url(std::string_view const name) {
-    return name == "model" || name == "stream" || name == "anthropic_version" || name == "anthropic_beta";
+constexpr bool carried_in_the_url(std::string_view const name, dialect const& chosen) {
+    return name == "model" || (name == "stream" && !chosen.keep_stream) || name == "anthropic_version" || name == "anthropic_beta";
 }
 
 constexpr json::array text_blocks_of(json::value const& content) {
@@ -133,7 +142,28 @@ constexpr json::array split_betas(std::string_view const header, options const& 
     return kept;
 }
 
-constexpr void copy_members(json::object const& members, folded messages, json::object& out) {
+constexpr bool forced_tool_choice(json::value const& choice) {
+    auto const type = blocks::text_member(choice, "type");
+    return type == "any" || type == "tool";
+}
+
+constexpr bool leaves_out(std::string_view const name, dialect const& chosen, std::vector<std::string>& dropped) {
+    bool const left = carried_in_the_url(name, chosen) || (chosen.drop_context_management && name == "context_management");
+    if (left && !carried_in_the_url(name, chosen)) {
+        dropped.emplace_back(name);
+    }
+    return left;
+}
+
+constexpr json::value member_value(std::string_view const name, json::value const& value, dialect const& chosen, std::vector<std::string>& dropped) {
+    if (name == "tool_choice" && chosen.auto_tool_choice && forced_tool_choice(value)) {
+        dropped.emplace_back(name);
+        return json::make_object({{"type", blocks::string_value("auto")}});
+    }
+    return value;
+}
+
+constexpr void copy_members(json::object const& members, folded messages, json::object& out, dialect const& chosen, std::vector<std::string>& dropped) {
     bool system_written = messages.system_extra.empty();
     for (auto const& [name, value] : members) {
         if (name == "messages") {
@@ -141,8 +171,8 @@ constexpr void copy_members(json::object const& members, folded messages, json::
         } else if (name == "system" && !system_written) {
             out.emplace_back(name, system_with(&value, std::move(messages.system_extra)));
             system_written = true;
-        } else if (!carried_in_the_url(name)) {
-            out.emplace_back(name, value);
+        } else if (!leaves_out(name, chosen, dropped)) {
+            out.emplace_back(name, member_value(name, value, chosen, dropped));
         }
     }
     if (!system_written) {
@@ -154,7 +184,7 @@ constexpr void copy_members(json::object const& members, folded messages, json::
 
 export namespace llmgate::bedrock {
 
-constexpr std::expected<translated, refusal> translate_request(std::string_view const anthropic_body, std::string_view const beta_header, options const& chosen) {
+constexpr std::expected<translated, refusal> translate_request(std::string_view const anthropic_body, std::string_view const beta_header, options const& chosen, dialect const& wire = {}) {
     auto const parsed = json::parse(anthropic_body, {.jsonc = false});
     if (!parsed) {
         refusal problem;
@@ -165,13 +195,13 @@ constexpr std::expected<translated, refusal> translate_request(std::string_view 
     if (members == nullptr) {
         return std::unexpected{refusal{.message = "the request must be a JSON object"}};
     }
-    json::object out{{"anthropic_version", blocks::string_value(std::string{anthropic_version})}};
+    json::object out{{"anthropic_version", blocks::string_value(std::string{wire.version})}};
     auto messages = detail::fold_system_messages(json::value{});
     if (auto const* original = blocks::member(*parsed, "messages")) {
         messages = detail::fold_system_messages(*original);
     }
-    detail::copy_members(*members, std::move(messages), out);
     translated done{.client_streams = blocks::flag_set(*parsed, "stream")};
+    detail::copy_members(*members, std::move(messages), out, wire, done.dropped_fields);
     if (auto kept = detail::split_betas(beta_header, chosen, done.dropped_betas); !kept.empty()) {
         out.emplace_back("anthropic_beta", json::value{std::move(kept)});
     }

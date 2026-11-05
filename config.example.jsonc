@@ -12,17 +12,17 @@
     "base_url": "https://api.githubcopilot.com",
     // Path of the Messages endpoint on the upstream.
     "messages_path": "/v1/messages",
-    // A working default for this kind of provider: copilot, anthropic, chatgpt, openai_chat (a
-    // chat-completions server: it sets the protocol and leaves base_url to you), bedrock (AWS Bedrock
-    // Claude models: with region it fills base_url and reads the API key from AWS_BEARER_TOKEN_BEDROCK).
-    // It fills base_url when that is empty and the protocol when it is left at anthropic; whatever you set
-    // yourself wins. One of: none, copilot, anthropic, chatgpt, openai_chat, bedrock.
+    // A working default for a kind of provider: copilot, anthropic, chatgpt, openai_chat (sets the
+    // protocol, base_url is yours), bedrock (with region: base_url, key from AWS_BEARER_TOKEN_BEDROCK) or
+    // vertex (with region and project: base_url, path, key from VERTEX_API_KEY). It fills base_url when
+    // empty and the protocol when left at anthropic; what you set wins. One of: none, copilot, anthropic,
+    // chatgpt, openai_chat, bedrock, vertex.
     // "preset": "chatgpt",
     // Wire protocol: anthropic (the Messages API, the default), openai_responses (OpenAI Responses,
-    // translated), openai_chat (Azure OpenAI, vLLM, translated), bedrock_messages (Claude on Bedrock) or
-    // bedrock_converse (other Bedrock models, translated). The messages_path default follows the protocol;
-    // {model} in it is the upstream model name. One of: anthropic, openai_responses, openai_chat,
-    // bedrock_messages, bedrock_converse.
+    // translated), openai_chat (Azure OpenAI, vLLM, translated), bedrock_messages (Claude on Bedrock),
+    // bedrock_converse or vertex_messages (Claude on Vertex AI) (other Bedrock models, translated). The
+    // messages_path default follows the protocol; {model} in it is the upstream model name. One of:
+    // anthropic, openai_responses, openai_chat, bedrock_messages, bedrock_converse, vertex_messages.
     "protocol": "anthropic",
     // Extra headers sent to the upstream on every request. With a copilot login the gateway also sends
     // Editor-Version and Copilot-Integration-Id (the VS Code values) unless they are set here.
@@ -38,8 +38,10 @@
     // use_max_completion_tokens, drop_stop_sequences, drop_sampling, drop_reasoning_effort,
     // drop_reasoning_effort_with_tools. Azure OpenAI reasoning models need the first three and the last.
     // "chat": { "use_max_completion_tokens": true, "drop_stop_sequences": true, "drop_sampling": true, "drop_reasoning_effort": false, "drop_reasoning_effort_with_tools": true },
-    // AWS region of a Bedrock provider (preset bedrock): eu-central-1 gives base_url
-    // https://bedrock-runtime.eu-central-1.amazonaws.com.
+    // Region of a Bedrock provider (preset bedrock): eu-central-1 gives base_url
+    // https://bedrock-runtime.eu-central-1.amazonaws.com. Also the location of a Vertex provider (preset
+    // vertex): europe-west1 gives https://europe-west1-aiplatform.googleapis.com, global gives
+    // https://aiplatform.googleapis.com.
     // "region": "eu-central-1",
     // Settings of a Bedrock provider (protocol bedrock_messages): betas lists the anthropic-beta tokens
     // passed on.
@@ -58,6 +60,18 @@
     //   //   // refuses them.
     //   //   // "drop_cache_points": false,
     //   // },
+    // },
+    // Google Cloud project of a Vertex provider (preset vertex): it fills {project} in the default
+    // messages_path.
+    // "project": "my-project",
+    // Settings of a Vertex provider (protocol vertex_messages): betas lists the anthropic-beta tokens
+    // passed on; drop_forced_tool_choice turns tool_choice any or tool into auto.
+    // "vertex": {
+    //   // anthropic-beta tokens Claude Code may pass to Vertex; any other token is dropped and counted. Empty
+    //   // means the built-in list of tokens Vertex accepts.
+    //   // "betas": ["interleaved-thinking-2025-05-14", "context-1m-2025-08-07"],
+    //   // Turn a tool_choice of any or tool into auto, for a model that refuses forced tool use.
+    //   // "drop_forced_tool_choice": false,
     // },
     // Forward the client's own Authorization or x-api-key header and every anthropic-* header unchanged to
     // this provider (a Claude login or an API key held by Claude Code itself) instead of attaching a

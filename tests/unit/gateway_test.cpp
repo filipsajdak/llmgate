@@ -2415,6 +2415,32 @@ const suite gateway_suite = [] {
         expect(gateway::config_problem(settings).contains("provider bare") && gateway::config_problem(settings).contains("base_url"));
     };
 
+    "capability_the_vertex_preset_builds_the_host_and_path_from_region_and_project_and_reads_the_key_from_the_standard_variable"_test = [] {
+        gateway::config settings;
+        settings.providers["eu"] = {.preset = gateway::preset_kind::vertex, .region = "europe-west1", .project = "p1"};
+        settings.providers["world"] = {.preset = gateway::preset_kind::vertex, .region = "global", .project = "p2", .auth = {.env = "MY_KEY"}};
+        settings.providers["gw"] = {.base_url = "https://gw.example", .messages_path = "/own/{model}", .preset = gateway::preset_kind::vertex, .region = "eu", .project = "p3"};
+        auto const providers = gateway::effective_providers(settings);
+
+        expect(providers.at("eu").base_url == "https://europe-west1-aiplatform.googleapis.com" && providers.at("eu").protocol == gateway::wire_protocol::vertex_messages);
+        expect(providers.at("eu").messages_path == "/v1/projects/p1/locations/europe-west1/publishers/anthropic/models/{model}:streamRawPredict");
+        expect(providers.at("eu").auth.env == "VERTEX_API_KEY" && providers.at("world").auth.env == "MY_KEY");
+        expect(providers.at("world").base_url == "https://aiplatform.googleapis.com");
+        expect(providers.at("gw").base_url == "https://gw.example" && providers.at("gw").messages_path == "/own/{model}");
+    };
+
+    "limit_a_vertex_provider_without_project_and_region_or_its_own_path_is_refused"_test = [] {
+        gateway::config bare;
+        bare.providers["v"] = {.base_url = "https://x.example", .preset = gateway::preset_kind::vertex};
+        gateway::config owned;
+        owned.providers["v"] = {.base_url = "https://x.example", .messages_path = "/m/{model}", .preset = gateway::preset_kind::vertex};
+        gateway::config full;
+        full.providers["v"] = {.base_url = "https://x.example", .preset = gateway::preset_kind::vertex, .region = "global", .project = "p"};
+
+        expect(gateway::config_problem(bare).contains("needs project and region"));
+        expect(gateway::config_problem(owned).empty() && gateway::config_problem(full).empty());
+    };
+
     "capability_the_invoke_path_encodes_the_model_id_so_a_profile_id_or_an_arn_stays_one_segment"_test = [] {
         using gateway::wire_protocol;
 

@@ -10,6 +10,7 @@ import llmgate.async;
 import llmgate.capture;
 import llmgate.claude;
 import llmgate.bedrock_request;
+import llmgate.vertex_options;
 import llmgate.chat_request;
 import llmgate.chat_stream;
 import llmgate.control;
@@ -52,6 +53,7 @@ constexpr std::string_view default_path_for(wire_protocol const protocol) {
         case wire_protocol::openai_chat: return default_chat_path;
         case wire_protocol::bedrock_messages: return default_bedrock_path;
         case wire_protocol::bedrock_converse: return default_converse_path;
+        case wire_protocol::vertex_messages: return default_vertex_path;
         case wire_protocol::anthropic: break;
     }
     return default_messages_path;
@@ -129,6 +131,48 @@ void fill_bedrock(provider_config& item) {
     }
 }
 
+std::string replaced_placeholder(std::string text, std::string_view const name, std::string_view const value) {
+    for (auto at = text.find(name); at != std::string::npos; at = text.find(name, at + value.size())) {
+        text.replace(at, name.size(), value);
+    }
+    return text;
+}
+
+std::string operation_for(std::string path, bool const whole_answer) {
+    constexpr std::string_view streaming = ":streamRawPredict";
+    if (whole_answer && path.ends_with(streaming)) {
+        path.replace(path.size() - streaming.size(), streaming.size(), ":rawPredict");
+    }
+    return path;
+}
+
+std::string vertex_host(std::string_view const region) {
+    return region == "global" ? std::string{"https://aiplatform.googleapis.com"} : std::format("https://{}-aiplatform.googleapis.com", region);
+}
+
+bool needs_vertex_path(provider_config const& item) {
+    return item.messages_path == default_messages_path && !item.project.empty() && !item.region.empty();
+}
+
+void fill_vertex_address(provider_config& item) {
+    if (item.base_url.empty() && !item.region.empty()) {
+        item.base_url = vertex_host(item.region);
+    }
+    if (needs_vertex_path(item)) {
+        item.messages_path = replaced_placeholder(replaced_placeholder(std::string{default_vertex_path}, "{project}", item.project), "{region}", item.region);
+    }
+}
+
+void fill_vertex(provider_config& item) {
+    if (item.protocol != wire_protocol::vertex_messages) {
+        return;
+    }
+    fill_vertex_address(item);
+    if (item.auth.env.empty() && item.auth.file.empty() && item.static_token_env.empty()) {
+        item.auth.env = std::string{vertex_key_variable};
+    }
+}
+
 provider_config with_preset(provider_config item) {
     if (auto const defaults = defaults_of(item.preset)) {
         if (item.base_url.empty()) {
@@ -139,6 +183,7 @@ provider_config with_preset(provider_config item) {
         }
     }
     fill_bedrock(item);
+    fill_vertex(item);
     return item;
 }
 
@@ -257,6 +302,13 @@ std::string label_problem(std::string const& name, provider_config const& item) 
     return {};
 }
 
+std::string vertex_problem(std::string const& name, provider_config const& item) {
+    if (item.protocol == wire_protocol::vertex_messages && item.messages_path == default_messages_path) {
+        return "provider " + name + ": a Vertex provider needs project and region (or its own messages_path)";
+    }
+    return {};
+}
+
 std::string provider_problem(std::string const& name, provider_config const& item, config const& settings) {
     if (auto const parsed = routing::parse_url(item.base_url); !parsed) {
         return "provider " + name + ": " + parsed.error();
@@ -268,6 +320,9 @@ std::string provider_problem(std::string const& name, provider_config const& ite
         return "provider " + name + " forwards the client's credentials (forward_credentials), which only an anthropic provider can use";
     }
     if (auto problem = auth_problem(name, item); !problem.empty()) {
+        return problem;
+    }
+    if (auto problem = vertex_problem(name, item); !problem.empty()) {
         return problem;
     }
     return label_problem(name, item);
@@ -862,6 +917,7 @@ struct relay_state {
                 frames.emplace();
                 converse_translator.emplace(note.requested, std::move(note.renamed));
                 break;
+            case wire_protocol::vertex_messages:
             case wire_protocol::anthropic: break;
         }
     }
@@ -1003,6 +1059,7 @@ std::expected<std::string, attempt_result> to_responses_body(std::string const& 
 struct translated_body {
     std::string body{};
     std::vector<chat::renamed_name> renamed{};
+    bool whole_answer = false;
 };
 
 std::expected<translated_body, attempt_result> to_chat_body(std::string const& body, chat::quirks const& chosen, stats& counters) {
@@ -1052,6 +1109,21 @@ std::expected<translated_body, attempt_result> to_bedrock_body(std::string const
     return translated_body{.body = std::move(done->body)};
 }
 
+std::expected<translated_body, attempt_result> to_vertex_body(std::string const& body, std::string_view const beta_header, vertex::options const& chosen, stats& counters) {
+    bedrock::options const allowed{.betas = chosen.betas};
+    auto done = bedrock::translate_request(body, beta_header, allowed, {.version = bedrock::vertex_anthropic_version, .drop_context_management = true, .auto_tool_choice = chosen.drop_forced_tool_choice, .keep_stream = true});
+    if (!done) {
+        return std::unexpected{refused(routing::error_reply(400, "invalid_request_error", done.error().message), health::neutral)};
+    }
+    for (auto const& token : done->dropped_betas) {
+        ++counters.dropped_fields["anthropic-beta:" + token];
+    }
+    for (auto const& name : done->dropped_fields) {
+        ++counters.dropped_fields[name];
+    }
+    return translated_body{.body = std::move(done->body), .whole_answer = !done->client_streams};
+}
+
 struct upstream_auth {
     std::string token{};
     std::optional<aws_keys> aws{};
@@ -1069,7 +1141,7 @@ void add_signature(httpio::request_spec& spec, aws_keys const& found, std::strin
 }
 
 bool translates_errors(wire_protocol const wire, int const status) {
-    return wire != wire_protocol::anthropic && status >= http_error_floor;
+    return wire != wire_protocol::anthropic && wire != wire_protocol::vertex_messages && status >= http_error_floor;
 }
 
 std::string client_error_body(wire_protocol const wire, int const status, std::string body) {
@@ -1764,6 +1836,7 @@ private:
             case wire_protocol::openai_chat: return detail::to_chat_body(body, settings.chat, counters_);
             case wire_protocol::bedrock_messages: return detail::to_bedrock_body(body, incoming.head.fields.find("anthropic-beta").value_or(""), settings.bedrock, counters_);
             case wire_protocol::bedrock_converse: return detail::to_converse_body(body, settings.bedrock.converse, counters_);
+            case wire_protocol::vertex_messages: return detail::to_vertex_body(body, incoming.head.fields.find("anthropic-beta").value_or(""), settings.vertex, counters_);
             case wire_protocol::openai_responses: return responses_body(body, incoming);
             case wire_protocol::anthropic: break;
         }
@@ -1828,7 +1901,7 @@ private:
         }
         follow_dynamic_endpoint(chosen);
         detail::built_request built{.spec = {.method = "POST",
-                                             .target = chosen.url->base_path + effective_messages_path(wire, chosen.settings.messages_path, upstream_name),
+                                             .target = chosen.url->base_path + operation_for(effective_messages_path(wire, chosen.settings.messages_path, upstream_name), body->whole_answer),
                                              .host = routing::host_header(*chosen.url),
                                              .fields = detail::upstream_headers(incoming, chosen.settings.headers, chosen.settings.copilot.has_value(), chosen.settings.forward_credentials, token->token,
                                                                                 wire, chosen.settings.auth),
