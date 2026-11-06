@@ -49,6 +49,9 @@ int main(int argc, char** argv) {
         text += line;
         text += '\n';
     }
+#if defined(_WIN32)
+    std::ranges::replace(text, '\\', '/');
+#endif
     std::ofstream out{destination, std::ios::binary};
     out << text;
     return out ? 0 : 1;

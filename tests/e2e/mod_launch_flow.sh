@@ -40,10 +40,10 @@ label="every runtime file of the mod is written there, byte for byte, private to
 check sh -c "cmp -s '$root/mods/llmgate/.claude-plugin/plugin.json' '$dir/.claude-plugin/plugin.json' && cmp -s '$root/mods/llmgate/hooks/register.tsx' '$dir/hooks/register.tsx' && cmp -s '$root/mods/llmgate/hooks/hooks.json' '$dir/hooks/hooks.json' && [ \"\$(ls -l '$dir/hooks/register.tsx' | cut -c1-10)\" = '-rw-------' ] && [ ! -e '$dir/tests' ] && [ ! -e '$dir/.claude-plugin/types' ]"
 
 label="the binary and the configuration are exported for the mod, as absolute paths"
-check sh -c "grep -q '^LLMGATE_BIN=/' '$work/claude.out' && grep -q \"^LLMGATE_CONFIG=$work/on.jsonc\$\" '$work/claude.out'"
+check sh -c "grep -q '^LLMGATE_BIN=\(/\|[A-Za-z]:/\)' '$work/claude.out' && grep -q \"^LLMGATE_CONFIG=$work/on.jsonc\$\" '$work/claude.out'"
 
 label="llmgate mod installs the mod and prints its directory, the one llmgate claude passes"
-printed=$("$binary" --config "$work/on.jsonc" mod)
+printed=$("$binary" --config "$work/on.jsonc" mod | tr '\\' '/')
 check sh -c "[ '$printed' = '$dir' ] && cmp -s '$root/mods/llmgate/hooks/setup.ts' '$printed/hooks/setup.ts'"
 
 label="a second launch writes nothing again"
@@ -72,10 +72,8 @@ LLMGATE_MOD_DIR=/somewhere/else "$binary" --config "$work/on.jsonc" claude -p hi
 check sh -c "grep -q '^ARGS: --plugin-dir /somewhere/else -p hi\$' '$work/claude.out' && [ ! -e '$work/data' ]"
 
 label="when the files cannot be written, Claude Code still starts, without the mod, with a warning"
-mkdir -p "$work/blocked"
-chmod 500 "$work/blocked"
+printf x > "$work/blocked"
 XDG_DATA_HOME="$work/blocked" "$binary" --config "$work/on.jsonc" claude -p hi >"$work/out.txt" 2>"$work/err.txt" || true
-chmod 700 "$work/blocked"
 check sh -c "grep -q '^ARGS: -p hi\$' '$work/claude.out' && grep -q 'starting Claude Code without it' '$work/err.txt'"
 
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }
