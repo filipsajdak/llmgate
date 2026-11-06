@@ -122,9 +122,17 @@ inline std::optional<std::filesystem::path> search_path(std::string_view const n
     return std::nullopt;
 }
 
+inline std::optional<std::filesystem::path> resolved_program(std::string const& candidate) {
+    std::array<char, 4096> resolved{};
+    if (!platform::resolve_executable(candidate.c_str(), resolved.data(), resolved.size())) {
+        return std::nullopt;
+    }
+    return std::filesystem::path{resolved.data()};
+}
+
 inline std::optional<std::filesystem::path> find_in_path(std::string_view const name) {
-    if (name.contains('/')) {
-        return std::filesystem::exists(name) ? std::optional{std::filesystem::path{name}} : std::nullopt;
+    if (std::filesystem::path{name}.has_parent_path()) {
+        return resolved_program(std::string{name});
     }
     return search_path(name);
 }
