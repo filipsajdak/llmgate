@@ -3,6 +3,9 @@ set -eu
 PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
 binary=${1:?usage: login_flow.sh <llmgate binary>}
+claude_stub=${2:?usage: FLOW llmgate claude_stub file_mode}
+FILE_MODE=${3:?usage: FLOW llmgate claude_stub file_mode}
+export FILE_MODE
 work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
 mkdir -p "$HOME"
@@ -59,7 +62,7 @@ write_config ", \"copilot\": { \"token_file\": \"$work/token.json\", \"github_ur
 check sh -c "grep -q 'ABCD-1234' '$work/out.txt' && grep -q 'Logged in' '$work/out.txt' && grep -q 'gho_e2e_token' '$work/token.json'"
 
 label="the stored token is private to the user"
-check sh -c "[ \"\$(ls -l '$work/token.json' | cut -c1-10)\" = '-rw-------' ]"
+check sh -c "[ \"\$(\"\$FILE_MODE\" '$work/token.json')\" = 600 ]"
 
 label="an unknown argument prints the usage and exits with the usage code"
 if "$binary" --nonsense >/dev/null 2>"$work/err.txt"; then rc=0; else rc=$?; fi

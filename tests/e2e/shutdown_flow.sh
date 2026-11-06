@@ -3,6 +3,9 @@ set -eu
 PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
 binary=${1:?usage: shutdown_flow.sh <llmgate binary>}
+claude_stub=${2:?usage: FLOW llmgate claude_stub file_mode}
+FILE_MODE=${3:?usage: FLOW llmgate claude_stub file_mode}
+export FILE_MODE
 work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
 mkdir -p "$HOME"
@@ -149,9 +152,9 @@ stop_upstream
 
 start_upstream 1.5
 write_config 10s
-printf '#!/bin/sh\nexit 0\n' > "$work/claude"
-chmod +x "$work/claude"
-LLMGATE_CLAUDE="$work/claude" "$binary" --config "$config" claude >/dev/null
+case "$claude_stub" in *.exe) stub_suffix=.exe ;; *) stub_suffix= ;; esac
+cp "$claude_stub" "$work/claude$stub_suffix"
+STUB_OUTPUT="$work/claude.out" LLMGATE_CLAUDE="$work/claude" "$binary" --config "$config" claude >/dev/null
 recorded=$(cat "$work/state/llmgate/gateway.pid")
 slow_request
 sleep 0.4

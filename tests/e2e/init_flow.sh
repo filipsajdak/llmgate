@@ -2,6 +2,9 @@
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 binary=${1:-$root/build/host/llmgate}
+claude_stub=${2:?usage: FLOW llmgate claude_stub file_mode}
+FILE_MODE=${3:?usage: FLOW llmgate claude_stub file_mode}
+export FILE_MODE
 work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 export XDG_STATE_HOME="$work/state"
 trap 'kill $upstream_pid 2>/dev/null || true; wait 2>/dev/null || true; rm -rf "$work"' EXIT
@@ -21,7 +24,7 @@ printf '4,5\npartner\n%s\n1\ne2e-token\ny\n\n%s\ny\n0\n' "$address" "$address" |
 check sh -c "grep -q '\"partner\"' '$config' && grep -q 'secrets/partner.key' '$config' && grep -q '\"local\"' '$config'"
 
 label="the key is stored private and never printed or put in the configuration"
-check sh -c "[ \"\$(cat '$HOME/.config/llmgate/secrets/partner.key')\" = e2e-token ] && [ \"\$(ls -l '$HOME/.config/llmgate/secrets/partner.key' | cut -c1-10)\" = '-rw-------' ] && ! grep -q e2e-token '$config' '$work/one.out'"
+check sh -c "[ \"\$(cat '$HOME/.config/llmgate/secrets/partner.key')\" = e2e-token ] && [ \"\$(\"\$FILE_MODE\" '$HOME/.config/llmgate/secrets/partner.key')\" = 600 ] && ! grep -q e2e-token '$config' '$work/one.out'"
 
 label="the recommended models of the provider that answered are offered, and a provider that cannot list them is reported without failing init"
 check sh -c "grep -q 'up-on' '$config' && grep -q 'openai_chat' '$config' && ! grep -q 'up-embed' '$config' && grep -q 'models could not be listed now; later run: llmgate models offer local all' '$work/one.out'"

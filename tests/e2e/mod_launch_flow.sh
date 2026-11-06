@@ -2,6 +2,9 @@
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 binary=${1:?usage: mod_launch_flow.sh <llmgate binary>}
+claude_stub=${2:?usage: FLOW llmgate claude_stub file_mode}
+FILE_MODE=${3:?usage: FLOW llmgate claude_stub file_mode}
+export FILE_MODE
 work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config" XDG_DATA_HOME="$work/data"
 mkdir -p "$HOME"
@@ -10,12 +13,9 @@ check() { if "$@"; then echo "ok   $label"; else echo "FAIL $label"; failures=$(
 port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
 trap '"$binary" --config "$work/on.jsonc" stop >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
 
-cat > "$work/claude" <<'STUB'
-#!/bin/sh
-{ echo "ARGS: $*"; env | grep -E '^LLMGATE_(BIN|CONFIG|MOD_DIR)=' | sort; } > "$STUB_OUTPUT"
-STUB
-chmod +x "$work/claude"
-export STUB_OUTPUT="$work/claude.out" LLMGATE_CLAUDE="$work/claude"
+case "$claude_stub" in *.exe) stub_suffix=.exe ;; *) stub_suffix= ;; esac
+cp "$claude_stub" "$work/claude$stub_suffix"
+export STUB_OUTPUT="$work/claude.out" STUB_ENV_PREFIXES="LLMGATE_BIN=,LLMGATE_CONFIG=,LLMGATE_MOD_DIR=" LLMGATE_CLAUDE="$work/claude"
 
 write_config() {
   cat > "$work/$1.jsonc" <<JSON
