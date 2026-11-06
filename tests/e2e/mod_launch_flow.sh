@@ -37,7 +37,7 @@ dir=$(sed -n 's/^ARGS: --plugin-dir \([^ ]*\) -p hello$/\1/p' "$work/claude.out"
 check sh -c "case '$dir' in '$work'/data/llmgate/mod/????????????????) true ;; *) false ;; esac"
 
 label="every runtime file of the mod is written there, byte for byte, private to the user"
-check sh -c "cmp -s '$root/mods/llmgate/.claude-plugin/plugin.json' '$dir/.claude-plugin/plugin.json' && cmp -s '$root/mods/llmgate/hooks/register.tsx' '$dir/hooks/register.tsx' && cmp -s '$root/mods/llmgate/hooks/hooks.json' '$dir/hooks/hooks.json' && [ \"\$(ls -l '$dir/hooks/register.tsx' | cut -c1-10)\" = '-rw-------' ] && [ ! -e '$dir/tests' ] && [ ! -e '$dir/.claude-plugin/types' ]"
+check sh -c "cmp -s '$root/mods/llmgate/.claude-plugin/plugin.json' '$dir/.claude-plugin/plugin.json' && cmp -s '$root/mods/llmgate/hooks/register.tsx' '$dir/hooks/register.tsx' && cmp -s '$root/mods/llmgate/hooks/hooks.json' '$dir/hooks/hooks.json' && [ \"\$(\"\$FILE_MODE\" '$dir/hooks/register.tsx')\" = 600 ] && [ ! -e '$dir/tests' ] && [ ! -e '$dir/.claude-plugin/types' ]"
 
 label="the binary and the configuration are exported for the mod, as absolute paths"
 check sh -c "grep -q '^LLMGATE_BIN=\(/\|[A-Za-z]:/\)' '$work/claude.out' && grep -q \"^LLMGATE_CONFIG=$work/on.jsonc\$\" '$work/claude.out'"
@@ -68,8 +68,8 @@ if "$binary" --config "$work/off.jsonc" mod >"$work/mod.out" 2>"$work/mod.err"; 
 check sh -c "[ $rc -ne 0 ] && [ ! -s '$work/mod.out' ] && grep -q 'claude.mod is false' '$work/mod.err'"
 
 label="LLMGATE_MOD_DIR loads a directory of the person's choice and writes nothing"
-LLMGATE_MOD_DIR=/somewhere/else "$binary" --config "$work/on.jsonc" claude -p hi >/dev/null
-check sh -c "grep -q '^ARGS: --plugin-dir /somewhere/else -p hi\$' '$work/claude.out' && [ ! -e '$work/data' ]"
+LLMGATE_MOD_DIR="$work/elsewhere" "$binary" --config "$work/on.jsonc" claude -p hi >/dev/null
+check sh -c "grep -q \"^ARGS: --plugin-dir $work/elsewhere -p hi\$\" '$work/claude.out' && [ ! -e '$work/data' ]"
 
 label="when the files cannot be written, Claude Code still starts, without the mod, with a warning"
 printf x > "$work/blocked"

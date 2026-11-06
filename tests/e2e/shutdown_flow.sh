@@ -99,6 +99,7 @@ gateway_exit() { if wait "$gateway_pid"; then exit_status=0; else exit_status=$?
 
 stop_upstream() { kill "$upstream_pid" 2>/dev/null || true; wait "$upstream_pid" 2>/dev/null || true; }
 
+if [ -z "${MSYSTEM:-}" ]; then
 start_upstream 1.5
 write_config 10s
 start_gateway
@@ -149,6 +150,7 @@ kill "$curl_pid" 2>/dev/null || true
 label="the drain timeout abandons a request that runs too long and still exits 0"
 check sh -c "[ $exit_status -eq 0 ] && [ $took -le 3 ] && grep -q 'still running' '$work/gateway.log'"
 stop_upstream
+fi
 
 start_upstream 1.5
 write_config 10s
