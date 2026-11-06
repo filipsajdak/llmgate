@@ -34,9 +34,9 @@ static_assert(for_all_texts(routing_alphabet, LLMGATE_ROUTING_LENGTH, &routing_h
 #elif LLMGATE_CHECK == 4
 static_assert(for_all_texts(sse_alphabet, LLMGATE_SSE_LENGTH, &sse_holds), "a short SSE-like text breaks the parser");
 #elif LLMGATE_CHECK == 6
-static_assert(for_all_texts(settings_alphabet, LLMGATE_CONFIG_LENGTH, &settings_holds), "a short text breaks the settings merge");
+static_assert(for_all_texts(settings_alphabet, LLMGATE_SETTINGS_LENGTH, &settings_holds), "a short text breaks the settings merge");
 #elif LLMGATE_CHECK == 7
-static_assert(for_all_texts(launcher_alphabet, LLMGATE_CONFIG_LENGTH, &launcher_holds), "a short text breaks the launcher helpers");
+static_assert(for_all_texts(launcher_alphabet, LLMGATE_LAUNCHER_LENGTH, &launcher_holds), "a short text breaks the launcher helpers");
 #elif LLMGATE_CHECK == 8
 static_assert(for_all_texts(usage_alphabet, LLMGATE_USAGE_LENGTH, &usage_holds), "a short text breaks the usage ledger helpers");
 #elif LLMGATE_CHECK == 9
