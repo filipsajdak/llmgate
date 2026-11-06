@@ -4,6 +4,9 @@ PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
 root=$(cd "$(dirname "$0")/../.." && pwd)
 binary=${1:-$root/build/host/llmgate}
+claude_stub=${2:?usage: FLOW llmgate claude_stub file_mode}
+FILE_MODE=${3:?usage: FLOW llmgate claude_stub file_mode}
+export FILE_MODE
 work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 trap 'kill $tool_pid $limited_pid $gateway_pid 2>/dev/null || true; wait 2>/dev/null || true; rm -rf "$work"' EXIT
 
@@ -110,10 +113,10 @@ pinned_status, _, pinned = post({"messages": [user]}, model="claude-gpt-fake@lim
 body = json.loads(pinned.split("\n\n")[0]) if pinned.startswith("{") else json.loads(pinned)
 check("an upstream rate limit reaches Claude Code as an Anthropic rate_limit_error",
       pinned_status == 429 and body["type"] == "error" and body["error"]["type"] == "rate_limit_error" and body["error"]["message"] == "Rate limit reached")
-import os, stat
+import os, stat, subprocess
 capture_path = f"{work}/state/capture.jsonl"
 captured = [json.loads(line) for line in open(capture_path)]
-check("the capture file is private", stat.S_IMODE(os.stat(capture_path).st_mode) == 0o600)
+check("the capture file is private", subprocess.check_output([os.environ["FILE_MODE"], capture_path]).decode().strip() == "600")
 check("the capture file holds one line per answered or failed exchange", len(captured) >= 3 and all("request_body" in c and "reply_body" in c for c in captured))
 check("no credential reached the capture file", "client-secret-xyz" not in open(capture_path).read() and "fake-plan-token" not in open(capture_path).read())
 check("a captured stream keeps the raw upstream events", any("response.output_item.added" in c["reply_body"] for c in captured if c["status"] == 200))

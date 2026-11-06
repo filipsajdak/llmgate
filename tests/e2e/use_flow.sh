@@ -3,6 +3,9 @@ set -eu
 PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
 binary=${1:?usage: use_flow.sh <llmgate binary>}
+claude_stub=${2:?usage: FLOW llmgate claude_stub file_mode}
+FILE_MODE=${3:?usage: FLOW llmgate claude_stub file_mode}
+export FILE_MODE
 work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
 mkdir -p "$HOME"
@@ -84,7 +87,7 @@ check answered_by b
 label="route reports the global remap"
 check sh -c "'$binary' --config '$config' route claude-opus-5-5 | grep -q global_remap"
 label="the overrides file is private"
-check sh -c "[ \"\$(ls -l '$work/state/llmgate/overrides.json' | cut -c1-10)\" = '-rw-------' ]"
+check sh -c "[ \"\$(\"\$FILE_MODE\" '$work/state/llmgate/overrides.json')\" = 600 ]"
 stop_gateway
 start_gateway
 label="a restarted gateway keeps the remap"

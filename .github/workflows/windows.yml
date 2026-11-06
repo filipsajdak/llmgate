@@ -60,4 +60,4 @@ jobs:
       - name: installer smoke test
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/install/smoke.ps1 -Binary "$(cygpath -w "$PWD/build/windows/llmgate.exe")"
       - name: end-to-end flows
-        run: ctest --test-dir build/windows -j1 --timeout 300 --output-on-failure -R "llmgate_(chat|bedrock|converse|tool_turn|passthrough|models|check|reload)_flow"
+        run: ctest --test-dir build/windows -j1 --timeout 300 --output-on-failure -R "llmgate_(chat|bedrock|converse|tool_turn|passthrough|models|check|reload|setup|login|init|responses|use|mod_launch|shutdown)_flow"

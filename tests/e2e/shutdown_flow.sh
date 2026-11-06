@@ -3,6 +3,9 @@ set -eu
 PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
 binary=${1:?usage: shutdown_flow.sh <llmgate binary>}
+claude_stub=${2:?usage: FLOW llmgate claude_stub file_mode}
+FILE_MODE=${3:?usage: FLOW llmgate claude_stub file_mode}
+export FILE_MODE
 work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
 mkdir -p "$HOME"
@@ -96,6 +99,7 @@ gateway_exit() { if wait "$gateway_pid"; then exit_status=0; else exit_status=$?
 
 stop_upstream() { kill "$upstream_pid" 2>/dev/null || true; wait "$upstream_pid" 2>/dev/null || true; }
 
+if [ -z "${MSYSTEM:-}" ]; then
 start_upstream 1.5
 write_config 10s
 start_gateway
@@ -146,12 +150,13 @@ kill "$curl_pid" 2>/dev/null || true
 label="the drain timeout abandons a request that runs too long and still exits 0"
 check sh -c "[ $exit_status -eq 0 ] && [ $took -le 3 ] && grep -q 'still running' '$work/gateway.log'"
 stop_upstream
+fi
 
 start_upstream 1.5
 write_config 10s
-printf '#!/bin/sh\nexit 0\n' > "$work/claude"
-chmod +x "$work/claude"
-LLMGATE_CLAUDE="$work/claude" "$binary" --config "$config" claude >/dev/null
+case "$claude_stub" in *.exe) stub_suffix=.exe ;; *) stub_suffix= ;; esac
+cp "$claude_stub" "$work/claude$stub_suffix"
+STUB_OUTPUT="$work/claude.out" LLMGATE_CLAUDE="$work/claude" "$binary" --config "$config" claude >/dev/null
 recorded=$(cat "$work/state/llmgate/gateway.pid")
 slow_request
 sleep 0.4

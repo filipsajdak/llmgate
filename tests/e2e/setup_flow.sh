@@ -3,6 +3,9 @@ set -eu
 PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
 binary=${1:?usage: setup_flow.sh <llmgate binary>}
+claude_stub=${2:?usage: FLOW llmgate claude_stub file_mode}
+FILE_MODE=${3:?usage: FLOW llmgate claude_stub file_mode}
+export FILE_MODE
 work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
 mkdir -p "$HOME"
@@ -21,13 +24,10 @@ cat > "$work/llmgate.jsonc" <<JSON
   "usage": { "ledger_file": "$work/usage.jsonl", "budget": { "daily_tokens": 1000 } }
 }
 JSON
-cat > "$work/claude" <<'STUB'
-#!/bin/sh
-{ echo "ARGS: $*"; env | grep -E '^(ANTHROPIC_|CLAUDE_|DISABLE_)' | sort; } > "$STUB_OUTPUT"
-STUB
-chmod +x "$work/claude"
+case "$claude_stub" in *.exe) stub_suffix=.exe ;; *) stub_suffix= ;; esac
+cp "$claude_stub" "$work/claude$stub_suffix"
 export E2E_UPSTREAM_TOKEN=test-token
-export STUB_OUTPUT="$work/claude.out" LLMGATE_CLAUDE="$work/claude"
+export STUB_OUTPUT="$work/claude.out" STUB_ENV_PREFIXES="ANTHROPIC_,CLAUDE_,DISABLE_" LLMGATE_CLAUDE="$work/claude"
 config="$work/llmgate.jsonc"
 
 label="setup --dry-run writes nothing"
