@@ -790,7 +790,8 @@ long current_process_id() noexcept {
 }
 
 bool stdin_is_terminal() noexcept {
-    return _isatty(0) != 0;
+    DWORD mode = 0;
+    return GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &mode) != 0;
 }
 
 bool disable_stdin_echo() noexcept {
