@@ -3,12 +3,16 @@ set -eu
 PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
 binary=${1:?usage: doctor_flow.sh <llmgate binary>}
+claude_stub=${2:?usage: FLOW llmgate claude_stub file_mode}
+FILE_MODE=${3:?usage: FLOW llmgate claude_stub file_mode}
+export FILE_MODE
+. "$(dirname "$0")/modes.sh"
 work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
 mkdir -p "$HOME"
 failures=0
 started=$(date +%s)
-check() { elapsed=$(($(date +%s) - started)); if "$@"; then echo "ok   [${elapsed}s] $label"; else echo "FAIL [${elapsed}s] $label"; failures=$((failures + 1)); fi; }
+check() { elapsed=$(($(date +%s) - started)); if "$@"; then echo "ok   [${elapsed}s] $label"; else echo "FAIL [${elapsed}s] $label"; failures=$((failures + 1)); [ -z "${E2E_VERBOSE:-}" ] || tail -n 25 "$work/doctor.out" 2>/dev/null; fi; }
 . "$(dirname "$0")/diagnose.sh"
 watchdog_seconds=100
 script_pid=$$
@@ -89,7 +93,7 @@ while ! python3 -c "import socket; socket.create_connection(('127.0.0.1',$github
 
 mkdir -p "$work/config/llmgate"
 printf '{"oauth_token":"%s"}\n' "$secret" > "$work/config/llmgate/token.json"
-chmod 600 "$work/config/llmgate/token.json"
+private_file "$work/config/llmgate/token.json"
 cat > "$config" <<JSON
 {
   "listen": "127.0.0.1:$port",
@@ -99,8 +103,9 @@ cat > "$config" <<JSON
   "copilot": { "token_file": "$work/config/llmgate/token.json", "github_url": "http://127.0.0.1:$github_port", "api_url": "http://127.0.0.1:$github_port" }
 }
 JSON
-printf '#!/bin/sh\nexit 0\n' > "$work/claude"
-chmod +x "$work/claude"
+case "$claude_stub" in *.exe) stub_suffix=.exe ;; *) stub_suffix= ;; esac
+cp "$claude_stub" "$work/claude$stub_suffix"
+export STUB_OUTPUT="$work/claude.out"
 export LLMGATE_CLAUDE="$work/claude"
 
 doctor() { if "$binary" --config "$config" doctor "$@" > "$work/doctor.out" 2>&1; then rc=0; else rc=$?; fi; }
@@ -168,28 +173,29 @@ label="a login GitHub rejects fails the run and says to log in again"
 check sh -c "[ $rc -ne 0 ] && grep -q 'FAIL  copilot-exchange' '$work/doctor.out' && grep -q 'fix: run llmgate login' '$work/doctor.out'"
 echo ok > "$work/github.mode"
 
-chmod 644 "$work/config/llmgate/token.json"
+open_file "$work/config/llmgate/token.json"
 doctor --offline
 label="a token file other users can read fails with the chmod remedy"
 check sh -c "[ $rc -ne 0 ] && grep -q 'chmod 600' '$work/doctor.out' && ! grep -q '$secret' '$work/doctor.out'"
-chmod 600 "$work/config/llmgate/token.json"
+private_file "$work/config/llmgate/token.json"
 
 mv "$work/config/llmgate/token.json" "$work/config/llmgate/token.bak"
 doctor --offline
 label="a missing token file fails and points at llmgate login"
 check sh -c "[ $rc -ne 0 ] && grep -q 'FAIL  copilot-login' '$work/doctor.out' && grep -q 'fix: run llmgate login' '$work/doctor.out'"
 mv "$work/config/llmgate/token.bak" "$work/config/llmgate/token.json"
+private_file "$work/config/llmgate/token.json"
 
 "$binary" --config "$config" claude --start >/dev/null
 doctor --offline
 label="a running gateway of this user passes the port check"
 check sh -c "[ $rc -eq 0 ] && grep -q 'PASS  port: this user' '$work/doctor.out'"
 
-chmod 644 "$work/state/llmgate/identity"
+open_file "$work/state/llmgate/identity"
 doctor --offline
 label="an identity file other users can read fails"
 check sh -c "[ $rc -ne 0 ] && grep -q 'FAIL  identity' '$work/doctor.out' && grep -q 'chmod 600' '$work/doctor.out'"
-chmod 600 "$work/state/llmgate/identity"
+private_file "$work/state/llmgate/identity"
 "$binary" --config "$config" stop >/dev/null
 
 python3 - "$port" <<'PY' &
@@ -220,7 +226,7 @@ check sh -c "[ $rc -ne 0 ] && grep -q 'FAIL  config' '$work/doctor.out' && grep 
 mkdir -p "$work/ro"
 chmod 500 "$work/ro"
 sed "s#$work/usage.jsonl#$work/ro/sub/usage.jsonl#" "$config" > "$work/ledger.jsonc"
-if [ "$(id -u)" -ne 0 ]; then
+if [ "$(id -u)" -ne 0 ] && [ -z "${MSYSTEM:-}" ]; then
   if "$binary" --config "$work/ledger.jsonc" doctor --offline > "$work/doctor.out" 2>&1; then rc=0; else rc=$?; fi
   label="a ledger that cannot be created fails"
   check sh -c "[ $rc -ne 0 ] && grep -q 'FAIL  ledger' '$work/doctor.out'"

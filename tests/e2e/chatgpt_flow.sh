@@ -3,14 +3,19 @@ set -eu
 PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
 root=$(cd "$(dirname "$0")/../.." && pwd)
+if command -v cygpath >/dev/null 2>&1; then root=$(cygpath -m "$root"); fi
 binary=${1:-$root/build/host/llmgate}
+claude_stub=${2:?usage: FLOW llmgate claude_stub file_mode}
+FILE_MODE=${3:?usage: FLOW llmgate claude_stub file_mode}
+export FILE_MODE
+. "$(dirname "$0")/modes.sh"
 work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 export LLMGATE_NO_BROWSER=1
 export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
 mkdir -p "$HOME"
 trap 'kill $auth_pid $upstream_pid $login_pid $gateway_pid 2>/dev/null || true; wait 2>/dev/null || true; rm -rf "$work"' EXIT
 failures=0
-check() { if "$@"; then echo "ok   $label"; else echo "FAIL $label"; failures=$((failures + 1)); fi; }
+check() { if "$@"; then echo "ok   $label"; else echo "FAIL $label"; failures=$((failures + 1)); [ -z "${E2E_VERBOSE:-}" ] || tail -n 25 "$work/doctor.out" 2>/dev/null; fi; }
 free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'; }
 
 FAKE_AUTH_EXPIRES_IN=${EXPIRES_IN:-3600} python3 "$root/tests/e2e/fake_openai_auth.py" "$work/auth.port" "$work/auth.log" &
@@ -46,18 +51,18 @@ wait "$login_pid" && login_status=0 || login_status=$?
 label="the login finishes with status 0 and says who signed in"
 check sh -c "[ $login_status -eq 0 ] && grep -q 'Signed in as e2e-user' '$work/login.out'"
 label="the token file is private and holds the issued client id, host id and rotated tokens"
-check sh -c "[ \"\$(ls -l '$work/chatgpt-token.json' | cut -c1-10)\" = '-rw-------' ] && grep -q issued_e2e '$work/chatgpt-token.json' && grep -q 'urn:uuid:' '$work/chatgpt-token.json' && grep -q refresh-1 '$work/chatgpt-token.json'"
+check sh -c "[ \"\$(\"\$FILE_MODE\" '$work/chatgpt-token.json')\" = 600 ] && grep -q issued_e2e '$work/chatgpt-token.json' && grep -q 'urn:uuid:' '$work/chatgpt-token.json' && grep -q refresh-1 '$work/chatgpt-token.json'"
 label="no token appears in the login output"
 check sh -c "! grep -q 'access-1\\|refresh-1' '$work/login.out'"
 
-doctor_says() { "$binary" --config "$work/config.jsonc" doctor --offline 2>&1 | grep -A1 'chatgpt-login' | grep -q "$1"; }
+doctor_says() { "$binary" --config "$work/config.jsonc" doctor --offline > "$work/doctor.out" 2>&1; grep -A1 'chatgpt-login' "$work/doctor.out" | grep -q "$1"; }
 label="doctor reports the saved sign-in as passing"
 check doctor_says PASS
 cp "$work/chatgpt-token.json" "$work/token.backup"
-chmod 644 "$work/chatgpt-token.json"
+open_file "$work/chatgpt-token.json"
 label="doctor fails a token file other users can read"
 check doctor_says FAIL
-chmod 600 "$work/chatgpt-token.json"
+private_file "$work/chatgpt-token.json"
 python3 - "$work/chatgpt-token.json" <<'PY'
 import json, sys
 path = sys.argv[1]
@@ -68,12 +73,12 @@ PY
 label="doctor fails a sign-in that does not grant plan use"
 check doctor_says 'plan use'
 cp "$work/token.backup" "$work/chatgpt-token.json"
-chmod 600 "$work/chatgpt-token.json"
+private_file "$work/chatgpt-token.json"
 rm "$work/chatgpt-token.json"
 label="doctor fails a missing sign-in and names the command"
 check doctor_says 'llmgate login --provider codex'
 cp "$work/token.backup" "$work/chatgpt-token.json"
-chmod 600 "$work/chatgpt-token.json"
+private_file "$work/chatgpt-token.json"
 
 start_gateway() {
   : > "$work/gateway.log"

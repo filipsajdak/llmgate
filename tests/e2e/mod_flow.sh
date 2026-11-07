@@ -3,6 +3,7 @@ set -eu
 PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
 root=$(cd "$(dirname "$0")/../.." && pwd)
+if command -v cygpath >/dev/null 2>&1; then root=$(cygpath -m "$root"); fi
 binary=${1:?usage: mod_flow.sh <llmgate binary>}
 command -v claude > /dev/null 2>&1 || { echo "skip: claude is not installed"; exit 77; }
 work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi

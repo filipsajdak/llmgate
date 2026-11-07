@@ -58,13 +58,12 @@ inline std::optional<std::string> read_limited(std::filesystem::path const& path
 }
 
 struct git_runner {
-    std::filesystem::path env;
     std::filesystem::path git;
 
     std::string run(std::vector<std::string> arguments) const {
-        std::vector<std::string> full{"GIT_TERMINAL_PROMPT=0", git.string(), "-c", "core.hooksPath=/dev/null", "-c", "advice.detachedHead=false"};
+        std::vector<std::string> full{"-c", "core.hooksPath=/dev/null", "-c", "advice.detachedHead=false"};
         std::ranges::move(arguments, std::back_inserter(full));
-        auto const output = process::run_capturing(env, full);
+        auto const output = process::run_capturing(git, full);
         return output ? *output : std::string{};
     }
 };
@@ -135,11 +134,11 @@ inline std::expected<void, std::string> fetch_pinned(git_runner const& git, std:
 
 inline std::expected<fetched, std::string> from_git(std::string_view const url, std::string_view const ref) {
     auto const git = process::find_program("git");
-    auto const env = process::find_program("env");
-    if (!git || !env) {
+    if (!git) {
         return std::unexpected{std::string{"git is required to install a pack from a URL"}};
     }
-    git_runner const runner{.env = *env, .git = *git};
+    process::apply_environment({{"GIT_TERMINAL_PROMPT", "0"}});
+    git_runner const runner{.git = *git};
     auto const commit = resolve_pin(runner, url, ref);
     if (!commit) {
         return std::unexpected{commit.error()};
