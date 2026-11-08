@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
+if command -v cygpath >/dev/null 2>&1; then root=$(cygpath -m "$root"); fi
 binary=${1:-$root/build/host/llmgate}
 binary=$(cd "$(dirname "$binary")" && pwd)/$(basename "$binary")
 work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
@@ -9,7 +10,7 @@ export HOME="$work/home" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/con
 mkdir -p "$HOME"
 failures=0
 label=
-check() { if "$@"; then echo "ok   $label"; else echo "FAIL $label"; failures=$((failures + 1)); fi; }
+check() { if "$@"; then echo "ok   $label"; else echo "FAIL $label"; failures=$((failures + 1)); [ -z "${E2E_VERBOSE:-}" ] || tail -n 25 "$work/out.txt" "$work/out1.txt" 2>/dev/null; fi; }
 
 config=$work/config.jsonc
 cat > "$config" <<'JSON'
@@ -82,7 +83,7 @@ label="a pack larger than the limit and a directory with no pack file are refuse
 mkdir -p "$work/empty"
 check sh -c "! '$binary' --config '$config' org install '$work/empty' --yes > '$work/out.txt' 2>&1 && grep -q 'has no readable llmgate-org.jsonc' '$work/out.txt'"
 
-if command -v git >/dev/null 2>&1; then
+if command -v git >/dev/null 2>&1 && [ -z "${MSYSTEM:-}" ]; then
   repo=$work/repo
   git init -q "$repo"
   git -C "$repo" config user.email test@example.com

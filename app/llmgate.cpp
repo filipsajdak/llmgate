@@ -1253,10 +1253,10 @@ int org_remove(commands::context const& where) {
         return exit_usage;
     }
     auto const settings_path = std::filesystem::path{process::expand_home(where.settings.claude.profile_dir)} / "settings.json";
-    if (std::ifstream in{settings_path}; in) {
-        auto parsed = json::parse(std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}}, {.jsonc = true});
+    if (std::filesystem::exists(settings_path)) {
+        auto parsed = json::parse(slurp(settings_path), {.jsonc = true});
         if (parsed && !write_atomically(settings_path, json::write(org::remove_from_settings(std::move(*parsed)), 2) + "\n")) {
-            return fail(exit_runtime, std::format("cannot write {}", settings_path.string()));
+            return fail(exit_runtime, std::format("cannot write {}: {}", settings_path.string(), write_failure));
         }
     }
     org::remove_installed();

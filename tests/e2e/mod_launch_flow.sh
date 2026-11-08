@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
+if command -v cygpath >/dev/null 2>&1; then root=$(cygpath -m "$root"); fi
 binary=${1:?usage: mod_launch_flow.sh <llmgate binary>}
 claude_stub=${2:?usage: FLOW llmgate claude_stub file_mode}
 FILE_MODE=${3:?usage: FLOW llmgate claude_stub file_mode}

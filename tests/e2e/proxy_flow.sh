@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
+if command -v cygpath >/dev/null 2>&1; then root=$(cygpath -m "$root"); fi
 binary=${1:-$root/build/host/llmgate}
 pki=$root/tests/e2e/pki
 work=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
