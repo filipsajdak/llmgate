@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -279,10 +280,44 @@ BOOL WINAPI console_event(DWORD const event) {
     return TRUE;
 }
 
-int create_child(char const* const program, char const* const* const argv, STARTUPINFOW& startup, DWORD const flags, PROCESS_INFORMATION& info) {
+struct inherit_only {
+    std::vector<unsigned char> storage;
+    LPPROC_THREAD_ATTRIBUTE_LIST list = nullptr;
+
+    inherit_only() = default;
+    inherit_only(inherit_only const&) = delete;
+    inherit_only& operator=(inherit_only const&) = delete;
+    ~inherit_only() {
+        if (list != nullptr) {
+            DeleteProcThreadAttributeList(list);
+        }
+    }
+
+    int build(HANDLE* const handles, DWORD const count) {
+        SIZE_T size = 0;
+        InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+        storage.resize(size);
+        auto const created = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
+        if (!InitializeProcThreadAttributeList(created, 1, 0, &size)) {
+            return last_win_error();
+        }
+        list = created;
+        if (!UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles, count * sizeof(HANDLE), nullptr, nullptr)) {
+            return last_win_error();
+        }
+        return 0;
+    }
+};
+
+int create_child(char const* const program, char const* const* const argv, STARTUPINFOW& startup, DWORD const flags, PROCESS_INFORMATION& info,
+                 LPPROC_THREAD_ATTRIBUTE_LIST const only = nullptr) {
     auto application = widen(program);
     auto line = command_line(argv);
-    if (!CreateProcessW(application.c_str(), line.data(), nullptr, nullptr, TRUE, flags | CREATE_UNICODE_ENVIRONMENT, nullptr, nullptr, &startup, &info)) {
+    STARTUPINFOEXW extended{.StartupInfo = startup, .lpAttributeList = only};
+    extended.StartupInfo.cb = sizeof extended;
+    auto const extra = only != nullptr ? EXTENDED_STARTUPINFO_PRESENT : 0;
+    auto* const given = only != nullptr ? &extended.StartupInfo : &startup;
+    if (!CreateProcessW(application.c_str(), line.data(), nullptr, nullptr, TRUE, flags | extra | CREATE_UNICODE_ENVIRONMENT, nullptr, nullptr, given, &info)) {
         return last_win_error();
     }
     return 0;
@@ -550,7 +585,12 @@ int start_detached_process(char const* const program, char const* const* const a
     startup.hStdOutput = log.handle;
     startup.hStdError = log.handle;
     PROCESS_INFORMATION info{};
-    if (auto const failure = create_child(program, argv, startup, DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW, info)) {
+    HANDLE inherited[] = {input.handle, log.handle};
+    inherit_only only;
+    if (auto const failure = only.build(inherited, std::size(inherited))) {
+        return failure;
+    }
+    if (auto const failure = create_child(program, argv, startup, DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW, info, only.list)) {
         return failure;
     }
     CloseHandle(info.hThread);

@@ -24,3 +24,9 @@ if report["betas"].get("compat-selftest-2026", 0) < 1:
     sys.exit("FAIL the beta census did not see the token the stub sent")
 print("ok   the gateway's beta census saw the stub's token")
 PY
+spaced="$out/path with ' quote"
+mkdir -p "$spaced/tests"
+if command -v cygpath >/dev/null 2>&1; then spaced=$(cygpath -m "$spaced"); fi
+cp -R "$root/tests/compat" "$root/tests/e2e" "$spaced/tests/"
+python3 "$spaced/tests/compat/run.py" --backend scripted --binary "$binary" --out "$out/spaced" --scenario text-turn --scenario switch-mid-session
+echo "ok   the harness runs from a path with a space and a quote"
