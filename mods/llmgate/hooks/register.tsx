@@ -422,8 +422,8 @@ export const register: Register = on => {
 
     const header = (
       <Box flexDirection="column">
-        <Box flexDirection="row" columnGap={2}>
-          <Text bold>llmgate {snapshot.sessionId ? snapshot.sessionId.slice(0, 8) : ''}</Text>
+        <Text bold wrap="truncate">llmgate {snapshot.sessionId ? snapshot.sessionId.slice(0, 8) : ''}</Text>
+        <Box key="tabs" flexDirection="row" flexWrap="wrap" columnGap={2}>
           <Button key="view-now" label="Now" hotkey="n" plain dimColor={view !== 'now'} onPress={show('now')} />
           <Button key="view-usage" label="Usage" hotkey="u" plain dimColor={view !== 'usage'} onPress={show('usage')} />
           <Button key="view-setup" label="Setup" hotkey="s" plain dimColor={view !== 'setup'} onPress={show('setup')} />
