@@ -2441,6 +2441,24 @@ const suite gateway_suite = [] {
         expect(gateway::config_problem(owned).empty() && gateway::config_problem(full).empty());
     };
 
+    "capability_accounting_lists_a_dated_name_under_its_mapped_family_unless_the_name_has_its_own_entry"_test = [] {
+        std::map<std::string, std::string> const models{{"claude-haiku-4-5", "claude-haiku-4.5"}, {"claude-opus-5-5-20260101", "pinned-opus"}, {"claude-opus-5-5", "claude-opus-5.5"}};
+
+        expect(gateway::family_name(models, "claude-haiku-4-5-20251001") == "claude-haiku-4-5");
+        expect(gateway::family_name(models, "claude-opus-5-5-20260101") == "claude-opus-5-5-20260101");
+        expect(gateway::family_name(models, "claude-sonnet-5-5-20251001") == "claude-sonnet-5-5-20251001" && gateway::family_name(models, "claude-haiku-4-5") == "claude-haiku-4-5");
+        expect(gateway::family_name(models, "") == "");
+    };
+
+    "capability_a_dated_model_id_resolves_through_its_mapped_family_and_an_exact_entry_wins"_test = [] {
+        std::map<std::string, std::string> const models{{"claude-haiku-4-5", "claude-haiku-4.5"}, {"claude-haiku-4-5-20251001", "pinned-haiku"}, {"gpt-5", "gpt-5.0"}};
+
+        expect(gateway::mapped_model(models, "claude-haiku-4-5-20251001") == std::optional<std::string>{"pinned-haiku"});
+        expect(gateway::mapped_model({{"claude-haiku-4-5", "claude-haiku-4.5"}}, "claude-haiku-4-5-20251001") == std::optional<std::string>{"claude-haiku-4.5"});
+        expect(!gateway::mapped_model(models, "claude-opus-5-5-20251001").has_value() && !gateway::mapped_model(models, "gpt-5-2025").has_value());
+        expect(!gateway::mapped_model(models, "claude-haiku-4-5-2025100x").has_value() && !gateway::mapped_model(models, "claude-haiku-4-5_20251001").has_value());
+    };
+
     "capability_the_invoke_path_encodes_the_model_id_so_a_profile_id_or_an_arn_stays_one_segment"_test = [] {
         using gateway::wire_protocol;
 

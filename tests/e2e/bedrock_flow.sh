@@ -100,6 +100,9 @@ check("the usage of the Messages events reaches the client unchanged", usage["in
 
 logged = [json.loads(line) for line in open(f"{work}/tool.log")]
 check("the upstream saw the invoke path with the model id percent-encoded", all(r["path"] == "/model/anthropic.claude-sonnet-4-6-v1%3A0/invoke-with-response-stream" for r in logged))
+post({"messages": [{"role": "user", "content": "dated"}]}, model="claude-sonnet-5-5-20260101")
+check("a dated model id resolves through its mapped family name before it goes upstream", last_request()["path"] == "/model/anthropic.claude-sonnet-4-6-v1%3A0/invoke-with-response-stream")
+logged = [json.loads(line) for line in open(f"{work}/tool.log")]
 check("the upstream saw the bearer key and no client credential or Anthropic header", all(r["headers"].get("authorization") == "Bearer fake-bedrock-key" and "x-api-key" not in r["headers"] and "anthropic-beta" not in r["headers"] and "anthropic-version" not in r["headers"] for r in logged))
 sent = logged[0]["request"]
 check("the body has no model or stream and carries the Bedrock version", "model" not in sent and "stream" not in sent and sent["anthropic_version"] == "bedrock-2023-05-31")

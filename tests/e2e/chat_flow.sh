@@ -23,7 +23,7 @@ cat > "$work/config.jsonc" <<JSON
                "messages_path": "/openai/deployments/{model}/chat/completions?api-version=2024-10-21",
                "auth": { "kind": "header", "header": "api-key", "env": "CHAT_KEY" },
                "chat": { "use_max_completion_tokens": true, "drop_stop_sequences": true, "drop_sampling": true, "drop_reasoning_effort_with_tools": true },
-               "models": { "claude-sonnet-5-5": "gpt-fake" } },
+               "models": { "claude-sonnet-5-5": "gpt-fake" }, "model_labels": { "claude-sonnet-5-5-20260101": ["dated"] } },
     "limited": { "base_url": "http://127.0.0.1:$(cat "$work/limited.port")", "protocol": "openai_chat",
                  "messages_path": "/openai/deployments/{model}/chat/completions?api-version=2024-10-21",
                  "auth": { "kind": "header", "header": "api-key", "env": "CHAT_KEY" },
@@ -119,6 +119,11 @@ check("the ledger holds one answered line per streamed turn with input and cache
 
 def last_request():
     return [json.loads(line) for line in open(f"{work}/tool.log")][-1]["request"]
+
+post({"messages": [user]}, model="claude-sonnet-5-5-20260101")
+lines = [json.loads(line) for line in open(f"{work}/usage.jsonl")]
+check("a dated model id reaches the upstream as the mapped model and is accounted under its mapped family name", last_request()["model"] == "gpt-fake" and lines[-1]["model"] == "claude-sonnet-5-5")
+check("the labels of the model are looked up under the id the provider reported, not under the family name", "dated" in str(lines[-1].get("labels")))
 
 
 bare = {"tools": None, "output_config": None, "thinking": None}
