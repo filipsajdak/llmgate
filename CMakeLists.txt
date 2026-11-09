@@ -424,6 +424,8 @@ add_test(NAME llmgate_tool_turn_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/test
 set_tests_properties(llmgate_tool_turn_flow PROPERTIES LABELS e2e TIMEOUT 120)
 add_test(NAME llmgate_passthrough_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/passthrough_flow.sh $<TARGET_FILE:llmgate>)
 set_tests_properties(llmgate_passthrough_flow PROPERTIES LABELS e2e TIMEOUT 120)
+add_test(NAME llmgate_detached_pipe_flow COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e/detached_pipe_flow.sh $<TARGET_FILE:llmgate> $<TARGET_FILE:claude_stub>)
+set_tests_properties(llmgate_detached_pipe_flow PROPERTIES LABELS e2e TIMEOUT 60)
 add_test(NAME llmgate_compat_selftest COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/compat/selftest.sh $<TARGET_FILE:llmgate>)
 set_tests_properties(llmgate_compat_selftest PROPERTIES LABELS "e2e;compat-selftest" TIMEOUT 180)
 add_test(NAME llmgate_readme_compat_matrix_is_generated COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/compat/matrix.py --check)
