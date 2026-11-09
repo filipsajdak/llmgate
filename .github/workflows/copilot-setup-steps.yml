@@ -1,0 +1,28 @@
+name: copilot-setup-steps
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/copilot-setup-steps.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/copilot-setup-steps.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install the tool the lints import
+        run: pip install lizard
+      - name: Build the container image ops/ci/linux.sh runs in
+        run: docker build -q -t llmgate-build ops/ci
+      - name: Check the toolchain the agent will use
+        run: docker run --rm llmgate-build g++ --version
