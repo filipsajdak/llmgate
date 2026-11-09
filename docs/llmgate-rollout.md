@@ -304,6 +304,33 @@ Live findings, 2026-11-05, through the company endpoint with a Claude model and 
 | VT7 | `doctor` checks that a `vertex` provider has a project (unless `messages_path` is set), a region and a key, and never prints the key. |
 | VT8 | Tested with a scripted Vertex server (`tests/e2e/vertex_flow.sh`, `fake_vertex.py`) that checks the path, the bearer key, the body shape and the 400s above, and by one live headless Claude Code turn with a Bash tool call through the company endpoint (2026-11-05: the preset with `region` and `project` built the path, the turn ended with the tool result `vertex-live-ok` in two turns, 22,408 tokens written to and 11,113 read from the cache). The first live attempt failed because the first version refused non-streamed requests, which `claude -p` sends; `rawPredict` is the fix. |
 
+## Claude Code under a login: plan usage and what the pane shows (phase 1 slice 11)
+
+Decisions of 2026-11-08: `/usage` has to keep working when Claude Code runs through llmgate with the person's own Claude login, the setting that breaks it becomes its own option with an automatic default, and two cosmetic findings from a first live session with a Copilot Max seat beside a Claude login are fixed with it.
+
+Findings, 2026-11-08, Claude Code 2.1.319 started with the claude-scudo configuration and `ANTHROPIC_BASE_URL` pointing at a local server that logged every path it received (the login's token was never written down):
+
+| Probe | Answer |
+|---|---|
+| where `/usage` asks for the plan limits | `GET /api/oauth/usage` on Anthropic's own address; the local server never saw it, so it does not follow `ANTHROPIC_BASE_URL` and the gateway needs no route for it |
+| the llmgate environment (`llmgate env`, the launcher) | sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` together with `DISABLE_TELEMETRY` and `DISABLE_ERROR_REPORTING` whenever `claude.telemetry` is false (the default) |
+| `/usage` with that variable set | no request is made; the dialog says "Failed to load usage data" |
+| `/usage` without it | the debug log shows the fetch and "200 after 1 attempt(s)" |
+| the pane title | `llmgate` and the session digest wrap one fragment per line in a narrow pane (`llm`, `gat`, `e`, `4fb`, `297`, `41`) |
+| a Copilot title request | Claude Code asks for the dated id `claude-haiku-4-5-20251001`; the provider's `models` map holds only `claude-haiku-4-5`, so the dated id goes upstream as it is and the usage table lists it under that raw name |
+
+| # | Behaviour |
+|---|---|
+| NT1 | `claude.nonessential_traffic` is one of `auto`, `allow`, `block`, default `auto`. |
+| NT2 | `auto` means `allow` when `claude.credential` is `login` and `block` otherwise. `allow` leaves `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` unset; `block` sets it to `1`. |
+| NT3 | `DISABLE_TELEMETRY` and `DISABLE_ERROR_REPORTING` follow `claude.telemetry` alone, as before; the third variable no longer follows it. |
+| NT4 | The launcher (`llmgate claude`), `llmgate env` (shell exports and `--json`) and `llmgate env --vscode` build the variables through the same function, so they cannot disagree. |
+| NT5 | `doctor` warns when `claude.credential` is `login` and the resolved value is `block`: "/usage will not show plan limits", with the remedy `claude.nonessential_traffic: "allow"`. |
+| NT6 | The README names the change for anyone on `credential: login`: update checks and release notes come back, telemetry stays off. |
+| PN1 | The mod's pane title and digest sit on a line of their own above the tab row and never wrap inside the tab row's width. |
+| UM1 | A requested id of the form `NAME-YYYYMMDD` that the `models` map lacks resolves through `NAME` when `NAME` is mapped, so the upstream receives the mapped name; the usage tables and the ledger list the name that was served. |
+| T1 | Tested by unit and `static_assert` checks of the environment list for each credential and each option value, by `setup_flow` and a doctor flow case for the warning, by a unit case for the dated id, and by the mod's tests for the title layout. |
+
 ## Windows port (phase 1 slice 8)
 
 Decisions of 2026-10-30: three milestones, a `WSAPoll` reactor (L17), an explicit per-user ACL on private files, and an installer that asks before touching PATH or the Task Scheduler. Windows here means native Windows built with MSYS2 UCRT64 GCC 16.2 (X2), not WSL.
