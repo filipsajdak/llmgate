@@ -19,6 +19,10 @@ Clean-room C++26 gateway (GCC 16.2, named modules, `import std`, `-freflection`)
 
 None, except a line that starts `// Exception: <reason>` and the closer `}  // namespace x`. The reason a rule holds lives in a named test, a requirement or the commit message. `tools/cpp26_lint.py` fails any other comment (it reads strings, raw strings and char literals, so JSONC inside a test string is fine).
 
+## Copilot review
+
+Copilot reviews every pull request. A reply to one of its review comments starts with `@copilot` and asks it to recheck against the fixing push (a hook enforces it); work can be delegated to it from GitHub with a PR comment that asks for a separate pull request. Skill: `copilot-collaboration`.
+
 ## Checks
 
 ```bash
@@ -31,6 +35,15 @@ ctest --preset host -L capability      # what GCC 16.2 supports, one probe per f
 ```
 
 Both lints read `path|rule|text|reason` allowance files (`tools/reflection_lint_allow.txt`, `tools/cpp26_lint_allow.txt`). `pending:` is debt that names the tier that pays it; any other reason is a justified exception; a stale line fails. Hooks: `tools/cpp26_precheck.py` (before a write, advisory) and `tools/reflection_hook.py` (after a write). They never block.
+
+## Review pass before opening a pull request
+
+Gates catch what a rule can state; a review pass catches the rest. Before a pull request, review your own diff on four counts and fix or answer what you find, so Copilot's review is the second opinion and not the first:
+
+- **Correctness:** run `/code-review` on the branch; read the failure paths and the platform branches.
+- **Security:** run `/security-review`; this is a public repo that handles credentials, so look for secrets in text or logs, files created without a private mode, shell built from input and unpinned actions.
+- **Performance:** a change on the request path (`src/gateway`, `src/http`, `src/json`, translators) is compared with `ops/bench/baseline.json` (`ops/bench/ci.sh bench`), and `/simplify` looks for needless copies, repeated scans and allocations.
+- **Consistency:** the behaviour matches its requirement in `docs/llmgate-rollout.md` and the spec is updated first for new behaviour; `tools/update_config_docs.sh --check readme` and `--check example` are clean; names and messages match their neighbours; every platform branch agrees.
 
 ## Gates before reporting done
 

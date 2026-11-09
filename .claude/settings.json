@@ -10,6 +10,16 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/tools/copilot_nudge_hook.py\"",
+            "timeout": 15
+          }
+        ]
       }
     ],
     "PostToolUse": [
