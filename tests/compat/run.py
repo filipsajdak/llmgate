@@ -5,6 +5,7 @@ import datetime
 import json
 import os
 import pathlib
+import shlex
 import shutil
 import socket
 import subprocess
@@ -29,6 +30,10 @@ def scenarios(only):
     return {k: v for k, v in found.items() if not only or k in only}
 
 
+def sourced(path):
+    return shlex.quote(path.as_posix())
+
+
 def tail(text):
     return " ".join(text.split())[-DETAIL_LIMIT:]
 
@@ -43,6 +48,14 @@ def start_fake_upstream(work):
         time.sleep(0.1)
     process.kill()
     raise SystemExit("the scripted upstream did not start")
+
+
+def stub_launcher(work):
+    if sys.platform != "win32":
+        return HERE / "stub_claude_launcher.sh"
+    launcher = work / "stub_claude_launcher.cmd"
+    launcher.write_text(f'@"{sys.executable}" "{HERE / "stub_claude.py"}" %*\r\n')
+    return launcher
 
 
 def free_port():
@@ -86,7 +99,7 @@ def keep_transcripts(sandbox, out, backend, name):
 
 def run_script(name, spec, sandbox, env, keep):
     try:
-        ran = subprocess.run(["sh", "-c", f". {HERE / 'lib.sh'}; . {HERE / 'scenarios' / name / 'run.sh'}"], cwd=sandbox, env=env, stdin=subprocess.DEVNULL,
+        ran = subprocess.run(["sh", "-c", f". {sourced(HERE / 'lib.sh')}; . {sourced(HERE / 'scenarios' / name / 'run.sh')}"], cwd=sandbox, env=env, stdin=subprocess.DEVNULL,
                              capture_output=True, text=True, timeout=spec.get("timeout", DEFAULT_TIMEOUT_SECONDS))
     except subprocess.TimeoutExpired:
         return FAIL, "timed out"
@@ -126,7 +139,7 @@ def run_one(name, spec, backend, ctx):
     transcript.write_text(ran.stdout)
     if ran.returncode != 0:
         return FAIL, f"claude exited {ran.returncode}: {tail(ran.stderr)}"
-    checked = subprocess.run(["sh", "-c", f". {HERE / 'lib.sh'}; . {HERE / 'scenarios' / name / 'check.sh'}"], cwd=sandbox, env=env, capture_output=True, text=True)
+    checked = subprocess.run(["sh", "-c", f". {sourced(HERE / 'lib.sh')}; . {sourced(HERE / 'scenarios' / name / 'check.sh')}"], cwd=sandbox, env=env, capture_output=True, text=True)
     return (PASS, "") if checked.returncode == 0 else (FAIL, "the check failed: " + tail(checked.stdout + checked.stderr))
 
 
@@ -154,7 +167,7 @@ def main():
         if backend["kind"] == "scripted":
             upstream, port = start_fake_upstream(work)
             config = write_scripted_config(work, port)
-            env["LLMGATE_CLAUDE"] = str(HERE / "stub_claude_launcher.sh")
+            env["LLMGATE_CLAUDE"] = str(stub_launcher(work))
             if args.idle_stub:
                 env["COMPAT_STUB_MODE"] = "idle"
         else:

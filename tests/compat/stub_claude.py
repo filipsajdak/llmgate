@@ -1,6 +1,7 @@
 import json
 import os
 import pathlib
+import shlex
 import subprocess
 import sys
 import urllib.request
@@ -26,7 +27,7 @@ print(json.dumps({"type": "system", "subtype": "init", "session_id": session}))
 events = []
 stub = scenario_dir / "stub.sh"
 if os.environ.get("COMPAT_STUB_MODE") != "idle" and stub.exists():
-    ran = subprocess.run(["sh", "-c", f". {lib}; . {stub}"], capture_output=True, text=True, check=True)
+    ran = subprocess.run(["sh", "-c", f". {shlex.quote(lib.as_posix())}; . {shlex.quote(stub.as_posix())}"], capture_output=True, text=True, check=True)
     events = [line for line in ran.stdout.splitlines() if line.strip()]
 last_text = ""
 for line in events:
