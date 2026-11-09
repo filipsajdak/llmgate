@@ -19,6 +19,10 @@ Clean-room C++26 gateway (GCC 16.2, named modules, `import std`, `-freflection`)
 
 None, except a line that starts `// Exception: <reason>` and the closer `}  // namespace x`. The reason a rule holds lives in a named test, a requirement or the commit message. `tools/cpp26_lint.py` fails any other comment (it reads strings, raw strings and char literals, so JSONC inside a test string is fine).
 
+## Copilot review
+
+Copilot reviews every pull request. A reply to one of its review comments starts with `@copilot` and asks it to recheck against the fixing push (a hook enforces it); work can be delegated to it from GitHub with a PR comment that asks for a separate pull request. Skill: `copilot-collaboration`.
+
 ## Checks
 
 ```bash
