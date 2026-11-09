@@ -267,12 +267,16 @@
     "profile_dir": "~/.claude-llmgate",
     // Effort level written to the profile when it has none.
     "effort": "medium",
-    // Whether Claude Code keeps its telemetry on; off by default.
+    // Whether Claude Code keeps its telemetry and error reporting on; off by default.
     "telemetry": false,
     // Credential Claude Code presents to the gateway: gateway sends the gateway key (or a placeholder) as
     // ANTHROPIC_AUTH_TOKEN; login sends none, so Claude Code keeps using its own saved login or API key,
     // which a provider with forward_credentials passes on. One of: gateway, login.
     "credential": "gateway",
+    // Whether Claude Code may make its nonessential requests: the plan limits that /usage shows, update
+    // checks and release notes. automatic allows them when credential is login and blocks them otherwise;
+    // allow and block decide for every credential. One of: automatic, allow, block.
+    "nonessential_traffic": "automatic",
     // Whether llmgate claude loads the llmgate mod (the /llmgate pane and status entry) into Claude Code;
     // the mod ships inside the binary.
     "mod": true

@@ -232,8 +232,9 @@ Every key is documented once, in the `[[=reflect::doc{...}]]` and `[[=reflect::e
 | `claude.context_tokens` | integer | `180000` | Context window Claude Code assumes, in tokens; it also sets the auto-compact window. |
 | `claude.profile_dir` | string | `"~/.claude-llmgate"` | Directory of the separate Claude Code profile that llmgate claude uses. |
 | `claude.effort` | string | `"medium"` | Effort level written to the profile when it has none. |
-| `claude.telemetry` | boolean | `false` | Whether Claude Code keeps its telemetry on; off by default. |
+| `claude.telemetry` | boolean | `false` | Whether Claude Code keeps its telemetry and error reporting on; off by default. |
 | `claude.credential` | one of `gateway`, `login` | `"gateway"` | Credential Claude Code presents to the gateway: gateway sends the gateway key (or a placeholder) as ANTHROPIC_AUTH_TOKEN; login sends none, so Claude Code keeps using its own saved login or API key, which a provider with forward_credentials passes on. |
+| `claude.nonessential_traffic` | one of `automatic`, `allow`, `block` | `"automatic"` | Whether Claude Code may make its nonessential requests: the plan limits that /usage shows, update checks and release notes. automatic allows them when credential is login and blocks them otherwise; allow and block decide for every credential. |
 | `claude.mod` | boolean | `true` | Whether llmgate claude loads the llmgate mod (the /llmgate pane and status entry) into Claude Code; the mod ships inside the binary. |
 | `usage` | object | - | Usage ledger and token budgets. |
 | `usage.ledger_file` | string | `"~/.local/state/llmgate/usage.jsonl"` | File that receives one line per request; the gateway reads it back at start-up. |
@@ -315,6 +316,7 @@ Anthropic's gateway guide says that with only `ANTHROPIC_BASE_URL` set, Claude C
 
 - The client's `Authorization` and `x-api-key` headers and every `anthropic-*` header reach that provider unchanged; no gateway token is attached. Every other provider still gets only its own credential, so a fallback from an Anthropic provider to Copilot never hands Copilot your Anthropic login.
 - `claude.credential: "login"` makes `llmgate claude` and `llmgate env` leave `ANTHROPIC_AUTH_TOKEN` unset, so Claude Code does not replace its own login with the gateway placeholder. Run `llmgate claude` once and sign in with `/login` inside the dedicated profile (`~/.claude-llmgate`); your normal `~/.claude` is not touched.
+- `claude.nonessential_traffic` (`automatic`, `allow`, `block`; default `automatic`) decides whether Claude Code may make its nonessential requests: the plan limits `/usage` shows, update checks and release notes. `automatic` allows them with `credential: "login"` and blocks them otherwise; telemetry and error reporting stay off through `claude.telemetry`. Before this option, a login setup had them blocked and `/usage` said "Failed to load usage data"; `doctor` warns when a login would still block them.
 - The gateway refuses to start a forwarding provider together with `client_key_env` (the same header cannot carry both the gateway key and the login) or on a non-loopback listen address; `llmgate --check-config` says so.
 - One Claude subscription account is one Claude Code profile. Anthropic's terms do not allow a gateway to collect, store or intermediate subscription credentials, so llmgate does not hold subscription tokens and cannot switch between two subscription accounts inside a running session; `/login` in Claude Code does that by hand.
 

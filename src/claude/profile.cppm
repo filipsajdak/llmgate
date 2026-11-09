@@ -17,6 +17,7 @@ export namespace llmgate::claude {
 using text::decimal;
 
 enum class credential_mode { gateway, login };
+enum class traffic_mode { automatic, allow, block };
 
 struct launch_config {
     [[= reflect::doc{"Model name Claude Code uses for the opus role."}]] std::string opus = "claude-opus-5-5";
@@ -27,11 +28,17 @@ struct launch_config {
     [[= reflect::doc{"Context window Claude Code assumes, in tokens; it also sets the auto-compact window."}]] std::int64_t context_tokens = 180000;
     [[= reflect::doc{"Directory of the separate Claude Code profile that llmgate claude uses."}]] std::string profile_dir = "~/.claude-llmgate";
     [[= reflect::doc{"Effort level written to the profile when it has none."}]] std::string effort = "medium";
-    [[= reflect::doc{"Whether Claude Code keeps its telemetry on; off by default."}]] bool telemetry = false;
+    [[= reflect::doc{"Whether Claude Code keeps its telemetry and error reporting on; off by default."}]] bool telemetry = false;
     [[= reflect::doc{"Credential Claude Code presents to the gateway: gateway sends the gateway key (or a placeholder) as ANTHROPIC_AUTH_TOKEN; login sends none, so Claude Code keeps using its own saved login or API key, which a provider with forward_credentials passes on."}]]
     credential_mode credential = credential_mode::gateway;
+    [[= reflect::doc{"Whether Claude Code may make its nonessential requests: the plan limits that /usage shows, update checks and release notes. automatic allows them when credential is login and blocks them otherwise; allow and block decide for every credential."}]]
+    traffic_mode nonessential_traffic = traffic_mode::automatic;
     [[= reflect::doc{"Whether llmgate claude loads the llmgate mod (the /llmgate pane and status entry) into Claude Code; the mod ships inside the binary."}]] bool mod = true;
 };
+
+constexpr bool traffic_blocked(launch_config const& settings) {
+    return settings.nonessential_traffic == traffic_mode::block || (settings.nonessential_traffic == traffic_mode::automatic && settings.credential != credential_mode::login);
+}
 
 consteval bool one_model_slot_per_role() {
     auto const members = std::define_static_array(std::meta::nonstatic_data_members_of(^^launch_config, std::meta::access_context::unchecked()));
@@ -111,8 +118,8 @@ constexpr environment_list environment(launch_config const& settings, std::strin
     if (settings.credential == credential_mode::login) {
         std::erase_if(list, [](environment_variable const& item) { return item.name == "ANTHROPIC_AUTH_TOKEN"; });
     }
+    list.emplace_back("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", traffic_blocked(settings) ? "1" : "");
     if (!settings.telemetry) {
-        list.emplace_back("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
         list.emplace_back("DISABLE_TELEMETRY", "1");
         list.emplace_back("DISABLE_ERROR_REPORTING", "1");
     }
@@ -450,7 +457,11 @@ inline std::string task_scheduler_xml(std::string_view const binary, std::string
 static_assert(shell_quote("it's") == R"('it'\''s')");
 static_assert(decimal(180000) == "180000" && decimal(-5) == "-5");
 static_assert(environment(launch_config{}, "http://127.0.0.1:9480/anthropic", "", "/p").size() == 18);
-static_assert(environment(launch_config{.telemetry = true}, "u", "k", "/p").size() == 15);
+static_assert(environment(launch_config{.telemetry = true}, "u", "k", "/p").size() == 16);
+static_assert(environment(launch_config{.credential = credential_mode::login}, "u", "k", "/p").size() == 17);
+static_assert(environment(launch_config{.credential = credential_mode::login, .nonessential_traffic = traffic_mode::block}, "u", "k", "/p").size() == 17);
+static_assert(environment(launch_config{.nonessential_traffic = traffic_mode::allow}, "u", "k", "/p").size() == 18);
+static_assert(traffic_blocked({}) && !traffic_blocked({.credential = credential_mode::login}) && traffic_blocked({.credential = credential_mode::login, .nonessential_traffic = traffic_mode::block}));
 static_assert(json::write(merge_settings(json::value{}, "medium", "llmgate statusline")) == json::write(merge_settings(merge_settings(json::value{}, "medium", "llmgate statusline"), "medium", "llmgate statusline")));
 
 }  // namespace llmgate::claude

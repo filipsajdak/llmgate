@@ -45,6 +45,19 @@ quota::summary summary_with(int const percent) {
 }
 
 const suite doctor_suite = [] {
+    "capability_a_login_that_blocks_nonessential_traffic_is_a_warning_because_usage_cannot_load_the_plan_limits"_test = [] {
+        auto seen = healthy();
+        auto const quiet = diagnose(seen);
+        seen.plan_usage_blocked = true;
+        auto const loud = diagnose(seen);
+
+        expect(!std::ranges::any_of(quiet, [](finding const& item) { return item.check == "plan-usage"; }));
+        auto const found = std::ranges::find(loud, std::string{"plan-usage"}, &finding::check);
+        expect(found != loud.end() && found->status == status::warn);
+        expect(found->detail.contains("/usage") && found->remedy.contains("claude.nonessential_traffic"));
+        expect(exit_code(loud) == 0);
+    };
+
     "capability_a_forced_subagent_model_is_a_warning_because_it_overrides_agent_types_and_spawn_rules"_test = [] {
         auto seen = healthy();
         auto const quiet = diagnose(seen);

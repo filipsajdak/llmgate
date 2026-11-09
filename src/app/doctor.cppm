@@ -11,7 +11,7 @@ import llmgate.text;
 export namespace llmgate::doctor {
 
 enum class status { pass, warn, fail };
-enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, models, ledger, budget, quota, subagents, agent_targets, model_limits, network, aws, org };
+enum class check { config, identity, claude, listen, port, profile, copilot_login, copilot_exchange, chatgpt_login, credential, models, ledger, budget, quota, subagents, agent_targets, model_limits, network, aws, org, plan_usage };
 static_assert(reflect::unique_values<check>());
 
 enum class port_state { free, ours, foreign };
@@ -105,6 +105,7 @@ struct facts {
     std::vector<model_fact> models{};
     std::string models_error{};
     bool subagent_model_forced = false;
+    bool plan_usage_blocked = false;
     std::vector<std::string> dangling_targets{};
     std::vector<std::string> unknown_limits{};
     network_fact network{};
@@ -201,6 +202,13 @@ constexpr finding identity_finding(facts const& seen) {
         return make(check::identity, status::fail, "the identity file has mode " + octal(seen.identity.mode) + ", other users can read it", "chmod 600 " + seen.identity.path);
     }
     return make(check::identity, status::pass, "the identity file is private (0600)");
+}
+
+constexpr std::optional<finding> plan_usage_finding(facts const& seen) {
+    if (!seen.plan_usage_blocked) {
+        return std::nullopt;
+    }
+    return make(check::plan_usage, status::warn, "/usage will not show your plan limits: Claude Code is told not to make nonessential requests", "set claude.nonessential_traffic to \"allow\"");
 }
 
 constexpr finding profile_finding(facts const& seen) {
@@ -499,6 +507,7 @@ constexpr std::vector<finding> diagnose(facts const& seen) {
     out.push_back(detail::budget_finding(seen));
     detail::add(out, detail::quota_finding(seen));
     detail::add(out, detail::subagent_finding(seen));
+    detail::add(out, detail::plan_usage_finding(seen));
     detail::add(out, detail::agent_targets_finding(seen));
     detail::add(out, detail::model_limits_finding(seen));
     detail::add(out, detail::network_finding(seen));

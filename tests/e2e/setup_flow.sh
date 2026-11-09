@@ -62,6 +62,20 @@ if "$binary" --config "$config" setup >/dev/null 2>"$work/err.txt"; then rc=0; e
 check sh -c "[ $rc -ne 0 ] && grep -q 'not plain JSON' '$work/err.txt' && grep -q comment '$work/profile/settings.json'"
 cp "$work/backup.json" "$work/profile/settings.json"
 
+label="nonessential traffic is blocked for a gateway key and cleared for a login, and the option overrides both"
+"$binary" --config "$config" env > "$work/env.gateway"
+sed 's#"claude": {#"claude": { "credential": "login",#' "$config" > "$work/login.jsonc"
+"$binary" --config "$work/login.jsonc" env > "$work/env.login"
+sed 's#"claude": {#"claude": { "credential": "login", "nonessential_traffic": "block",#' "$config" > "$work/loginblock.jsonc"
+"$binary" --config "$work/loginblock.jsonc" env > "$work/env.loginblock"
+sed 's#"claude": {#"claude": { "nonessential_traffic": "allow",#' "$config" > "$work/gatewayallow.jsonc"
+"$binary" --config "$work/gatewayallow.jsonc" env > "$work/env.gatewayallow"
+check sh -c "grep -q \"NONESSENTIAL_TRAFFIC='1'\" '$work/env.gateway' && grep -q \"NONESSENTIAL_TRAFFIC=''\" '$work/env.login' && grep -q DISABLE_TELEMETRY '$work/env.login' && grep -q \"NONESSENTIAL_TRAFFIC='1'\" '$work/env.loginblock' && grep -q \"NONESSENTIAL_TRAFFIC=''\" '$work/env.gatewayallow'"
+label="doctor warns when a login would block /usage and says nothing when it would not"
+"$binary" --config "$work/loginblock.jsonc" doctor --offline > "$work/doctor.block" 2>&1 || true
+"$binary" --config "$work/login.jsonc" doctor --offline > "$work/doctor.login" 2>&1 || true
+check sh -c "grep -q 'WARN  plan-usage' '$work/doctor.block' && grep -q 'claude.nonessential_traffic' '$work/doctor.block' && ! grep -q 'plan-usage' '$work/doctor.login'"
+
 label="env prints exports with the gateway url and models"
 "$binary" --config "$config" env > "$work/env.out"
 check sh -c "grep -q \"export ANTHROPIC_BASE_URL='http://127.0.0.1:$port/anthropic'\" '$work/env.out' && grep -q \"CLAUDE_CODE_MAX_CONTEXT_TOKENS='150000'\" '$work/env.out'"

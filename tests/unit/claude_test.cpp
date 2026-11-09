@@ -58,6 +58,36 @@ const suite claude_suite = [] {
         expect(value_of(claude::environment({.telemetry = true}, "u", "", "/p"), "DISABLE_TELEMETRY") == "<missing>");
     };
 
+    "capability_nonessential_traffic_follows_the_credential_unless_the_config_decides"_test = [] {
+        using claude::credential_mode;
+        using claude::traffic_mode;
+        constexpr auto traffic = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC";
+
+        expect(value_of(claude::environment({}, "u", "", "/p"), traffic) == "1");
+        expect(value_of(claude::environment({.credential = credential_mode::login}, "u", "", "/p"), traffic).empty());
+        expect(value_of(claude::environment({.credential = credential_mode::login, .nonessential_traffic = traffic_mode::block}, "u", "", "/p"), traffic) == "1");
+        expect(value_of(claude::environment({.nonessential_traffic = traffic_mode::allow}, "u", "", "/p"), traffic).empty());
+    };
+
+    "limit_an_allowed_switch_is_written_empty_so_a_stale_one_in_the_shell_or_the_vscode_settings_is_cleared"_test = [] {
+        auto const list = claude::environment({.credential = claude::credential_mode::login}, "u", "", "/p");
+        auto const existing = parse_value(R"x({"claudeCode.environmentVariables":[{"name":"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC","value":"1"}]})x");
+
+        auto const text = json::write(claude::merge_vscode(existing, list));
+
+        expect(text.contains(R"x({"name":"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC","value":""})x")) << text;
+        expect(!text.contains(R"x({"name":"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC","value":"1"})x"));
+    };
+
+    "limit_the_nonessential_traffic_switch_does_not_follow_the_telemetry_switches"_test = [] {
+        auto const quiet = claude::environment({.credential = claude::credential_mode::login}, "u", "", "/p");
+        auto const chatty = claude::environment({.telemetry = true}, "u", "", "/p");
+
+        expect(value_of(quiet, "DISABLE_TELEMETRY") == "1" && value_of(quiet, "DISABLE_ERROR_REPORTING") == "1");
+        expect(value_of(quiet, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC").empty());
+        expect(value_of(chatty, "DISABLE_TELEMETRY") == "<missing>" && value_of(chatty, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC") == "1");
+    };
+
     "capability_the_client_key_is_used_when_set_and_a_dummy_otherwise"_test = [] {
         expect(value_of(sample(), "ANTHROPIC_AUTH_TOKEN") == "none");
         expect(value_of(sample("local-secret"), "ANTHROPIC_AUTH_TOKEN") == "local-secret");
