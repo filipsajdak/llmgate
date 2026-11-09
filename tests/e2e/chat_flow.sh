@@ -41,6 +41,7 @@ python3 - "$port" "$work" <<'PY'
 import http.client
 import json
 import sys
+import time
 
 port, work = int(sys.argv[1]), sys.argv[2]
 LONG = "mcp__server__" + "x" * 80
@@ -120,8 +121,22 @@ check("the ledger holds one answered line per streamed turn with input and cache
 def last_request():
     return [json.loads(line) for line in open(f"{work}/tool.log")][-1]["request"]
 
+LEDGER_WAIT_SECONDS = 10
+LEDGER_POLL_SECONDS = 0.05
+
+
+def ledger_after(count):
+    deadline = time.monotonic() + LEDGER_WAIT_SECONDS
+    while True:
+        lines = [json.loads(line) for line in open(f"{work}/usage.jsonl")]
+        if len(lines) > count or time.monotonic() > deadline:
+            return lines
+        time.sleep(LEDGER_POLL_SECONDS)
+
+
+before = len(lines)
 post({"messages": [user]}, model="claude-sonnet-5-5-20260101")
-lines = [json.loads(line) for line in open(f"{work}/usage.jsonl")]
+lines = ledger_after(before)
 check("a dated model id reaches the upstream as the mapped model and is accounted under its mapped family name", last_request()["model"] == "gpt-fake" and lines[-1]["model"] == "claude-sonnet-5-5")
 check("the labels of the model are looked up under the id the provider reported, not under the family name", "dated" in str(lines[-1].get("labels")))
 
