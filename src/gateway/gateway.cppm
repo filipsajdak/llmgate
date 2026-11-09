@@ -47,6 +47,34 @@ constexpr wire_protocol wire_for(provider_config const& settings, std::string_vi
     return found == settings.model_protocols.end() ? settings.protocol : found->second;
 }
 
+constexpr std::size_t date_suffix_length = 9;
+
+constexpr bool has_date_suffix(std::string_view const name) {
+    if (name.size() <= date_suffix_length || name[name.size() - date_suffix_length] != '-') {
+        return false;
+    }
+    return std::ranges::all_of(name.substr(name.size() - date_suffix_length + 1), [](char const c) { return c >= '0' && c <= '9'; });
+}
+
+std::optional<std::string> mapped_model(std::map<std::string, std::string> const& models, std::string const& requested) {
+    if (auto const mapped = models.find(requested); mapped != models.end()) {
+        return mapped->second;
+    }
+    if (!has_date_suffix(requested)) {
+        return std::nullopt;
+    }
+    auto const stem = models.find(requested.substr(0, requested.size() - date_suffix_length));
+    return stem == models.end() ? std::nullopt : std::optional<std::string>{stem->second};
+}
+
+std::string family_name(std::map<std::string, std::string> const& models, std::string_view const served) {
+    if (!has_date_suffix(served)) {
+        return std::string{served};
+    }
+    std::string const stem{served.substr(0, served.size() - date_suffix_length)};
+    return models.contains(std::string{served}) || !models.contains(stem) ? std::string{served} : stem;
+}
+
 constexpr std::string_view default_path_for(wire_protocol const protocol) {
     switch (protocol) {
         case wire_protocol::openai_responses: return default_responses_path;
@@ -789,8 +817,7 @@ std::string stats_json(stats const& counters, std::string_view const usage_json,
 }
 
 std::optional<std::string> alias_of(std::map<std::string, std::string> const& models, std::string const& requested) {
-    auto const mapped = models.find(requested);
-    return mapped == models.end() ? std::nullopt : std::optional<std::string>{mapped->second};
+    return mapped_model(models, requested);
 }
 
 std::string upstream_name_of(std::map<std::string, std::string> const& models, std::optional<std::string> const& pinned, std::string const& requested) {
@@ -1770,7 +1797,7 @@ private:
             co_return co_await reject(out, routing::error_reply(503, "api_error", "every provider for this model is unavailable (circuit open)"));
         }
         capture_exchange(note, providers_[last].name, held->status, {}, held->fields, held->body);
-        record_entry(note, providers_[last].name, held->status, {}, {}, 0, {.error = usage::error_of_body(held->body)});
+        record_entry(note, providers_[last].name, providers_[last].settings.models, held->status, {}, {}, 0, {.error = usage::error_of_body(held->body)});
         co_return co_await out.send(held->status, held->fields, held->body);
     }
 
@@ -1940,14 +1967,14 @@ private:
         return failure == std::errc::timed_out ? gateway_timeout_status : bad_gateway_status;
     }
 
-    void record_usage(detail::request_note const& note, detail::relay_state& state, std::error_code const failure, std::string_view const provider) {
+    void record_usage(detail::request_note const& note, detail::relay_state& state, std::error_code const failure, std::string_view const provider, std::map<std::string, std::string> const& models) {
         if (!state.streaming && state.head && !failure && state.head->status >= 200 && state.head->status < 300) {
             state.observed.on_body(state.buffered);
         }
         auto const status = final_status(state, failure);
         detail::outcome_text outcome{.stop_reason = state.observed.stop_reason(), .error = reply_error(state, status), .verdict = classifier_verdict(note, state, provider, status)};
         capture_reply(note, provider, status, state, outcome.verdict);
-        record_entry(note, provider, status, state.observed.model(), state.observed.used(), state.repairs_seen, std::move(outcome));
+        record_entry(note, provider, models, status, state.observed.model(), state.observed.used(), state.repairs_seen, std::move(outcome));
     }
 
     void capture_exchange(detail::request_note const& note, std::string_view const provider, int const status, std::string_view const verdict,
@@ -1997,12 +2024,12 @@ private:
         return merged | std::views::join_with(',') | std::ranges::to<std::string>();
     }
 
-    void record_entry(detail::request_note const& note, std::string_view const provider, int const status, std::string_view const model,
+    void record_entry(detail::request_note const& note, std::string_view const provider, std::map<std::string, std::string> const& models, int const status, std::string_view const model,
                       usage::tokens const& used, std::uint64_t const repairs, detail::outcome_text outcome) {
         auto const elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - note.began);
         usage::record entry{.time = clock_(),
                             .requested = usage::label(note.requested),
-                            .model = usage::label(model.empty() ? std::string_view{note.requested} : model),
+                            .model = usage::label(family_name(models, model.empty() ? std::string_view{note.requested} : model)),
                             .role = std::string{usage::role_of(note.requested)},
                             .provider = usage::label(provider),
                             .session = note.session,
@@ -2079,18 +2106,18 @@ private:
             ++counters_.client_disconnects;
         }
         if (!drained.client) {
-            record_usage(note, state, drained.failure, provider);
+            record_usage(note, state, drained.failure, provider, providers_[index].settings.models);
             co_return detail::delivered(drained.client, detail::health::neutral);
         }
         if (detail::client_gone(drained)) {
-            record_usage(note, state, drained.failure, provider);
+            record_usage(note, state, drained.failure, provider, providers_[index].settings.models);
             co_return detail::delivered(net::result_void{}, detail::health::neutral);
         }
         if (detail::retryable(state, drained.failure)) {
             co_return hold(index, upstream, state, drained.failure);
         }
         auto concluded = co_await conclude(index, upstream, state, drained.failure, out);
-        record_usage(note, state, drained.failure, provider);
+        record_usage(note, state, drained.failure, provider, providers_[index].settings.models);
         co_return detail::delivered(std::move(concluded), detail::health_of(state, drained.failure));
     }
 

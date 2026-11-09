@@ -63,6 +63,8 @@ test('the command opens the pane, which shows the routes, the last reply and the
   expect(answer).toEqual({})
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /llmgate abc-123/ })).toBeDefined()
+  expect(await ui.find({ key: 'tabs' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /last reply: work sonnet-9 \(switched\)/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /sonnet  work      sonnet-9  config/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'gpt-6-sol (codex)' })).toBeDefined()

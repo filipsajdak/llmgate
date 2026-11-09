@@ -1093,6 +1093,7 @@ doctor::facts gather_facts(context const& where) {
     }
     describe_models(where, seen);
     seen.subagent_model_forced = detail::subagent_model_forced(seen.profile_dir);
+    seen.plan_usage_blocked = where.settings.claude.credential == claude::credential_mode::login && claude::traffic_blocked(where.settings.claude);
     seen.dangling_targets = dangling_targets_of(where.settings);
     seen.unknown_limits = unknown_limits_of(where.settings);
     seen.network = network_facts(where);
