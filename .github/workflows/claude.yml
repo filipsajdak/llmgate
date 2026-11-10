@@ -1,0 +1,148 @@
+name: claude
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+concurrency:
+  group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) ||
+      (github.event_name == 'pull_request_review_comment' && github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.comment.body, '@claude') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) ||
+      (github.event_name == 'pull_request_review' && github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.review.body, '@claude') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association) &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      actions: read
+    outputs:
+      bundle: ${{ steps.bundle.outputs.bundle }}
+      base: ${{ steps.base.outputs.sha }}
+    steps:
+      - name: Refuse a pull request that is closed or does not come from this repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          EVENT: ${{ github.event_name }}
+          IS_PULL_REQUEST: ${{ github.event.issue.pull_request && 'true' || 'false' }}
+        run: |
+          set -eu
+          if [ "$EVENT" = issue_comment ] && [ "$IS_PULL_REQUEST" != true ]; then exit 0; fi
+          head=$(gh api "repos/$REPO/pulls/$NUMBER" --jq '.head.repo.full_name // ""')
+          state=$(gh api "repos/$REPO/pulls/$NUMBER" --jq .state)
+          [ "$head" = "$REPO" ] || { echo "refusing: the pull request head is '$head', not $REPO"; exit 1; }
+          [ "$state" = open ] || { echo "refusing: the pull request is $state, the action would start from the default branch"; exit 1; }
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Keep a copy of the verifier, from the default branch, before the agent runs
+        run: cp tools/claude_publish.sh "$RUNNER_TEMP/claude_publish.sh"
+      - id: base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          ON_PULL_REQUEST: ${{ (github.event.issue.pull_request || github.event.pull_request) && 'true' || 'false' }}
+        run: |
+          set -eu
+          if [ "$ON_PULL_REQUEST" = true ]; then
+            sha=$(gh api "repos/$REPO/pulls/$NUMBER" --jq .head.sha)
+          else
+            sha=$(git rev-parse HEAD)
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - uses: anthropics/claude-code-action@8041f1d17e0e7d2f2cfe35002962e9f26237c0bb # v1.0.263
+        env:
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          include_comments_by_actor: filipsajdak
+          claude_args: >-
+            --model claude-sonnet-5-5
+            --max-turns 40
+            --setting-sources user
+            --settings '{"disableAllHooks":true}'
+            --append-system-prompt "Do not push. Commit your work locally on the current branch; a separate workflow job verifies the commits and pushes them."
+            --disallowedTools "Bash(git rm:*),Read(.git/**),Edit(.git/**),Write(.git/**),Edit(.github/**),Write(.github/**),Edit(.claude/**),Write(.claude/**),Edit(tools/**),Write(tools/**),Edit(ops/**),Write(ops/**),Edit(cmake/**),Write(cmake/**),Edit(tests/lint/**),Write(tests/lint/**),Edit(tests/release/**),Write(tests/release/**),Edit(CMakeLists.txt),Write(CMakeLists.txt),Edit(CMakePresets.json),Write(CMakePresets.json),Edit(CLAUDE.md),Write(CLAUDE.md),Edit(AGENTS.md),Write(AGENTS.md)"
+      - id: bundle
+        if: success()
+        env:
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: |
+          set -eu
+          rm -rf .git/hooks .git/info/attributes
+          printf '[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n' > .git/config
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+          git="git -c core.hooksPath=/dev/null -c core.fsmonitor=false"
+          if [ "$($git rev-list --count "$BASE_SHA..HEAD")" -gt 0 ]; then
+            mkdir -p "$RUNNER_TEMP/claude"
+            $git bundle create "$RUNNER_TEMP/claude/claude.bundle" HEAD "^$BASE_SHA"
+            sh "$RUNNER_TEMP/claude_publish.sh" "$RUNNER_TEMP/claude/claude.bundle" "$BASE_SHA" claude/run-0 dry
+            echo "bundle=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: steps.bundle.outputs.bundle == 'true'
+        with:
+          name: claude-bundle
+          path: ${{ runner.temp }}/claude/claude.bundle
+          retention-days: 3
+          if-no-files-found: error
+
+  publish:
+    needs: claude
+    if: needs.claude.outputs.bundle == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: claude-bundle
+          path: ${{ runner.temp }}/claude
+      - name: Verify the commits and push them to a claude/ branch
+        env:
+          BASE_SHA: ${{ needs.claude.outputs.base }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -eu
+          git fetch --no-tags origin "$BASE_SHA"
+          sh tools/claude_publish.sh "$RUNNER_TEMP/claude/claude.bundle" "$BASE_SHA" "claude/run-$RUN_ID-$ATTEMPT"
+      - name: Say where the branch is
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SERVER: ${{ github.server_url }}
+        run: |
+          gh issue comment "$NUMBER" --repo "$REPO" --body "Claude's commits were verified and pushed to claude/run-$RUN_ID-$ATTEMPT. Open a pull request: $SERVER/$REPO/compare/$DEFAULT_BRANCH...claude/run-$RUN_ID-$ATTEMPT?expand=1 (the gates run when you open it)."
