@@ -1,5 +1,6 @@
 #include "platform.h"
 
+#include <atomic>
 #include <cerrno>
 #include <csignal>
 #include <cstdint>
@@ -54,11 +55,12 @@ int write_everything(int const fd, char const* data, size_t size) noexcept {
 }
 
 std::string temporary_path(char const* const target) {
+    static std::atomic<unsigned> sequence{0};
     std::string const path{target};
     auto const slash = path.find_last_of('/');
     std::string const directory = slash == std::string::npos ? std::string{"."} : path.substr(0, slash);
     std::string const name = slash == std::string::npos ? path : path.substr(slash + 1);
-    return directory + "/." + name + "." + std::to_string(::getpid()) + ".tmp";
+    return directory + "/." + name + "." + std::to_string(::getpid()) + "." + std::to_string(sequence.fetch_add(1)) + ".tmp";
 }
 
 int prepare_pipe_end(int const descriptor) noexcept {
@@ -87,6 +89,22 @@ int read_everything(int const fd, void* context, output_sink const sink) noexcep
             return errno;
         }
     }
+}
+
+int write_temporary(std::string const& temporary, char const* const data, size_t const size, unsigned const mode) noexcept {
+    auto const descriptor = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, static_cast<mode_t>(mode));
+    if (descriptor < 0) {
+        return errno;
+    }
+    auto error = write_everything(descriptor, data, size);
+    if (!error && ::fsync(descriptor) < 0) {
+        error = errno;
+    }
+    ::close(descriptor);
+    if (error) {
+        ::unlink(temporary.c_str());
+    }
+    return error;
 }
 
 }  // namespace
@@ -339,21 +357,24 @@ char path_list_separator() noexcept {
 
 int write_file_atomic(char const* const target, char const* const data, size_t const size, unsigned const mode) noexcept {
     auto const temporary = temporary_path(target);
-    auto const descriptor = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, static_cast<mode_t>(mode));
-    if (descriptor < 0) {
-        return errno;
+    if (auto const failure = write_temporary(temporary, data, size, mode)) {
+        return failure;
     }
-    auto error = write_everything(descriptor, data, size);
-    if (!error && ::fsync(descriptor) < 0) {
-        error = errno;
+    if (::rename(temporary.c_str(), target) == 0) {
+        return 0;
     }
-    ::close(descriptor);
-    if (!error && ::rename(temporary.c_str(), target) < 0) {
-        error = errno;
+    auto const error = errno;
+    ::unlink(temporary.c_str());
+    return error;
+}
+
+int create_file_exclusive(char const* const target, char const* const data, size_t const size, unsigned const mode) noexcept {
+    auto const temporary = temporary_path(target);
+    if (auto const failure = write_temporary(temporary, data, size, mode)) {
+        return failure;
     }
-    if (error) {
-        ::unlink(temporary.c_str());
-    }
+    auto const error = ::link(temporary.c_str(), target) == 0 ? 0 : errno;
+    ::unlink(temporary.c_str());
     return error;
 }
 

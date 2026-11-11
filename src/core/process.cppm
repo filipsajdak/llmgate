@@ -346,6 +346,19 @@ inline std::expected<void, std::error_code> write_file_atomic(std::filesystem::p
     return detail::from_code(platform::write_file_atomic(target.string().c_str(), text.data(), text.size(), mode));
 }
 
+inline std::expected<bool, std::error_code> create_file_exclusive(std::filesystem::path const& target, std::string_view const text, unsigned const mode,
+                                                                  bool const private_parent) {
+    detail::prepare_directory(target.parent_path(), private_parent);
+    auto const code = platform::create_file_exclusive(target.string().c_str(), text.data(), text.size(), mode);
+    if (code == 0) {
+        return true;
+    }
+    if (std::error_code{code, std::generic_category()} == std::errc::file_exists) {
+        return false;
+    }
+    return std::unexpected{std::error_code{code, std::system_category()}};
+}
+
 inline std::expected<void, std::error_code> append_file(std::filesystem::path const& target, std::string_view const text, unsigned const mode,
                                                         bool const private_parent) {
     detail::prepare_directory(target.parent_path(), private_parent);
