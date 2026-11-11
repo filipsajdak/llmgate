@@ -319,6 +319,14 @@ std::filesystem::path identity_file() {
 }
 
 constexpr std::size_t identity_bytes = 32;
+
+inline std::optional<std::string> held_identity(std::filesystem::path const& path) {
+    auto held = read_file(path);
+    if (held && held->size() == identity_bytes * 2) {
+        return std::move(*held);
+    }
+    return std::nullopt;
+}
 constexpr std::size_t challenge_bytes = 16;
 constexpr std::string_view proof_marker = R"("proof":")";
 
@@ -476,18 +484,23 @@ export namespace llmgate::commands {
 inline std::expected<std::string, std::string> identity_key() {
     constexpr mode_t key_mode = 0600;
     auto const path = detail::identity_file();
-    if (auto const held = detail::read_file(path); held && held->size() == detail::identity_bytes * 2) {
+    if (auto const held = detail::held_identity(path)) {
         return *held;
     }
     auto fresh = proof::random_hex(detail::identity_bytes);
     if (!fresh) {
         return std::unexpected{"cannot generate the gateway identity: " + fresh.error().message()};
     }
+    if (auto const created = process::create_file_exclusive(path, *fresh, key_mode, true); !created) {
+        return std::unexpected{path.string() + ": " + created.error().message()};
+    }
+    if (auto const settled = detail::held_identity(path)) {
+        return *settled;
+    }
     if (auto const written = process::write_file_atomic(path, *fresh, key_mode, true); !written) {
         return std::unexpected{path.string() + ": " + written.error().message()};
     }
-    auto const settled = detail::read_file(path);
-    return settled ? *settled : std::move(*fresh);
+    return std::move(*fresh);
 }
 
 inline bool gateway_verified(arguments::gateway_address const& address) {
