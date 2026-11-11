@@ -96,7 +96,7 @@ if ($Repo -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' -or $Repo.Contains('..')
 $bin = Join-Path $Prefix 'llmgate.exe'
 
 function Get-UserPath {
-    return [Environment]::GetEnvironmentVariable('Path', 'User')
+    return [string][Environment]::GetEnvironmentVariable('Path', 'User')
 }
 
 function Test-OnUserPath([string]$Directory) {
