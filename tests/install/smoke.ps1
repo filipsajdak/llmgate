@@ -119,9 +119,6 @@ $orgDry = Invoke-Installer (@('-Version', $version, '-Force', '-DryRun', '-Org',
 Check 'org with a dry run only says what it would do' ($orgDry.ExitCode -eq 0 -and $orgDry.Text -match 'would: run llmgate org install')
 $orgMissing = Invoke-Installer (@('-Version', $version, '-Force', '-Org', (Join-Path $work 'no-such-pack')) + $arguments)
 Check 'an organisation pack that cannot be applied stops the install and names the command to retry' ($orgMissing.ExitCode -ne 0 -and $orgMissing.Text -match 'org install did not finish')
-$userConfig = Join-Path $env:USERPROFILE '.config\llmgate'
-New-Item -ItemType Directory -Force -Path $userConfig | Out-Null
-Set-Content -LiteralPath (Join-Path $userConfig 'config.jsonc') -Value '{"listen":"127.0.0.1:19881","providers":{"bedrock":{"base_url":"http://127.0.0.1:1","auth":{"kind":"none"},"models":{"claude-sonnet-5-5":"m"}}}}'
 $orgApplied = Invoke-Installer (@('-Version', $version, '-Force', '-Org', $pack) + $arguments)
 Check 'an organisation pack is applied before init' ($orgApplied.ExitCode -eq 0 -and $orgApplied.Text -match 'checksum ok')
 

@@ -155,6 +155,9 @@ A company keeps its llmgate settings in a repository of its own and a colleague 
 | O14 | `doctor` gets an `org` check: pack present and valid, its source and commit, and a warning that lists any key the user set that a locked path overrides. |
 | O15 | The installer takes `--org SOURCE` and `--org-ref REF`, runs `llmgate org install` after the binary is in place and before `init`, and passes `--yes` on only when it was given `--yes` itself. |
 | O16 | `examples/org-pack/llmgate-org.jsonc` is a synthetic pack for a made-up company, used by the tests and the README. |
+| O17 | `org install`, `org show`, `org update` and `org remove` start when the configuration file does not exist yet, which is the state of a machine before `llmgate init` has run (O15 runs `org install` before `init`). A file that exists but cannot be read or does not parse still stops them with the file's error, so a typo is never skipped. |
+| O18 | With no configuration file `org install` prints the changes as usual and says "no configuration file yet; llmgate init creates it" where it would otherwise warn about a configuration the pack rejects; it records the pack (O9) and leaves the profile and the `/model` list alone, because there is no configuration to build them from. `init` (and `setup`) write the profile afterwards with the pack's policy merged in, as they do for an installed pack today. |
+| O19 | Tested by `org_flow.sh` on a machine with no configuration file (install, show, `init --yes`, the pack's deny rule in the profile, remove), by a case in which a broken file still stops `org install`, and by the PowerShell installer smoke test, which no longer creates a configuration before its `-Org` scenario. |
 
 Not in slice 7 (phase 2, full pack): pinned llmgate versions and a required-update notice, VS Code settings, budgets and reports defaults, signed packs.
 
