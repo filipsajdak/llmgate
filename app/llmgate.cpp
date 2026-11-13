@@ -1113,6 +1113,17 @@ std::string pack_problem(org::loaded const& pack) {
     return {};
 }
 
+bool has_configuration_file(commands::context const& where) {
+    return std::filesystem::exists(process::expand_home(where.options.config_path));
+}
+
+std::optional<int> unreadable_configuration(commands::context const& where) {
+    if (where.config_error.empty() || !has_configuration_file(where)) {
+        return std::nullopt;
+    }
+    return fail(exit_config, where.config_error);
+}
+
 std::string config_problem_with(commands::context const& where, org::loaded const& pack) {
     std::ifstream in{process::expand_home(where.options.config_path)};
     auto user = json::parse(std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}}, {.jsonc = true});
@@ -1190,7 +1201,9 @@ void print_changes(commands::context const& where, acquired const& item, std::ve
     for (auto const& line : changes) {
         std::println("  {}", line);
     }
-    if (auto const warning = config_problem_with(where, item.pack); !warning.empty()) {
+    if (!has_configuration_file(where)) {
+        std::println("no configuration file yet; llmgate init creates it");
+    } else if (auto const warning = config_problem_with(where, item.pack); !warning.empty()) {
         std::println("warning: with this pack your configuration is rejected: {}", warning);
     }
 }
@@ -1280,6 +1293,9 @@ int org_command(commands::context const& where) {
     auto const action = org_request(where.options.passthrough);
     if (!action) {
         return fail(exit_usage, org_usage);
+    }
+    if (auto const refused = unreadable_configuration(where)) {
+        return *refused;
     }
     switch (*action) {
         case org_action::install: return org_install(where, where.options.passthrough.back(), where.options.ref, org::classify(where.options.passthrough.back()));

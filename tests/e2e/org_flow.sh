@@ -132,5 +132,36 @@ if command -v git >/dev/null 2>&1 && [ -z "${MSYSTEM:-}" ]; then
   check sh -c "llmgate_show=\$('$binary' --config '$config' org show | head -1); echo \"\$llmgate_show\" | grep -q 'flow-corp 1.0.0'"
 fi
 
+fresh=$work/fresh
+mkdir -p "$fresh/home"
+fresh_config="$fresh/home/.config/llmgate/config.jsonc"
+fresh_llmgate() { HOME="$fresh/home" XDG_STATE_HOME="$fresh/state" XDG_CONFIG_HOME="$fresh/config" LLMGATE_ORG_DIR="$fresh/org" "$binary" "$@"; }
+
+label="on a machine with no configuration file org install records the pack and says init creates the file"
+if fresh_llmgate org install "$pack" --yes > "$work/out.txt" 2>&1; then rc=0; else rc=$?; fi
+check sh -c "[ $rc -eq 0 ] && [ -e '$fresh/org/pack.jsonc' ] && grep -q 'no configuration file yet' '$work/out.txt' && ! grep -q 'cannot read' '$work/out.txt' && [ ! -e '$fresh_config' ]"
+
+label="on that machine org show names the pack"
+check sh -c "'$binary' org show >/dev/null 2>&1; HOME='$fresh/home' XDG_STATE_HOME='$fresh/state' XDG_CONFIG_HOME='$fresh/config' LLMGATE_ORG_DIR='$fresh/org' '$binary' org show | grep -q 'flow-corp 1.0.0'"
+
+label="init --yes afterwards writes the profile with the pack's deny rule and announcement merged in"
+fresh_llmgate init --yes > "$work/out.txt" 2>&1 || true
+check sh -c "grep -q 'Bash(curl' '$fresh/home/.claude-llmgate/settings.json' && grep -q 'Use the company providers' '$fresh/home/.claude-llmgate/settings.json'"
+
+label="org remove on that machine takes the pack and its profile entries out again"
+fresh_llmgate org remove --yes > "$work/out.txt" 2>&1
+check sh -c "[ ! -e '$fresh/org/pack.jsonc' ] && [ -e '$fresh/home/.claude-llmgate/settings.json' ] && ! grep -q 'Bash(curl' '$fresh/home/.claude-llmgate/settings.json'"
+
+label="org show, update and remove with no pack and no configuration say so and do not complain about the file"
+rm -rf "$fresh/org" "$fresh/home/.config"
+if fresh_llmgate org update --yes > "$work/out1.txt" 2>&1; then c=0; else c=$?; fi
+check sh -c "[ $c -ne 0 ] && grep -q 'no organisation pack is installed' '$work/out1.txt' && ! grep -q 'cannot read' '$work/out1.txt'"
+
+label="a configuration file that exists but does not parse still stops org install"
+mkdir -p "$(dirname "$fresh_config")"
+printf '{ this is not json' > "$fresh_config"
+if fresh_llmgate org install "$pack" --yes > "$work/out.txt" 2>&1; then rc=0; else rc=$?; fi
+check sh -c "[ $rc -ne 0 ] && [ ! -e '$fresh/org/pack.jsonc' ] && grep -q 'config.jsonc' '$work/out.txt'"
+
 echo "$failures failures"
 [ "$failures" -eq 0 ]

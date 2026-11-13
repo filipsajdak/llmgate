@@ -42,7 +42,7 @@ enum class command {
     check,
     init [[= tolerant{}]],
     mod,
-    org
+    org [[= tolerant{}]]
 };
 static_assert(reflect::unique_values<command>());
 

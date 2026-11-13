@@ -220,9 +220,9 @@ const suite arguments_suite = [] {
             << usage_text;
     };
 
-    "capability_only_statusline_stop_doctor_secret_and_init_tolerate_a_missing_config"_test = [] {
+    "capability_only_statusline_stop_doctor_secret_init_and_org_tolerate_a_missing_config"_test = [] {
         for (auto const which : llmgate::reflect::enum_values<command>) {
-            auto const expected = which == command::statusline || which == command::stop || which == command::doctor || which == command::secret || which == command::init;
+            auto const expected = which == command::statusline || which == command::stop || which == command::doctor || which == command::secret || which == command::init || which == command::org;
             expect(command_marked<tolerant>(which) == expected) << llmgate::reflect::enum_name(which);
         }
     };
