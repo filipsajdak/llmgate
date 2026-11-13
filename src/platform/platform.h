@@ -51,6 +51,7 @@ bool resolve_executable(char const* candidate, char* resolved, size_t capacity) 
 char path_list_separator() noexcept;
 
 int write_file_atomic(char const* target, char const* data, size_t size, unsigned mode) noexcept;
+int create_file_exclusive(char const* target, char const* data, size_t size, unsigned mode) noexcept;
 int append_to_file(char const* target, char const* data, size_t size, unsigned mode) noexcept;
 int file_mode(char const* path, unsigned* mode) noexcept;
 bool can_write_path(char const* path) noexcept;

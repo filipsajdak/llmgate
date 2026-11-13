@@ -21,3 +21,6 @@ src/usage/usage.cppm:556:6c412fa1 | arid | mutates the assertion of a static_ass
 src/claude/statusline.cppm:73:29085f9b | arid | swapped std::clamp arguments violate its precondition (lo <= hi) for any percentage above 999, which is undefined behaviour the optimiser may assume away, so no test can pin it
 src/claude/profile.cppm:79:8adf98db | equivalent | continue at the end of a loop body is the fall-through the closing brace already gives
 src/claude/profile.cppm:96:8adf98db | equivalent | continue at the end of a loop body is the fall-through the closing brace already gives
+src/core/process.cppm:353:8cf02062 | equivalent | the code is an errno or a Windows error number, which is never negative, so code <= 0 and code == 0 agree
+src/app/commands.cppm:495:8f1f2da0 | equivalent | without this return the next attempt (the replacing write) fails the same way and returns the same path and reason
+src/app/commands.cppm:325:eec72e5c | arid | the mutant skips the check that the read succeeded and then dereferences an expected that holds an error, which is undefined behaviour that no test can pin

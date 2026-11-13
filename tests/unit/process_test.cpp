@@ -319,6 +319,62 @@ const suite process_suite = [] {
         std::filesystem::remove_all(directory);
     };
 
+    "capability_an_exclusive_create_writes_a_private_file_once_and_reports_that_it_exists"_test = [] {
+        auto const directory = std::filesystem::temp_directory_path() / std::format("llmgate-exclusive-{}", own_pid());
+        auto const target = directory / "nested" / "key";
+        std::filesystem::remove_all(directory);
+
+        auto const first = create_file_exclusive(target, "first", 0600, true);
+        auto const second = create_file_exclusive(target, "second", 0600, true);
+
+        expect(first.has_value() && *first);
+        expect(second.has_value() && !*second);
+        expect(contents_of(target) == "first");
+        expect(mode_of(target) == 0600);
+        expect(std::ranges::distance(std::filesystem::directory_iterator{target.parent_path()}) == 1_i);
+        std::filesystem::remove_all(directory);
+    };
+
+    "limit_sixteen_threads_creating_the_same_file_produce_one_winner_and_one_content"_test = [] {
+        constexpr int writers = 16;
+        constexpr int rounds = 20;
+        for (int round = 0; round < rounds; ++round) {
+            auto const directory = std::filesystem::temp_directory_path() / std::format("llmgate-exclusive-race-{}-{}", own_pid(), round);
+            auto const target = directory / "key";
+            std::filesystem::remove_all(directory);
+            std::latch start{writers};
+            std::atomic<int> created{0};
+            std::atomic<int> winner{-1};
+            {
+                std::vector<std::jthread> threads;
+                for (int writer = 0; writer < writers; ++writer) {
+                    threads.emplace_back([&, writer] {
+                        start.arrive_and_wait();
+                        auto const result = create_file_exclusive(target, std::format("writer-{}", writer), 0600, true);
+                        if (result.has_value() && *result) {
+                            ++created;
+                            winner = writer;
+                        }
+                    });
+                }
+            }
+            expect(created.load() == 1_i) << "round" << round;
+            expect(contents_of(target) == std::format("writer-{}", winner.load()));
+            expect(std::ranges::distance(std::filesystem::directory_iterator{directory}) == 1_i);
+            std::filesystem::remove_all(directory);
+        }
+    };
+
+    "limit_an_exclusive_create_under_a_file_instead_of_a_directory_is_an_error"_test = [] {
+        auto const directory = std::filesystem::temp_directory_path() / std::format("llmgate-exclusive-blocked-{}", own_pid());
+        std::filesystem::remove_all(directory);
+        std::filesystem::create_directories(directory);
+        std::ofstream{directory / "file"} << "x";
+
+        expect(!create_file_exclusive(directory / "file" / "child", "x", 0600, false).has_value());
+        std::filesystem::remove_all(directory);
+    };
+
     "limit_an_atomic_write_that_cannot_rename_cleans_up_its_temporary"_test = [] {
         auto const directory = std::filesystem::temp_directory_path() / std::format("llmgate-atomic-dir-{}", own_pid());
         std::filesystem::remove_all(directory);

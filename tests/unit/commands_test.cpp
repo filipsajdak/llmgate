@@ -254,6 +254,66 @@ const suite commands_suite = [] {
         expect(!policy.has_value());
     };
 
+    "limit_an_identity_file_that_is_too_short_or_too_long_is_replaced_and_a_whole_key_is_kept"_test = [] {
+        sandbox box;
+        auto const file = box.root / "state" / "llmgate" / "identity";
+        std::filesystem::create_directories(file.parent_path());
+        auto const stored = [&file] {
+            std::string text;
+            std::ifstream{file} >> text;
+            return text;
+        };
+
+        for (std::string const& wrong : {std::string{"short"}, std::string(70, 'a')}) {
+            std::ofstream{file, std::ios::trunc} << wrong;
+            auto const key = commands::identity_key();
+            expect(key.has_value() && key->size() == 64_u);
+            expect(stored() == *key);
+            expect(*key != wrong);
+        }
+
+        std::string const whole(64, 'b');
+        std::ofstream{file, std::ios::trunc} << whole;
+        auto const kept = commands::identity_key();
+        expect(kept.has_value() && *kept == whole);
+        expect(stored() == whole);
+    };
+
+    "limit_an_identity_key_that_cannot_be_created_reports_the_path_then_the_reason"_test = [] {
+        sandbox box;
+        std::filesystem::create_directories(box.root / "state");
+        std::ofstream{box.root / "state" / "llmgate"} << "a file where the state directory should be";
+
+        auto const key = commands::identity_key();
+
+        expect(!key.has_value());
+        expect(key.error().contains("identity: "));
+    };
+
+    "limit_concurrent_first_callers_of_the_identity_key_all_adopt_the_one_key_in_the_file"_test = [] {
+        constexpr int callers = 16;
+        constexpr int rounds = 20;
+        for (int round = 0; round < rounds; ++round) {
+            sandbox box;
+            std::latch start{callers};
+            std::vector<std::string> keys(callers);
+            {
+                std::vector<std::jthread> threads;
+                for (int caller = 0; caller < callers; ++caller) {
+                    threads.emplace_back([&start, &keys, caller] {
+                        start.arrive_and_wait();
+                        auto const key = commands::identity_key();
+                        keys[static_cast<std::size_t>(caller)] = key ? *key : std::string{};
+                    });
+                }
+            }
+            std::string held;
+            std::ifstream{box.root / "state" / "llmgate" / "identity"} >> held;
+            expect(held.size() == 64_u);
+            expect(std::ranges::all_of(keys, [&held](std::string const& key) { return key == held; })) << "round" << round;
+        }
+    };
+
     "capability_a_forwarding_provider_with_the_gateway_credential_mode_gets_a_launch_warning_naming_the_fix"_test = [] {
         gateway::config forwarding;
         forwarding.providers["anthropic"] = {.base_url = "https://api.anthropic.com", .forward_credentials = true};

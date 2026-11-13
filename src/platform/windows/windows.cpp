@@ -12,6 +12,7 @@
 #include <wincrypt.h>
 
 #include <atomic>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -207,7 +208,8 @@ std::wstring temporary_name(std::wstring const& target) {
     auto const slash = target.find_last_of(L"\\/");
     auto const directory = slash == std::wstring::npos ? std::wstring{} : target.substr(0, slash + 1);
     auto const name = slash == std::wstring::npos ? target : target.substr(slash + 1);
-    return directory + L"." + name + L"." + std::to_wstring(GetCurrentProcessId()) + L".tmp";
+    static std::atomic<unsigned> sequence{0};
+    return directory + L"." + name + L"." + std::to_wstring(GetCurrentProcessId()) + L"." + std::to_wstring(sequence.fetch_add(1)) + L".tmp";
 }
 
 bool wants_private(unsigned const mode) {
@@ -740,7 +742,9 @@ char path_list_separator() noexcept {
     return ';';
 }
 
-int write_file_atomic(char const* const target, char const* const data, size_t const size, unsigned const mode) noexcept {
+namespace {
+
+int write_then_move(char const* const target, char const* const data, size_t const size, unsigned const mode, DWORD const flags) noexcept {
     auto const destination = widen(target);
     auto const temporary = temporary_name(destination);
     owner_only_access privately;
@@ -748,12 +752,23 @@ int write_file_atomic(char const* const target, char const* const data, size_t c
         return ERROR_ACCESS_DENIED;
     }
     auto const error = write_new_file(temporary, wants_private(mode) ? &privately.attributes : nullptr, data, size);
-    if (error == 0 && MoveFileExW(temporary.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    if (error == 0 && MoveFileExW(temporary.c_str(), destination.c_str(), flags | MOVEFILE_WRITE_THROUGH)) {
         return 0;
     }
     auto const failure = error != 0 ? error : last_win_error();
     DeleteFileW(temporary.c_str());
     return failure;
+}
+
+}  // namespace
+
+int write_file_atomic(char const* const target, char const* const data, size_t const size, unsigned const mode) noexcept {
+    return write_then_move(target, data, size, mode, MOVEFILE_REPLACE_EXISTING);
+}
+
+int create_file_exclusive(char const* const target, char const* const data, size_t const size, unsigned const mode) noexcept {
+    auto const failure = write_then_move(target, data, size, mode, 0);
+    return failure == ERROR_ALREADY_EXISTS || failure == ERROR_FILE_EXISTS ? EEXIST : failure;
 }
 
 int append_to_file(char const* const target, char const* const data, size_t const size, unsigned const mode) noexcept {
