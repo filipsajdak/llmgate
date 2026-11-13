@@ -7,17 +7,15 @@ $release = Join-Path $work 'release'
 $prefix = Join-Path $work 'prefix'
 $failures = 0
 $realLocal = $env:LOCALAPPDATA; $realRoaming = $env:APPDATA; $realProfile = $env:USERPROFILE
-$realHome = $env:HOME; $realConfigHome = $env:XDG_CONFIG_HOME; $realStateHome = $env:XDG_STATE_HOME
+$realHome = $env:HOME; $realConfigHome = $env:XDG_CONFIG_HOME; $realStateHome = $env:XDG_STATE_HOME; $realDataHome = $env:XDG_DATA_HOME
 $realOrgDir = $env:LLMGATE_ORG_DIR
 $env:LOCALAPPDATA = Join-Path $work 'local'
 $env:APPDATA = Join-Path $work 'roaming'
 $env:USERPROFILE = Join-Path $work 'profile'
 $env:HOME = $env:USERPROFILE
-$env:XDG_CONFIG_HOME = $env:APPDATA
-$env:XDG_STATE_HOME = $env:LOCALAPPDATA
-$env:LLMGATE_ORG_DIR = Join-Path $env:APPDATA 'llmgate\org'
-$stateDir = Join-Path $env:LOCALAPPDATA 'llmgate'
-$configDir = Join-Path $env:APPDATA 'llmgate'
+Remove-Item Env:\XDG_CONFIG_HOME, Env:\XDG_STATE_HOME, Env:\XDG_DATA_HOME, Env:\LLMGATE_ORG_DIR -ErrorAction SilentlyContinue
+$stateDir = Join-Path (Join-Path (Join-Path $env:USERPROFILE '.local') 'state') 'llmgate'
+$configDir = Join-Path (Join-Path $env:USERPROFILE '.config') 'llmgate'
 New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA, $env:APPDATA, $env:USERPROFILE | Out-Null
 $noTerminal = Join-Path $work 'no-terminal.txt'
 New-Item -ItemType File -Force -Path $noTerminal | Out-Null
@@ -139,7 +137,10 @@ Check 'purge with -Yes removes llmgate directories' ($yes.ExitCode -eq 0 -and -n
 Check 'purge never touches the Claude Code profile' ((Get-Content -Raw -LiteralPath (Join-Path $env:USERPROFILE '.claude\settings.json')).Trim() -eq 'mine')
 
 $env:LOCALAPPDATA = $realLocal; $env:APPDATA = $realRoaming; $env:USERPROFILE = $realProfile
-$env:HOME = $realHome; $env:XDG_CONFIG_HOME = $realConfigHome; $env:XDG_STATE_HOME = $realStateHome
+$env:HOME = $realHome
+foreach ($pair in @(@('XDG_CONFIG_HOME', $realConfigHome), @('XDG_STATE_HOME', $realStateHome), @('XDG_DATA_HOME', $realDataHome))) {
+    if ($null -eq $pair[1]) { Remove-Item "Env:\$($pair[0])" -ErrorAction SilentlyContinue } else { Set-Item "Env:\$($pair[0])" $pair[1] }
+}
 if ($null -eq $realOrgDir) { Remove-Item Env:\LLMGATE_ORG_DIR -ErrorAction SilentlyContinue } else { $env:LLMGATE_ORG_DIR = $realOrgDir }
 Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 if ($failures -gt 0) { exit 1 }
