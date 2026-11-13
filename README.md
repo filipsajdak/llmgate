@@ -592,7 +592,7 @@ The tests were validated by reintroducing the defects they target: an epoll mask
 
 ## CRAP gate
 
-`tools/coverage.sh` builds with coverage, runs the unit tests and fails when any function has CRAP above 8 (CRAP = CC^2 * (1 - coverage)^3 + CC, complexity from lizard, line coverage from gcovr, a line counts as covered when any template instantiation ran it). The gate scores `src/` and `app/`. Last run (2026-10-17, macOS): 542 functions, 44 above 8, so the gate fails until they are split or covered; the coverage preset passes `-Wno-error=coverage-invalid-line-number` because GCC 16.2 emits a bogus line-table warning for defaulted members in module interfaces. The epoll backend is not instrumented by the macOS run, so it is held to complexity 8 alone.
+`tools/coverage.sh` builds with coverage, runs the unit tests and fails when any function has CRAP above 8 (CRAP = CC^2 * (1 - coverage)^3 + CC, complexity from lizard, line coverage from gcovr, a line counts as covered when any template instantiation ran it). The gate scores `src/` and `app/`. The coverage build updates its counters atomically (`-fprofile-update=atomic`): with plain counters a test that calls instrumented code from several threads loses updates, gcov then derives a negative block count and gcovr aborts (GCC bug 68080), which failed the `crap` job on `main` once. Last run (2026-10-17, macOS): 542 functions, 44 above 8, so the gate fails until they are split or covered; the coverage preset passes `-Wno-error=coverage-invalid-line-number` because GCC 16.2 emits a bogus line-table warning for defaulted members in module interfaces. The epoll backend is not instrumented by the macOS run, so it is held to complexity 8 alone.
 
 ## Sanitizers and checks
 
