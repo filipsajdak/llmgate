@@ -47,8 +47,15 @@ Options:
     return
 }
 
-$stateDir = Join-Path $env:LOCALAPPDATA 'llmgate'
-$configDir = Join-Path $env:APPDATA 'llmgate'
+function Get-HomeDirectory {
+    if ($env:HOME) { return $env:HOME }
+    if ($env:USERPROFILE) { return $env:USERPROFILE }
+    return "$env:HOMEDRIVE$env:HOMEPATH"
+}
+
+$homeDirectory = Get-HomeDirectory
+$stateDir = Join-Path $(if ($env:XDG_STATE_HOME) { $env:XDG_STATE_HOME } else { Join-Path (Join-Path $homeDirectory '.local') 'state' }) 'llmgate'
+$configDir = Join-Path $(if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $homeDirectory '.config' }) 'llmgate'
 $log = ''
 $taskName = 'llmgate'
 
@@ -124,7 +131,7 @@ if ($Uninstall -or $Purge) {
         Say "removed $Prefix from the user PATH"
     }
     if ($Purge) {
-        $found = @($configDir, $stateDir) + @(Get-ChildItem -LiteralPath $env:USERPROFILE -Directory -Filter '.claude-llmgate*' -ErrorAction SilentlyContinue | ForEach-Object FullName)
+        $found = @($configDir, $stateDir) + @(Get-ChildItem -LiteralPath $homeDirectory -Directory -Force -Filter '.claude-llmgate*' -ErrorAction SilentlyContinue | ForEach-Object FullName)
         $found = @($found | Where-Object { Test-Path -LiteralPath $_ })
         if ($found.Count -eq 0) {
             Say 'nothing to purge'
